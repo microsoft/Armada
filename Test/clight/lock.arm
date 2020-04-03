@@ -1,0 +1,82 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs MCSLock {
+  struct lock {
+    var wait: uint32;
+    var next: ptr<lock>;
+  }
+}
+
+layer {:concrete} Impl using MCSLock {
+
+  var locks: lock[6];
+  var tail: ptr<lock>;
+  method {:extern} CAS (addr: ptr<ptr<lock>>, setVal: ptr<lock>, compVal: ptr<lock>) returns (readVal: ptr<lock>) 
+
+  method {:extern} MFENCE()
+    ensures $sb_empty
+
+  method {:extern} my_puts_unlocked(i:uint32)
+  method {:extern} my_sleep(n:uint32)
+
+  method acquire(tail: ptr<ptr<lock>>, myLock: ptr<lock>) {
+    var oldTail: ptr<lock>;
+    var readTail: ptr<lock>;
+    (*myLock).next := null;
+
+    oldTail := *tail;
+    readTail := CAS(tail, myLock, oldTail);
+    while readTail != oldTail {
+      oldTail := *tail;
+      readTail := CAS(tail, myLock, oldTail);
+    }
+
+    if oldTail != null {
+      (*myLock).wait := 1;
+      MFENCE(); // this should not be necessary in TSO
+      (*oldTail).next := myLock;
+      while ((*myLock).wait != 0) {}
+    }
+  }
+
+
+  method release(tail: ptr<ptr<lock>>, myLock: ptr<lock>) {
+    var nextLock: ptr<lock>;
+    var readTail: ptr<lock>;
+    readTail := CAS(tail, null, myLock);
+    // This used to be !=, probably a bug.
+    if readTail == myLock {
+
+    }
+    else {
+      while ((*myLock).next == null) {}
+      nextLock := (*myLock).next;
+      (*nextLock).wait := 0;
+    }
+  }
+
+  method racy_printer(index: uint32) {
+    var i : int32 := 0;
+    while(i < 10) {
+      acquire(&tail, &locks[index]);
+      my_puts_unlocked(index);
+      release(&tail, &locks[index]);
+      i := i + 1;
+    }
+  } 
+
+  method main() {
+    var pids : uint64[5];
+    var i: uint32 := 0;
+
+    tail := null;
+    acquire(&tail, &locks[5]);
+    while (i < 5) {
+      pids[i] := create_thread racy_printer(i);
+      i := i + 1;
+    }
+    my_puts_unlocked(5);
+    release(&tail, &locks[5]);
+    my_sleep(1);
+  }
+}

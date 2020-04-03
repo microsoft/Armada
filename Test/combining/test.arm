@@ -1,0 +1,50 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+}
+
+level A using SharedStructs {
+    noaddr var w:int32;
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32 := 0;
+
+    method main()
+    {
+        w ::= 2;
+        atomic {
+label lbstart:
+            x ::= 3;
+label lbnext:
+            if x == 3 {
+              y ::= 4;
+            }
+            else {
+              assume false;
+              y ::= 18;
+            }
+label lbend:
+            z ::= 5;
+        }
+    }
+}
+
+level B using SharedStructs {
+    noaddr var w:int32;
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32 := 0;
+
+    method main()
+    {
+        w ::= 2;
+label lbsingle:
+        x, y, z ::= 3, 4, 5;
+    }
+}
+
+proof AB {
+    refinement A B
+    combining main_lbstart main_lbend main_lbsingle
+}

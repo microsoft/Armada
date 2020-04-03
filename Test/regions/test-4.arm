@@ -1,0 +1,83 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs4 {
+}
+
+layer G using SharedStructs4 {
+           var g_x:int32;
+    noaddr var g_y:int32;
+
+           var g_p:ptr<int32> := null;
+    noaddr var g_q:ptr<int32> := null;
+
+    noaddr var p_p:ptr<ptr<int32>> := null;
+
+    method a()
+    {
+               var n: int32;
+        noaddr var m: int32;
+
+               var s: ptr<int32> ::= null;
+        noaddr var t: ptr<int32> := null;
+
+        n := 1;
+        s := &n;
+        t := &n;
+    }
+
+    method main()
+    {
+        var u:int32;
+        u := 2;
+
+        g_p := &g_x;
+        g_q := &g_x;
+
+        p_p := &g_p;
+        create_thread a();
+        a();
+    }
+}
+
+layer H using SharedStructs4 {
+               var g_x:int32;
+    noaddr var g_y:int32;
+
+           var g_p:ptr<int32> := null;
+    noaddr var g_q:ptr<int32> := null;
+
+    noaddr var p_p:ptr<ptr<int32>> := null;
+
+    method a()
+    {
+               var n: int32;
+        noaddr var m: int32;
+
+               var s: ptr<int32> ::= null;
+        noaddr var t: ptr<int32> := null;
+
+        n := 1;
+        s := &n;
+        t := &n;
+    }
+
+    method main()
+    {
+        var u:int32;
+        u := 2;
+
+        g_p := &g_x;
+        g_q := &g_x;
+
+        p_p := &g_p;
+        create_thread a();
+        a();
+    }
+
+}
+
+proof GH {
+    refinement G H
+    weakening
+    use_regions
+}

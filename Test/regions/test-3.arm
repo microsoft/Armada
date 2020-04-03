@@ -1,0 +1,40 @@
+// Test the regions invariant generation
+
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs3 {
+    struct S1 {
+        var a:int32;
+        var b:int32;
+    }
+}
+
+layer E using SharedStructs3 {
+    var x : S1;
+    var y : S1;
+
+    method main()
+    {
+        noaddr var p:ptr<int32> := null;
+        x.a, y.a ::= 1, 2;
+        x.a, x.b ::= 3, 4;
+    }
+}
+
+layer F using SharedStructs3 {
+    var x : S1;
+    var y : S1;
+
+    method main()
+    {
+        noaddr var p:ptr<int32> := null;
+        y.a, x.a ::= 2, 1;
+        x.b, x.a ::= 4, 3;
+    }
+}
+
+proof EF {
+    refinement E F
+    weakening
+    use_regions
+}

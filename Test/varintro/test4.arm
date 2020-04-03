@@ -1,0 +1,55 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+
+structs SharedStructs4 {
+  struct S1
+  {
+    var e:int32[4];
+    var f:int32[8];
+  }
+
+  struct S2
+  {
+    var g:S1[10];
+  }
+
+  struct S3
+  {
+  }
+}
+
+
+level X using SharedStructs4 {
+  var x: int32;
+  var y: int32;
+
+  method main()
+  {
+    x, y := 31, 41;
+    x, y := 30, 40;
+    x, y := 33, 43;
+    y, x := 42, 32;
+  }
+}
+
+level Y using SharedStructs4 {
+  var x: int32;
+  var y: int32;
+  ghost var z: int64 := 0;
+  noaddr var w: int64 := 0;
+
+  method main()
+  {
+    x, y := 31, 41;
+    x, y := 30, 40;
+    x, y := 33, 43;
+    z := 0;
+    w, w, w := 0, 1, 2;
+    y, x := 42, 32;
+  }
+}
+
+proof XY {
+    refinement X Y
+    var_intro z, w
+}

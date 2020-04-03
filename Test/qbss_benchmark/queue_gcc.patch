@@ -1,0 +1,59 @@
+--- queue.c	2020-02-18 15:08:59.145036241 -0500
++++ queue.c_correct	2020-02-18 15:08:56.175036382 -0500
+@@ -1,5 +1,6 @@
+ // Dafny program queue.arm compiled into ClightTSO
+ #include "DafnyRuntime.h"
++#include "liblfds711.h"
+ // namespace _9_SharedStructs 
+ struct BSSQueueElement;
+ typedef struct BSSQueueElement BSSQueueElement;
+@@ -88,6 +89,10 @@
+   uint64 _5_tmp__write__index = 0;
+   struct BSSQueueElement* _6_element = NULL;
+   struct BSSQueueElement* _7_tmp__array = NULL;
++
++  LFDS711_PAL_ASSERT( qbss != NULL );
++  LFDS711_MISC_BARRIER_LOAD;
++
+   _3_write__index = (*(qbss)).write_index;
+   _5_tmp__write__index = (_3_write__index) + ((uint64)1);
+   _2_number__elements = (*(qbss)).number_elements;
+@@ -100,6 +105,9 @@
+     _0_e = _6_element;
+     (*(_0_e)).key = k;
+     (*(_0_e)).value = v;
++
++    LFDS711_MISC_BARRIER_STORE;
++
+     _3_write__index = (*(qbss)).write_index;
+     _5_tmp__write__index = (_3_write__index) + ((uint64)1);
+     _2_number__elements = (*(qbss)).number_elements;
+@@ -132,6 +140,10 @@
+   uint64 _14_tmp__int = 0;
+   struct BSSQueueElement* _15_tmp__array = NULL;
+   struct BSSQueueElement* _16_element = NULL;
++
++  LFDS711_PAL_ASSERT( qbss != NULL );
++  LFDS711_MISC_BARRIER_LOAD;
++
+   _9_read__index = (*(qbss)).read_index;
+   _11_write__index = (*(qbss)).write_index;
+   if ((_9_read__index) != (_11_write__index)) {
+@@ -152,6 +164,9 @@
+     _10_number__elements = (*(qbss)).number_elements;
+     _12_modulo = (_13_tmp__read__index) % (_10_number__elements);
+     (*(qbss)).read_index = _12_modulo;
++
++    LFDS711_MISC_BARRIER_STORE;
++
+     ret = (uint64)1;
+ return ret;
+   }
+@@ -196,7 +211,3 @@
+ return NULL;
+ }
+ // End of method _main
+-
+-int main() {
+-  _main();
+-}

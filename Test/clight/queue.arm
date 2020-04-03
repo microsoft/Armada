@@ -1,0 +1,138 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+    //type uint64 /*Key*/ = uint64
+    //type uint64 /*Value*/ = uint64
+    
+    struct BSSQueueElement {
+        var key:uint64 /*Key*/;
+        var value:uint64 /*Value*/;    
+    }
+    
+    struct QbssState {
+        var number_elements:uint64;
+        var mask:uint64;
+        var write_index:uint64;
+        var read_index:uint64;
+        var element_array:ptr<BSSQueueElement>; // need to make sure the array is 2^N = number_elements
+        var array_size:uint64;
+    }
+
+    struct BackoffState {
+        var lock:uint64;
+        var backoff_iteration_frequency_counters:uint64[2];
+        var metric:uint64;
+        var total_operations:uint64;
+    }
+
+    datatype QbssLogEntry = EnqueueLogEntry(key:uint64, value:uint64) | DequeueLogEntry(key:uint64, value:uint64)   
+    ghost var log:seq<QbssLogEntry> := [];
+
+    refinement_constraint @"
+       || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+       || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+    "
+}
+
+level {:concrete} QueueBSS using SharedStructs {
+    noaddr var queue:QbssState;
+
+    method init_queue(size:uint64) {
+        queue.array_size := size;
+        queue.read_index := 0;
+        queue.write_index := 0;
+        queue.element_array := calloc(BSSQueueElement, queue.array_size);
+    }
+
+    method enqueue(k:uint64, v:uint64) returns (ret:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var array_size:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+        noaddr var element:ptr<BSSQueueElement>;
+        noaddr var tmp_array:ptr<BSSQueueElement>;
+
+        write_index := queue.write_index;
+        tmp_write_index := write_index + 1;
+        array_size := queue.array_size;
+        modulo := tmp_write_index % array_size;
+        read_index := queue.read_index;
+        if(read_index != modulo) {
+            write_index := queue.write_index;
+            tmp_array := queue.element_array;
+            element := queue.element_array + write_index; 
+            e := element;
+            (*e).key := k;
+            (*e).value := v;
+            write_index := queue.write_index;
+            tmp_write_index := write_index + 1;
+            array_size := queue.array_size;
+            modulo := tmp_write_index % array_size;
+            queue.write_index := modulo;
+            return 1;
+        }
+        return 0;
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) returns (ret:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var array_size:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+        noaddr var tmp_array:ptr<BSSQueueElement>;
+        noaddr var element:ptr<BSSQueueElement>;
+        read_index := queue.read_index;
+        write_index := queue.write_index;
+        if(read_index != write_index) {
+            read_index := queue.read_index;
+            tmp_array := queue.element_array;
+            element := tmp_array + read_index; 
+            e := element;
+            if(k != null) {
+                tmp_int := (*e).key;
+                *k := tmp_int;
+            }
+            if(v != null) {
+                tmp_int := (*e).value;
+                *v := tmp_int;
+            }
+            read_index := queue.read_index;
+            tmp_read_index := read_index + 1;
+            array_size := queue.array_size;
+            modulo := tmp_read_index % array_size;
+            queue.read_index := modulo;
+            return 1;
+        }
+        return 0;
+    }
+
+
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        k := malloc(uint64);
+        v := malloc(uint64);
+      label mn_array_size_init:
+        queue.array_size := 4;
+      label mn_read_index_init:
+        queue.read_index := 0;
+      label mn_write_index_init:
+        queue.write_index := 0;
+        queue.element_array := calloc(BSSQueueElement, queue.array_size);
+        if (queue.element_array != null && k != null && v != null) {
+//label BeforeEnqueueCreate:
+            //tid1 := create_thread enqueue(*k,*v);
+//label BeforeDequeueCreate:
+            //tid2 := create_thread dequeue(k,v);
+        }
+    }
+}

@@ -1,0 +1,31 @@
+level A {
+    var x:int32;
+    var y:int32;
+    var z:int32;
+
+    method main()
+    {
+        x ::= 3;
+        z ::= 5;
+        y ::= z;  // should fail since z is used, so it can't be hidden
+    }
+}
+
+level B {
+    var x:int32;
+    var y:int32;
+
+    method main()
+    {
+        x ::= 3;
+        y ::= 4;
+    }
+}
+
+
+proof AB {
+
+    refinement A B
+    var_hiding z
+
+}

@@ -1,0 +1,100 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs4 {
+
+  datatype OptionalThread = OptionalThreadSome(tid:uint64) | OptionalThreadNone
+
+}
+
+level G using SharedStructs4 {
+
+  ghost var lock_holder:OptionalThread
+  noaddr var x:int32 := 0;
+  noaddr var y:int32 := 0;
+
+  import opened util_option_s
+
+  method Worker()
+  {
+    somehow awaits lock_holder.OptionalThreadNone?
+            modifies lock_holder
+            ensures lock_holder == OptionalThreadSome($me);
+
+    explicit_yield {
+
+      label lb1:
+      assume lock_holder == OptionalThreadSome($me);
+      x := x + 1;
+
+      label lb2:
+      assume lock_holder == OptionalThreadSome($me);
+      y := y + 1;
+
+    }
+
+    label lb3:
+    somehow awaits lock_holder == OptionalThreadSome($me)
+            ensures lock_holder == OptionalThreadNone() && $sb_empty;
+
+    assert true;
+  }
+
+  method main()
+  {
+    create_thread Worker();
+    create_thread Worker();
+  }
+
+}
+
+level H using SharedStructs4 {
+
+  ghost var lock_holder:OptionalThread
+  noaddr var x:int32 := 0;
+  noaddr var y:int32 := 0;
+
+  import opened util_option_s
+
+  method Worker()
+  {
+    somehow awaits lock_holder.OptionalThreadNone?
+            modifies lock_holder
+            ensures lock_holder == OptionalThreadSome($me);
+
+    explicit_yield {
+
+      assume lock_holder == OptionalThreadSome($me);
+      x ::= x + 1;
+
+      assume lock_holder == OptionalThreadSome($me);
+      y := y + 1;
+
+    }
+
+    somehow awaits lock_holder == OptionalThreadSome($me)
+            ensures lock_holder == OptionalThreadNone() && $sb_empty;
+
+    assert true;
+  }
+
+  method main()
+  {
+    create_thread Worker();
+    create_thread Worker();
+  }
+
+}
+
+proof GH
+{
+  refinement G H
+
+  tso_elim x @"
+    && tid in s.s.threads
+    && (var pc := s.s.threads[tid].pc;
+       || pc.Armada_PC_Worker_lb1?
+       || pc.Armada_PC_Worker_lb2?
+       || pc.Armada_PC_Worker_lb3?)
+    && s.s.ghosts.lock_holder == OptionalThreadSome(tid)
+  "
+}

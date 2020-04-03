@@ -1,0 +1,79 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs
+{
+  ghost var log:seq<uint32> := [];
+
+  refinement_constraint @"
+     || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+     || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+  "
+}
+
+level {:concrete} Impl using SharedStructs
+{
+  noaddr var barrier:uint32[10];
+
+  method {:extern} fence()
+    ensures $sb_empty
+
+  method {:extern} print_uint32(i:uint32)
+  {
+    log := old(log) + [i];
+  }
+
+  method worker(id:uint32)
+  {
+    noaddr var waiting_for_barrier:int8 := 1;
+    noaddr var i:uint32;
+     
+    print_uint32(id);
+
+    barrier[id] := 1;
+    while waiting_for_barrier != 0
+    {
+      waiting_for_barrier := 0;
+      i := 0;
+      while i < 10
+      {
+        if barrier[i] == 0
+        {
+          waiting_for_barrier := 1;
+        }
+        i := i + 1;
+      }
+    }
+
+    print_uint32(id + 100);
+  }
+
+  method main()
+  {
+    noaddr var i:uint32;
+    noaddr var tids:uint64[10];
+
+    i := 0;
+    while i < 10
+    {
+      barrier[i] := 0;
+      i := i + 1;
+    }
+
+    fence();
+
+    i := 0;
+    while i < 10
+    {
+      tids[i] := create_thread worker(i);
+      i := i + 1;
+    }
+
+    i := 0;
+    while i < 10
+    {
+      join tids[i];
+      i := i + 1;
+    }
+  }
+
+}

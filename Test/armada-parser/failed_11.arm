@@ -1,0 +1,20 @@
+// mono --debug $CDFY /compile:0 /dafnyVerify:0 src/armada-parser/failed_11.arm
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "../../Armada/util/option.s.dfy"
+
+structs SomeStruct {
+    import opened util_option_s
+
+    struct S{
+        var x: Option<int32>;
+    }
+}
+
+level spec_level using SomeStruct {
+    import opened util_option_s
+
+    method main() 
+    {
+        var x: Option<int32>;
+    }
+}

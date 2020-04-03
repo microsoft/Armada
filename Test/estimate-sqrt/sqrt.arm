@@ -1,0 +1,310 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs
+{
+  ghost var log:seq<uint32> := [];
+
+  refinement_constraint @"
+     || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+     || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+  "
+}
+
+level A using SharedStructs {
+
+  var mutex:uint64
+  noaddr var best_guess:uint32 := 0
+
+  method {:extern} rnd() returns (x:uint32)
+
+  method {:extern} printf(i:uint32)
+  {
+    log := log + [i];
+  }
+
+  method worker(n:uint64)
+  {
+    noaddr var i:int32 := 0;
+    noaddr var g:uint32;
+    noaddr var m:uint64;
+
+    while (i < 10000) {
+      i := i + 1;
+      g := rnd();
+      m := g as uint64 * g as uint64;
+      if (m > n) {
+        continue;
+      }
+label lb_to_be_weakened:
+      if (g <= best_guess) {
+        continue;
+      }
+      somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      if (g > best_guess) {
+        best_guess := g;
+      }
+      somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+    }
+  }
+
+  method main(arg:uint64)
+  {
+    noaddr var tid1:uint64 := 0;
+    noaddr var tid2:uint64 := 0;
+    noaddr var tid3:uint64 := 0;
+
+    tid1 := create_thread worker(arg);
+    tid2 := create_thread worker(arg);
+    tid3 := create_thread worker(arg);
+
+    join tid1;
+    join tid2;
+    join tid3;
+
+    printf(best_guess);
+  }
+
+}
+
+level B using SharedStructs {
+
+  var mutex:uint64
+  noaddr var best_guess:uint32 := 0
+
+  method {:extern} rnd() returns (x:uint32)
+
+  method {:extern} printf(i:uint32)
+  {
+    log := log + [i];
+  }
+
+  method worker(n:uint64)
+  {
+    noaddr var i:int32 := 0;
+    noaddr var g:uint32;
+    noaddr var m:uint64;
+
+    while (i < 10000) {
+      i := i + 1;
+      g := rnd();
+      m := g as uint64 * g as uint64;
+      if (m > n) {
+        continue;
+      }
+      if * {
+        continue;
+      }
+      somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      if (g > best_guess) {
+        best_guess := g;
+      }
+      somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+    }
+  }
+
+  method main(arg:uint64)
+  {
+    noaddr var tid1:uint64 := 0;
+    noaddr var tid2:uint64 := 0;
+    noaddr var tid3:uint64 := 0;
+
+    tid1 := create_thread worker(arg);
+    tid2 := create_thread worker(arg);
+    tid3 := create_thread worker(arg);
+
+    join tid1;
+    join tid2;
+    join tid3;
+
+    printf(best_guess);
+  }
+
+}
+
+level C using SharedStructs {
+
+  var mutex:uint64
+  noaddr var best_guess:uint32 := 0
+
+  method {:extern} rnd() returns (x:uint32)
+
+  method {:extern} printf(i:uint32)
+  {
+    log := log + [i];
+  }
+
+  method worker(n:uint64)
+  {
+    noaddr var i:int32 := 0;
+    noaddr var g:uint32;
+    noaddr var m:uint64;
+
+    while (i < 10000) {
+      i := i + 1;
+      g := rnd();
+      m := g as uint64 * g as uint64;
+      if (m > n) {
+        continue;
+      }
+      if * {
+        continue;
+      }
+      somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      assume mutex == $me;
+      if (g > best_guess) {
+        assume mutex == $me;
+        best_guess := g;
+      }
+      somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+    }
+  }
+
+  method main(arg:uint64)
+  {
+    noaddr var tid1:uint64 := 0;
+    noaddr var tid2:uint64 := 0;
+    noaddr var tid3:uint64 := 0;
+
+    tid1 := create_thread worker(arg);
+    tid2 := create_thread worker(arg);
+    tid3 := create_thread worker(arg);
+
+    join tid1;
+    join tid2;
+    join tid3;
+
+    assume tid1 != 0 && tid2 != 0 && tid3 != 0;
+    printf(best_guess);
+  }
+
+}
+
+level D using SharedStructs {
+
+  var mutex:uint64
+  noaddr var best_guess:uint32 := 0
+
+  method {:extern} rnd() returns (x:uint32)
+
+  method {:extern} printf(i:uint32)
+  {
+    log := log + [i];
+  }
+
+  method worker(n:uint64)
+  {
+    noaddr var i:int32 := 0;
+    noaddr var g:uint32;
+    noaddr var m:uint64;
+
+    while (i < 10000) {
+      i := i + 1;
+      g := rnd();
+      m := g as uint64 * g as uint64;
+      if (m > n) {
+        continue;
+      }
+      if * {
+        continue;
+      }
+      somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      assume mutex == $me;
+      if (g > best_guess) {
+        assume mutex == $me;
+        best_guess ::= g;
+      }
+      somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+    }
+  }
+
+  method main(arg:uint64)
+  {
+    noaddr var tid1:uint64 := 0;
+    noaddr var tid2:uint64 := 0;
+    noaddr var tid3:uint64 := 0;
+
+    tid1 := create_thread worker(arg);
+    tid2 := create_thread worker(arg);
+    tid3 := create_thread worker(arg);
+
+    join tid1;
+    join tid2;
+    join tid3;
+
+    assume tid1 != 0 && tid2 != 0 && tid3 != 0;
+    printf(best_guess);
+  }
+
+}
+
+proof AB
+{
+  refinement A B
+  starweakening statements lb_to_be_weakened variables best_guess
+}
+
+proof BC
+{
+  refinement B C
+  assume_intro
+}              
+
+proof CD
+{
+  refinement C D
+
+  inductive_invariant ZeroNotATid "0 !in s.s.threads"
+
+  inductive_invariant OnlyCertainTids @"
+    if s.config.tid_init !in s.s.threads then
+      (forall tid :: tid !in s.s.threads)
+    else
+      var tid_init := s.config.tid_init;
+      var t := s.s.threads[tid_init];
+      && (if |t.stack| == 0 then
+            t.top.Armada_StackFrame_main?
+          else
+            && last(t.stack).frame.Armada_StackFrame_main?
+            && !t.top.Armada_StackFrame_main?
+            && (forall i :: 0 <= i < |t.stack|-1 ==> !t.stack[i].frame.Armada_StackFrame_main?)
+         )
+      && var frame := if |t.stack| == 0 then t.top else last(t.stack).frame;
+      && var pc := if |t.stack| == 0 then t.pc else last(t.stack).return_pc;
+      && var tid1 := frame.main'tid1;
+      && var tid2 := frame.main'tid2;
+      && var tid3 := frame.main'tid3;
+      && (tid_init in s.s.threads ==> !s.s.threads[tid_init].top.Armada_StackFrame_worker?
+                                      && (forall eframe :: eframe in s.s.threads[tid_init].stack ==> !eframe.frame.Armada_StackFrame_worker?))
+      && (tid1 in s.s.threads ==> !s.s.threads[tid1].top.Armada_StackFrame_main?
+                                  && (forall eframe :: eframe in s.s.threads[tid1].stack ==> !eframe.frame.Armada_StackFrame_main?))
+      && (tid2 in s.s.threads ==> !s.s.threads[tid2].top.Armada_StackFrame_main?
+                                  && (forall eframe :: eframe in s.s.threads[tid2].stack ==> !eframe.frame.Armada_StackFrame_main?))
+      && (tid3 in s.s.threads ==> !s.s.threads[tid3].top.Armada_StackFrame_main?
+                                  && (forall eframe :: eframe in s.s.threads[tid3].stack ==> !eframe.frame.Armada_StackFrame_main?))
+      && (pc.Armada_PC_0_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init)
+      && (pc.Armada_PC_1_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init || tid == tid1)
+      && (pc.Armada_PC_2_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init || tid == tid1 || tid == tid2)
+      && (pc.Armada_PC_3_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init || tid == tid1 || tid == tid2 || tid == tid3)
+      && (pc.Armada_PC_4_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init || tid == tid2 || tid == tid3)
+      && (pc.Armada_PC_5_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init || tid == tid3)
+      && (pc.Armada_PC_6_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init)
+      && (pc.Armada_PC_7_main? ==> forall tid :: tid in s.s.threads ==> tid == tid_init)
+  " depends_on ZeroNotATid, StackMatchesMethodInv
+
+  tso_elim best_guess @"
+    && tid in s.s.threads
+    && var t := s.s.threads[tid];
+    && var pc := t.pc;
+    && (|| (&& |t.stack| == 0
+            && t.top.Armada_StackFrame_main?
+            && pc.Armada_PC_6_main?
+           )
+        || (&& |t.stack| == 0
+            && t.top.Armada_StackFrame_worker?
+            && (pc.Armada_PC_9_worker? || pc.Armada_PC_10_worker? || pc.Armada_PC_11_worker?)
+            && Armada_ValidPointerToPrimitive(s.s.mem.heap, s.s.addrs.mutex, Armada_PrimitiveType_uint64)
+            && Armada_DereferencePointerToPrimitive_uint64(s.s.mem.heap, s.s.addrs.mutex) == tid
+           )
+       )
+  "
+}

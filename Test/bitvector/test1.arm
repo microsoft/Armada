@@ -1,0 +1,52 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+}
+
+level A using SharedStructs {
+    method main()
+    {
+        noaddr var a:uint64, b:uint64, c:uint64;
+        noaddr var x:uint32;
+
+        assert a & 0 == 0;
+
+        c := a & b;
+        c := a | b;
+        c := a ^ b;
+        c := c << 32;
+        c := c >> 32;
+
+        assert x % 512 == x & 511;
+    }
+}
+
+level B using SharedStructs {
+    method main()
+    {
+        noaddr var a:uint64, b:uint64, c:uint64;
+        noaddr var x:uint32;
+
+        assert true;
+
+        c := a & b;
+        c := a | b;
+        c := a ^ b;
+        c := c << 32;
+        c := c >> 32;
+        
+        assert true;
+    }
+}
+
+proof AB {
+  refinement A B
+  weakening
+  
+  include_file "bv.dfy" 
+  import_module BitVectorTest1
+  extra lemma_LiftNext_Assert_main_Start "bv64_properties();"
+  extra lemma_LiftNext_Assert_main_6 "mask_equiv();"
+}
+
+

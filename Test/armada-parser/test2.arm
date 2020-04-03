@@ -1,0 +1,51 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs test2structs
+{
+    struct S1 {
+       var a:int32;
+       var b:int32[10];
+    }
+}
+
+level test2 using test2structs
+{
+    noaddr var v: int32 := 0;
+    noaddr var w: int32 := 56;
+    var a: int32[10];
+    var x: int32;
+    var s: S1;
+    ghost var g: seq<int32>;
+
+    predicate TriggerInt(x:int) { true }
+
+    method {:extern} ExternalMethod(p: ptr<S1>)
+        requires x > 0
+        requires forall i :: 0 <= i < 10 ==> allocated(p+i)
+        ensures  $sb_empty  // fence
+
+    method main()
+    {
+        var y: ptr<int32>;
+        var z: int32;
+        var sarr: S1[10];
+        noaddr var res:set<int32>;
+
+        y := null;
+        y := &x;
+        y := &s.a;
+        if (&s.a == null) {
+            y := &s.b[3];
+            z := *y;
+        }
+        somehow awaits $sb_empty;  // fence
+        g := a[1..4];
+        a[a[x]] ::= a[z];
+
+        assert 0 <= z < 10 ==> *(y+z) == *y;
+        assert exists i :: TriggerInt(i) && 0 <= i < 20 && *(y+i) == 0;
+        z := if (exists i :: 0 <= i < 30 && allocated(&y) && allocated_array(y) && allocated(y+i) && *(y+i) > 0) then 55 else 66;
+        res := set i | 0 <= i < 40 && allocated(&y) && allocated_array(y) && allocated(y+i) && *(y+i) > 0 :: *(y+i);
+        ExternalMethod(&sarr[0]);
+    }
+}

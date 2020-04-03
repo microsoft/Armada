@@ -1,0 +1,49 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs4 {
+
+}
+
+level G using SharedStructs4 {
+  noaddr var x:int32;
+  noaddr var y:int32;
+
+  method main()
+  {
+    noaddr var a:int32;
+    noaddr var b:int32;
+    noaddr var c:int32;
+
+    atomic {
+      x := 1;
+      a := 2;
+    }
+
+    y := 3;
+    b := 4;
+
+    atomic {
+      b := 5;
+      c := 6;
+    }
+  }
+}
+
+level H using SharedStructs4 {
+  noaddr var x:int32;
+  noaddr var y:int32;
+
+  method main()
+  {
+    noaddr var c:int32;
+
+    x := 1;
+    y := 3;
+    c := 6;
+  }
+}
+
+proof GH {
+  refinement G H
+  stack_var_hiding main a, b
+}

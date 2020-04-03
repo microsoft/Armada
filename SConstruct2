@@ -1,0 +1,269 @@
+import re
+import sys
+import os, os.path
+import subprocess
+import traceback
+import pdb
+import random
+import SCons.Util
+import atexit
+import platform
+
+Import("*")
+
+env = Environment()
+if sys.platform != 'win32' and sys.platform != 'cygwin':
+  env['MONO'] = 'mono'
+
+# Retrieve tool-specific command overrides passed in by the user
+AddOption('--DAFNYPATH',
+  dest='dafny_path',
+  type='string',
+  default='/armada/dafny/Binaries',
+  action='store',
+  help='Specify the path to Dafny tool binaries')
+
+AddOption('--PROGRAM',
+          dest='program',
+          type='string',
+          default=None,
+          action='store',
+          help='Specify which program to verify')
+
+dafny_path = GetOption('dafny_path')
+program = GetOption('program')
+if dafny_path is None:
+  sys.stderr.write("ERROR:  Missing --DAFNYPATH on command line\n")
+  exit(-1)
+dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.exe')
+
+# Useful Dafny command lines
+dafny_basic_args = '/compile:0 /timeLimit:240 /trace /noCheating:1'
+dafny_default_args = dafny_basic_args + ' /arith:5'
+dafny_args_nlarith = dafny_basic_args + ' /arith:2'
+
+####################################################################
+#
+#   Describe the files needed for Mono
+#
+####################################################################
+
+if sys.platform == 'win32' or sys.platform == 'cygwin':
+  env['CSC'] = env.Detect('csc')
+else: # mono
+  env['CSC'] = env.Detect('dmcs')
+
+####################################################################
+#
+#   General routines
+#
+####################################################################
+
+def recursive_glob(env, pattern, strings=False):
+  matches = []
+  split = os.path.split(pattern) # [0] is the directory, [1] is the actual pattern
+  platform_directory =  split[0] #os.path.normpath(split[0])
+  for d in os.listdir(platform_directory):
+    if os.path.isdir(os.path.join(platform_directory, d)):
+      newpattern = os.path.join(split[0], d, split[1])
+      matches.append(recursive_glob(env, newpattern, strings))
+
+  files = env.Glob(pattern, strings=strings)
+  matches.append(files)
+  return Flatten(matches)
+
+####################################################################
+#
+#   Make table of special cases requiring non-default arguments
+#
+####################################################################
+
+source_to_args = [
+  ('.*test\/weakening\/ArithmeticFacts\.dfy', dafny_args_nlarith),
+  ('.*Armada\/util\/math\/.*\.dfy', dafny_args_nlarith),
+  ('.*\.dfy', dafny_default_args),
+]
+
+####################################################################
+#
+#   Dafny-specific utilities
+#
+####################################################################
+
+dafny_include_re = re.compile(r'include\s+"(\S+)"', re.M)
+
+# helper to look up Dafny command-line arguments matching a srcpath, from the
+# source_to_args[] dictionary, dealing with POSIX and Windows pathnames, and
+# falling back on a default if no specific override is present.
+def get_dafny_command_line_args(srcpath):
+  srcpath = os.path.normpath(srcpath)  # normalize the path, which, on Windows, switches to \\ separators
+  srcpath = srcpath.replace('\\', '/') # switch to posix path separators
+  for entry in source_to_args:
+    pattern, args = entry
+    if re.search(pattern, srcpath, flags=re.IGNORECASE):
+      return args
+
+  return dafny_default_args
+
+dependencies_by_file = dict()
+already_verified_files = set()
+
+# Scan a .dfy file to discover its transitive dependencies, and store a
+# list of them in dependencies_by_file[fullpath].
+def recursively_scan_for_dependencies(fullpath):
+  if fullpath in dependencies_by_file:
+    return
+  contents = File(fullpath).get_text_contents()
+  dirname = os.path.dirname(fullpath)
+  filename = os.path.basename(fullpath)
+  includes = dafny_include_re.findall(contents)
+  extra_files = [os.path.abspath(os.path.join(dirname, i)) for i in includes]
+  transitive_dependencies = set(extra_files)
+  for srcpath in extra_files:
+    recursively_scan_for_dependencies(srcpath)
+    transitive_dependencies.update(dependencies_by_file[srcpath])
+  all_dependencies = sorted(list(transitive_dependencies))
+  dependencies_by_file[fullpath] = all_dependencies
+
+
+# Scan a .dfy file to discover its dependencies, and add .vdfy targets for each.
+def scan_for_more_targets(target, source, env):
+  node = source[0]
+  fullpath = str(node)
+  recursively_scan_for_dependencies(fullpath)
+  dependencies = dependencies_by_file[fullpath]
+  for srcpath in dependencies:
+    if srcpath not in already_verified_files:
+      f = os.path.splitext(srcpath)[0] + '.vdfy'
+      env.DafnyVerify(f, [srcpath, dafny_exe])
+      already_verified_files.add(srcpath)
+  return target, source + dependencies
+
+####################################################################
+#
+#   Dafny routines
+#
+####################################################################
+
+def generate_dafny_verifier_actions(source, target, env, for_signature):
+  env['DAFNY_VERIFIER_FLAGS'] = dafny_default_args
+  abs_source = File(source[0]).abspath
+  abs_target = File(target[0]).abspath
+  abs_dir = os.path.dirname(abs_source)
+  source_name = os.path.basename(abs_source)
+  temp_target_file = os.path.splitext(abs_target)[0] + '.tmp'
+  args = get_dafny_command_line_args(abs_source)
+  return [
+      "cd %s; $MONO %s %s %s > %s" % (abs_dir, dafny_exe, args, source_name, temp_target_file),
+      "tail -n 1 %s" % (temp_target_file),
+      "mv %s %s" % (temp_target_file, abs_target)
+  ]
+
+
+# Add env.DafnyVerify(), to generate Dafny verifier actions
+def add_dafny_verifier_builder(env):
+  dafny_verifier = Builder(generator = generate_dafny_verifier_actions,
+                           suffix = '.vdfy',
+                           src_suffix = '.dfy',
+                           chdir=0,
+                           emitter = scan_for_more_targets,
+                           )
+  env.Append(BUILDERS = {'DafnyVerify' : dafny_verifier})
+
+# Verify a set of Dafny files by creating verification targets for each,
+# which in turn causes a dependency scan to verify all of their dependencies.
+def verify_dafny_files(env, files):
+  for f in files:
+    target = os.path.splitext(f)[0] + '.vdfy'
+    env.DafnyVerify(target, [f, dafny_exe])
+
+# Verify *.dfy files in a list of directories.  This enumerates
+# all files in those trees, and creates verification targets for each,
+# which in turn causes a dependency scan to verify all of their dependencies.
+def verify_files_in(env, directories):
+  for d in directories:
+    files = recursive_glob(env, d+'/*.dfy', strings=True)
+    verify_dafny_files(env, files)
+
+####################################################################
+#
+#   Extract verification failure information
+#
+####################################################################
+
+# extract a string filename out of a build failure
+def bf_to_filename(bf):
+    import SCons.Errors
+    if bf is None: # unknown targets product None in list
+        return '(unknown tgt)'
+    elif isinstance(bf, SCons.Errors.StopError):
+        return str(bf)
+    elif bf.node:
+        return str(bf.node)
+    elif bf.filename:
+        return bf.filename
+    return '(unknown failure)'
+
+def report_verification_failures():
+    from SCons.Script import GetBuildFailures
+    bf = GetBuildFailures()
+    if bf:
+        # bf is normally a list of build failures; if an element is None,
+        # it's because of a target that scons doesn't know anything about.
+        for x in bf:
+          if x is not None:
+            filename = bf_to_filename(x)
+            if filename.endswith('.vdfy'):
+              file_to_print = os.path.splitext(filename)[0] + '.tmp'
+              if os.path.isfile(file_to_print):
+                sys.stdout.write('\n##### Verification error.  Printing contents of ' + file_to_print + ' #####\n\n')
+                with open (file_to_print, 'r') as myfile:
+                  sys.stdout.write(myfile.read())
+              else:
+                print("ERROR:  Verification error, but cannot print output since file %s doesn't exist" % (file_to_print))
+            else:
+              print("Build failure for %s" % (filename))
+
+
+def display_build_status():
+    report_verification_failures()
+
+####################################################################
+#
+#   Put it all together
+#
+####################################################################
+
+add_dafny_verifier_builder(env)
+env.AddMethod(verify_files_in, "VerifyFilesIn")
+env.AddMethod(verify_dafny_files, "VerifyDafnyFiles")
+atexit.register(display_build_status)
+
+####################################################################
+#
+#   Create dependencies
+#
+####################################################################
+
+def run_directory(dir_name, dafny_files):
+  for dafny_file in dafny_files:
+    if program is None or program == dir_name or program == dir_name + '/' + dafny_file:
+      source = "Test/%s/%s.dfy" % (dir_name, dafny_file)
+      target = "Test/%s/%s.vdfy" % (dir_name, dafny_file)
+      env.DafnyVerify(target, [source, dafny_exe])
+
+run_directory("assume-intro", ["AB", "CD", "EF"])
+run_directory("barrier", ["ImplRefinesL1", "L1RefinesL2"])
+run_directory("tsoelim", ["AB", "CD", "EF", "GH"])
+run_directory("reduction", ["AB", "CD"])
+run_directory("combining", ["AB"])
+run_directory("varhiding", ["AB", "CD", "EF", "GH"])
+run_directory("varintro", ["AB", "CD", "EF", "XY"])
+run_directory("weakening", ["AB", "CD", "EF"])
+run_directory("regions", ["level01proof", "AB", "CD", "EF", "GH"])
+run_directory("starweakening", ["AB", "CD", "EF", "GH"])
+run_directory("armada-parser", ["test1", "test2", "test3", "test4", "test5", "test6"])
+run_directory("mcslock", ["pseudo_impl_L1", "L1_L2", "L2_L3", "L3_L4", "L4_L5", "L5_L6"])
+run_directory("qbss", ["NoTSOIntroduceAbstractQueue", "CombineEnqueueAtomicAbstractQueue",
+                       "CombineDequeueAtomicAbstractQueue", "NoTSOUseAbstractQueueForLog",
+                       "NoTSOStarWeaken", "HideEnqueueLocals", "HideDequeueLocals", "HideGlobal"])

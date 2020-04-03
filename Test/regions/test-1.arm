@@ -1,0 +1,72 @@
+// Test the regions invariant generation
+
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs1 {
+
+}
+
+// Want to show the following invariants:
+// a.p == null or region_map[a.p] == Region_X
+// b.p == null or region_map[b.p] == Region_Y
+//
+// Initialize region_map[AddrOf'x] == Region_X
+// Initialize region_map[AddrOf'y] == Region_X
+//
+layer A using SharedStructs1 {
+    var x:int32;
+    var y:int32;
+
+    method a(p: ptr<int32>) 
+    {
+        *p := 0;
+    }
+
+    method b(p: ptr<int32>) 
+    {
+        *p := 1;
+    }
+
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        p1 := &x;
+        p2 := &y;
+        
+        create_thread a(p1);
+        create_thread b(p2);
+    }
+}
+
+layer B using SharedStructs1 {
+    var x:int32;
+    var y:int32;
+
+    method a(p: ptr<int32>) 
+    {
+        *p := 0;
+    }
+
+    method b(p: ptr<int32>) 
+    {
+        *p := 1;
+    }
+    
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        p1 := &x;
+        p2 := &y;
+
+        create_thread a(p1);
+        create_thread b(p2);
+    }
+}
+
+proof AB {
+    refinement A B
+    weakening
+    use_regions
+}

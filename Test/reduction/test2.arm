@@ -1,0 +1,61 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs2 {
+
+}
+
+level C using SharedStructs2 {
+    noaddr var p:ptr<int32>;
+    noaddr var w:int32;
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32;
+
+    method crasher()
+    {
+        *p ::= 0;
+    }
+
+    method main()
+    {
+        w ::= 3;
+label lbl1:
+        x ::= 4;
+label lbl2:
+        y ::= 5;
+label lbl3:
+        z ::= 6;
+    }
+}
+
+level D using SharedStructs2 {
+    noaddr var p:ptr<int32>;
+    noaddr var w:int32;
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32;
+
+    method crasher()
+    {
+        *p ::= 0;
+    }
+
+    method main()
+    {
+        atomic {
+            w ::= 3;
+            x ::= 4;
+            y ::= 5;
+            z ::= 6;
+        }
+    }
+}
+
+proof CD {
+    refinement C D
+    reduction phase1 main_lbl1 phase2 main_lbl2-main_lbl3
+
+    inductive_invariant MyGlobalInvariant @"
+      forall tid :: tid in s.s.threads ==> s.s.threads[tid].storeBuffer == []
+    "
+}

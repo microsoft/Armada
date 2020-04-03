@@ -1,0 +1,29 @@
+// mono --debug $CDFY /compile:0 /dafnyVerify:0 src/armada-parser/failed_12.arm
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "../../Armada/util/option.s.dfy"
+
+structs level_0_structs {
+    import opened util_option_s
+    struct queue_node_t {
+        var val: int32;
+        var next: ptr<queue_node_t>; 
+    }
+}
+
+level level_0 using level_0_structs {
+
+    method main() {
+        var a : int32;
+        var b : ptr<int32>;
+        var c : ptr<ptr<int32>>;
+        b := &a;
+        c := &b;
+
+        var d : queue_node_t;
+        var e : ptr<queue_node_t>;
+        var f : ptr<ptr<queue_node_t>>;
+        e := &d;
+        // [ERROR] FATAL UNHANDLED EXCEPTION: System.InvalidCastException: Specified cast is not valid.
+        f := &e;
+    }
+}

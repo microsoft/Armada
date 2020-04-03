@@ -1,0 +1,115 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+}
+
+level A using SharedStructs {
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32 := 0;
+    noaddr var p:ptr<int32>;
+
+    method {:extern} DoubleX()
+        reads x
+        modifies x
+        ensures x == old(x) * 2
+
+    method Test()
+    {
+        noaddr var i:int32;
+
+        i ::= 1;
+        x ::= 0;
+        while i < 10
+        {
+            x ::= i;
+            i ::= i + 1;
+        }
+    }
+
+    method main()
+    {
+        x ::= 3;
+        y ::= 4;
+        z ::= 5;
+        x ::= 6;
+        Test();
+    }
+
+    invariant Inv1
+    {
+        z > 0 ==> y == 4
+    }
+
+    yield_predicate YP1
+    {
+        x >= old(x)
+    }
+}
+
+level B using SharedStructs {
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32 := 0;
+    noaddr var p:ptr<int32>;
+
+    method {:extern} DoubleX()
+        reads x
+        modifies x
+        ensures x == old(x) * 2
+
+    method Test()
+        requires x > 2
+        ensures  x == 9
+        ensures  y == old(y)
+        ensures  z == old(z)
+    {
+        noaddr var i:int32;
+
+        i ::= 1;
+        x ::= 0;
+        while i < 10
+            invariant 1 <= i
+            invariant i <= 10
+            invariant x == i - 1
+            invariant y == old(y)
+            invariant z == old(z)
+        {
+            x ::= i;
+            i ::= i + 1;
+        }
+    }
+
+    method main()
+        ensures y == 4
+        modifies x, y, z
+    {
+        x ::= 3;
+        y ::= 4;
+        assume x == 3;
+        z ::= 5;
+        assume x == 3 && y == 4;
+        x ::= 6;
+        Test();
+    }
+}
+
+proof AB {
+    refinement A B
+    assume_intro
+
+    chl_invariant MyGlobalInvariant @"
+      && (forall tid :: tid in s.s.threads ==> tid == s.config.tid_init)
+      && (forall tid :: tid in s.s.threads ==> s.s.threads[tid].storeBuffer == [])
+    "
+
+    chl_invariant Inv1
+    chl_yield_pred YP1
+
+    chl_yield_pred MyYieldPredicate @"
+      && s'.s.mem.globals.x == s.s.mem.globals.x
+      && s'.s.mem.globals.y == s.s.mem.globals.y
+      && s'.s.mem.globals.z == s.s.mem.globals.z
+    "
+}

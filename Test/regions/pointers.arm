@@ -1,0 +1,84 @@
+// Test the regions invariant generation
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+}
+
+level level0 using SharedStructs {
+    noaddr var g_p:ptr<int32> := null;
+    var x:int32;
+    var z:int32;
+
+    method store_arg_unknown_callee(arg:ptr<int32>) {
+        g_p := arg;
+    }
+
+    method test_store_arg_unknown(x:ptr<int32>) {
+        var a:int32;
+        var b:int32;
+        var p:ptr<int32> ::= null;
+
+        p := &a;
+        store_arg_unknown_callee(p);
+
+label stmt1:
+        b, *p ::= 1, 2;
+label stmt2:
+        b, *g_p ::= 3, 4;
+    }
+
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        noaddr var y:ptr<int32> := null;
+        test_store_arg_unknown(y);
+
+        p1 := &x;
+        p2 := malloc(int32);
+        *p1, *p2 ::= 1, 2;
+    }
+}
+
+level level1 using SharedStructs {
+    noaddr var g_p:ptr<int32> := null;
+    var x:int32;
+    var z:int32;
+
+    method store_arg_unknown_callee(arg:ptr<int32>) {
+        g_p := arg;
+    }
+
+    method test_store_arg_unknown(x:ptr<int32>) {
+        var a:int32;
+        var b:int32;
+        var p:ptr<int32> ::= null;
+
+        p := &a;
+        store_arg_unknown_callee(p);
+
+        *p, b ::= 2, 1;
+        *g_p, b ::= 4, 3;
+    }
+
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        noaddr var y:ptr<int32> := null;
+        test_store_arg_unknown(y);
+
+        p1 := &x;
+        p2 := malloc(int32);
+        *p2, *p1 ::= 2, 1;
+    }
+}
+
+proof level01proof {
+    refinement level0 level1
+    weakening
+    use_regions
+
+    extra lemma_LiftNext_Update_test_store_arg_unknown_stmt1 "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();"
+    extra lemma_LiftNext_Update_test_store_arg_unknown_stmt2 "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();"
+}

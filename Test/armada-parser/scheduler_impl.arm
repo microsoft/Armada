@@ -1,0 +1,195 @@
+// mono --debug $CDFY /compile:0 /dafnyVerify:0 src/armada-parser/scheduler_impl.arm
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "../../Armada/option.s.dfy"
+
+level impl_level {
+    import opened ArmadaCommonDefinitions
+	import opened util_option_s
+
+    type Tid = uint64
+    
+    type Mutex = Option<Tid>
+    // External method for acquiring the lock
+    method {:extern} Acquire(mut:ptr<Mutex>) 
+		awaits *mut == None
+		modifies *mut
+		ensures *mut == Some($me)
+
+    // External method for releasing the lock
+    method {:extern} Release(mut:ptr<Mutex>) 
+		requires *mut == Some($me)
+		modifies *mut
+		ensures *mut == None
+
+    
+    // the data structure for disk schedule requests.
+    struct Request {
+        // The tid of process sending the request
+        var tid: Option<Tid>;
+
+        // The target disk track.  
+        var track: int32;
+    }
+
+
+    // the condition variable data structure
+    struct CondVar {
+
+        // The mut is used to protect the critical section of 
+        // code that test the lock or change the locks state.
+        var mut: ptr<Mutex>;
+    }
+
+
+    // Exteral method for "cv.wait" 
+    method {:extern} Wait(cv:ptr<CondVar>)
+        modifies *cv
+        modifies (*cv).mut
+        requires *((*cv).mut) == Some($me)
+        ensures *((*cv).mut) == Some($me)
+    
+    // External method for "cv.singal"
+    method {:extern} Signal(cv: ptr<CondVar>)
+        modifies *cv
+        modifies (*cv).mut
+    
+    
+    method InitCondVar(cv:ptr<CondVar>, mut:ptr<Mutex>) 
+        modifies *cv;
+        reads *mut;
+        reads mut;
+    {
+        (*cv).mut := mut;
+    }
+
+    function method min(a: int32, b: int32): int32 
+    {   
+        if a <= b then a else b
+    }
+
+    function method abs(a: int32): int32 
+    {
+        if a >= 0 then a else -a
+    }
+    
+    // define the global variables
+    var mut: Mutex;                     // The global lock
+    var requesterTids: Tid[5];          // The Tid of requesters
+    var servicerTid: Tid;               // The Tid of the servicer
+    var queueFullCV: CondVar;           // The CondVar for the service thread to wait for for the queue to be full
+    var queueNotFullCV: CondVar;        // The CondVar for the requester threads to wait for the queue to be not full
+    var requester_CVs: CondVar[5];      // The CondVar for the requester threads to wati for their requests to be processed
+    var requests: Request[5];           // The request that each requester is currently waiting on
+    var maxDiskQueue: int32;            // The size of the disk queue
+    var currentTrack: int32;            // The current disk track
+    var NumberOfActiveThreads: int32;   // The number of request threads currently alive 
+    var NumberOfRequests: int32;        // The number of outstanding requests
+
+    
+    // The external method to get new requests.
+    // will block if there is no new request
+    method {:extern} getNewRequest(tid:Tid) returns (request: Request)
+
+    method Servicer()
+    {
+       Acquire(&mut);
+       while true {
+
+           // Maybe we should run this serciver forever ?
+           while (NumberOfRequests < min(NumberOfActiveThreads,maxDiskQueue) 
+                || NumberOfActiveThreads == 0) {
+               Wait(&queueFullCV);
+           }
+           
+           var winnerIndex: int32;
+           var distance:int32;
+           var winnerDistance:int32;
+           var currentIndex:int32;
+           
+
+           winnerIndex := 0;
+           winnerDistance := 0; 
+           currentIndex := 0;
+           
+           while currentIndex < 5 {
+               var currentRequest: Request;
+               currentRequest := requests[currentIndex];
+               if currentRequest.tid == None {
+                    continue;
+               } else {
+                   distance := abs(currentRequest.track - currentTrack);
+                   if distance <= winnerDistance {
+                       winnerDistance := distance;
+                       winnerIndex := currentIndex;
+                   }  
+               }
+               currentIndex := currentIndex + 1; 
+           }
+           
+           // No available request, then retry...
+           if requests[winnerIndex].tid == None {
+               continue;
+           }
+           
+           currentTrack := requests[winnerIndex].track;
+           requests[winnerIndex].tid := None;
+           requests[winnerIndex].track := -1;
+           NumberOfRequests := NumberOfRequests - 1;
+           
+           Signal(&requester_CVs[winnerIndex]);
+           Signal(&queueNotFullCV);
+
+       }
+       Release(&mut);
+    }
+
+    method Requester(index:int32) {
+        // Do we need to hold the lock for this ?
+        NumberOfActiveThreads := NumberOfActiveThreads + 1;
+        var request: Request;
+        while(true) {
+            request := getNewRequest($me);
+            Acquire(&mut);
+            while(NumberOfRequests >= maxDiskQueue) {
+                Wait(&queueNotFullCV);
+            }
+            NumberOfRequests := NumberOfRequests + 1;
+            requests[index] := request;
+            
+            Signal(&queueFullCV);
+            while(requests[index].tid != None) {
+                Wait(&requester_CVs[index]);
+            }
+            Release(&mut);
+        }
+        NumberOfActiveThreads := NumberOfActiveThreads - 1;
+        Signal(&queueFullCV);
+    }
+
+    method main() 
+    {
+        mut := None;
+        maxDiskQueue := 3;
+        currentTrack := 0;
+
+        InitCondVar(&queueFullCV, &mut); 
+        InitCondVar(&queueNotFullCV, &mut);
+
+        var i:int32;
+        i := 0;
+        while(i < 5) {
+            InitCondVar(&requester_CVs[i], &mut); 
+            requests[i].tid := None;
+            requests[i].track := -1;
+            i := i + 1;
+        }
+
+        i := 0;
+        while (i < 5) {
+            // Error: Element of type {st.Range} used as type {ty}
+            //requesterTids[i] := create_thread Requester(i);
+            i := i + 1;
+        }
+        servicerTid := create_thread Servicer();
+    }
+}

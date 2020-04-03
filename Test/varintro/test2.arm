@@ -1,0 +1,58 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs2 {
+
+    struct S1
+    {
+      var e:int32[4];
+      var f:int32[8];
+    }
+
+    struct S2
+    {
+       var g:S1[10];
+    }
+
+    struct S3
+    {
+    }
+
+}
+
+level C using SharedStructs2 {
+    noaddr var x:int32;
+    noaddr var y:int32
+
+    method foo() returns (bar: int32)
+    {
+        bar := 41;
+    }
+    method main()
+    {
+        x := foo();
+        y := *;
+    }
+}
+
+level D using SharedStructs2 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+
+    method foo() returns (bar: int32)
+    {
+        noaddr var foo: uint32;
+        foo := 42;
+        bar := 41;
+    }
+
+    method main()
+    {
+        x := foo();
+        y := *;
+    }
+}
+
+proof CD {
+    refinement C D
+    stack_var_intro foo foo "1 - 1 + 1"
+}

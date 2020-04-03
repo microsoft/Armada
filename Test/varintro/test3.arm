@@ -1,0 +1,65 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs3 {
+
+    struct S1
+    {
+      var e:int32[4];
+      var f:int32[8];
+    }
+
+    struct S2
+    {
+       var g:S1[10];
+    }
+
+    struct S3
+    {
+    }
+
+}
+
+level E using SharedStructs3 {
+    noaddr var x:int32;
+    noaddr var y:int32
+
+    method foo() returns (bar: int32)
+    {
+      bar ::= 41;
+      return;
+      bar ::= 42;
+    }
+
+    method main()
+    {
+        x := 41;
+        y := *;
+    }
+}
+
+level F using SharedStructs3 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+    noaddr var z:int32 := 0;
+
+    method foo() returns (bar: int32)
+    {
+      bar ::= 41;
+      return;
+      bar ::= 42;
+    }
+
+    method main()
+    {
+        x := 41;
+        z ::= 42;
+        y := *;
+        z := 5;
+        z := 6;
+    }
+}
+
+proof EF {
+    refinement E F
+    var_intro z
+}

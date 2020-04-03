@@ -1,0 +1,24 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs test6structs
+{
+    struct S1 {
+        var x:int32[10];
+    }
+}
+
+level test6 using test6structs {
+    noaddr var my_tid:uint64;
+    var g:S1;
+
+    method main() {
+        noaddr var p:ptr<int32[10]>;
+        noaddr var n:int32;
+        noaddr var q:ptr<int32>;
+
+        p ::= &g.x;
+        n ::= (*p)[1];
+        q ::= &g.x[0];
+        n ::= *(q+1);
+    }
+}

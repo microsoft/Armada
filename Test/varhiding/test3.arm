@@ -1,0 +1,42 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs3 {
+
+}
+
+level E using SharedStructs3 {
+    noaddr var x:uint32 := 0;
+    noaddr var y:uint32 := 0;
+    noaddr var z:uint32 := 0;
+
+    method main()
+    {
+        explicit_yield
+        {
+            y := 7;
+            x := 3;
+            y := 8;
+            z := 5;
+            y := 4;
+        }
+    }
+}
+
+level F using SharedStructs3 {
+    noaddr var x:uint32 := 0;
+    noaddr var z:uint32 := 0;
+
+    method main()
+    {
+        explicit_yield
+        {
+            x := 3;
+            z := 5;
+        }
+    }
+}
+
+proof EF {
+    refinement E F
+    var_hiding y
+}

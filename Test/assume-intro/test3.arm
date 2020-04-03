@@ -1,0 +1,49 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs3 {
+
+}
+
+level E using SharedStructs3 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+
+    method Worker(n:int32)
+    {
+        atomic {
+            x := n;
+            y := 4;
+        }
+    }
+
+    method main()
+    {
+        create_thread Worker(1);
+        create_thread Worker(2);
+    }
+}
+
+level F using SharedStructs3 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+
+    method Worker(n:int32)
+    {
+        atomic {
+            x := n;
+            assume x == n;
+            y := 4;
+        }
+    }
+
+    method main()
+    {
+        create_thread Worker(1);
+        create_thread Worker(2);
+    }
+}
+
+proof EF {
+    refinement E F
+    assume_intro
+}

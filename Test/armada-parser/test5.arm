@@ -1,0 +1,26 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs test5structs
+{
+    struct S1 {
+       var a:int32;
+       var b:int32[10];
+    }
+}
+
+level test5 using test5structs
+{
+    var x: int32;
+    var s: S1;
+
+    method main()
+    {
+        var y: ptr<int32>;
+	var z: int32;
+
+	y := &x;
+        y := &s.a;
+        y := &s.b[3];
+	z := *y;
+    }
+}

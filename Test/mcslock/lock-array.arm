@@ -1,0 +1,715 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs MCSLock {
+  struct lock {
+    var wait: uint32;
+    var next: uint64;
+  }
+
+  datatype MyLogEntry = Left(tid: uint64) | Right(tid: uint64)
+
+  ghost var log:seq<MyLogEntry> := [];
+
+  refinement_constraint @"
+    || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+    || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+    "
+}
+
+level pseudo_impl using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  method acquire(myLock: uint64) {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    readTail, tail ::= tail, if tail == oldTail then myLock else tail;
+    while readTail != oldTail
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      tail, readTail ::= if tail == oldTail then myLock else tail, tail;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0) {}
+    }
+  }
+
+  method release(myLock: uint64) {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    assume $sb_empty;
+    readTail, tail ::= tail, if tail == myLock then 0 else tail;
+    if readTail != myLock {
+      while (locks[myLock].next == 0) {}
+
+      nextLock := locks[myLock].next;
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  method client() {
+    while true {
+      acquire($me);
+      label first:
+        log ::= log + [Left($me)];
+      label second:
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L1 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+  method acquire(myLock: uint64) {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    atomic {
+      readTail, tail ::= tail, if tail == oldTail then myLock else tail;
+      tidQueue ::= if readTail == oldTail then tidQueue + [$me] else tidQueue;
+    }
+    while readTail != oldTail
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      atomic {
+        label begin:
+        tail, readTail ::= if tail == oldTail then myLock else tail, tail;
+        label end:
+        tidQueue ::= if oldTail == readTail then tidQueue + [$me] else tidQueue;
+      }
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0) {}
+    }
+  }
+
+  method release(myLock: uint64) {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    assume $sb_empty;
+    atomic {
+      readTail, tail ::= tail, if tail == myLock then 0 else tail;
+      tidQueue ::= if readTail == myLock then [] else tidQueue;
+    }
+    if readTail != myLock {
+      while (locks[myLock].next == 0) {}
+
+      nextLock := locks[myLock].next;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  method client() {
+    while true {
+      acquire($me);
+      label first:
+        log ::= log + [Left($me)];
+      label second:
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L2 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+  method acquire(myLock: uint64) {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    atomic {
+      label begin:
+      readTail, tail ::= tail, if tail == oldTail then myLock else tail;
+      label end:
+      tidQueue ::= if readTail == oldTail then tidQueue + [$me] else tidQueue;
+    }
+    while readTail != oldTail
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      label single:
+      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0) {}
+    }
+  }
+
+  method release(myLock: uint64) {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    assume $sb_empty;
+    atomic {
+      readTail, tail ::= tail, if tail == myLock then 0 else tail;
+      tidQueue ::= if readTail == myLock then [] else tidQueue;
+    }
+    if readTail != myLock {
+      while (locks[myLock].next == 0) {}
+
+      nextLock := locks[myLock].next;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  method client() {
+    while true {
+      acquire($me);
+      label first:
+        log ::= log + [Left($me)];
+      label second:
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L3 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+  method acquire(myLock: uint64) {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    label single:
+    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    while readTail != oldTail
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0) {}
+    }
+  }
+
+  method release(myLock: uint64) {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    assume $sb_empty;
+    atomic {
+      label begin:
+      readTail, tail ::= tail, if tail == myLock then 0 else tail;
+      label end:
+      tidQueue ::= if readTail == myLock then [] else tidQueue;
+    }
+    if readTail != myLock {
+      while (locks[myLock].next == 0) {}
+
+      nextLock := locks[myLock].next;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  method client() {
+    while true {
+      acquire($me);
+      label first:
+        log ::= log + [Left($me)];
+      label second:
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L4 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+  method acquire(myLock: uint64) {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    while readTail != oldTail
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0) {}
+    }
+  }
+
+  method release(myLock: uint64) {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    assume $sb_empty;
+    label single:
+    readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
+    if readTail != myLock {
+      while (locks[myLock].next == 0) {}
+
+      nextLock := locks[myLock].next;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  method client() {
+    while true {
+      acquire($me);
+      label first:
+        log ::= log + [Left($me)];
+      label second:
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L5 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+
+  method acquire(myLock: uint64)
+    requires myLock == $me
+    requires $me !in tidQueue
+    ensures |tidQueue| != 0 && tidQueue[0] == $me
+  {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    // hard to see when store buffer flushed, value is changed accordingly
+    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    while readTail != oldTail
+      invariant myLock == $me
+      invariant readTail != oldTail ==> $me !in tidQueue
+      invariant readTail == 0 && oldTail == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+      invariant readTail == oldTail ==> $me in tidQueue
+      invariant $sb_empty
+      invariant oldTail != $me
+      invariant readTail == oldTail && oldTail != 0 ==> oldTail in tidQueue && exists i :: 0 <= i < |tidQueue|-1 && tidQueue[i] == oldTail && tidQueue[i+1] == $me
+      invariant $me !in tidQueue ==> locks[myLock].next == 0
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0)
+          invariant myLock == $me
+          invariant $me in tidQueue
+          invariant locks[$me].wait == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+        {}
+    }
+    assume |tidQueue| != 0 && tidQueue[0] == $me;
+  }
+
+  method release(myLock: uint64)
+    requires myLock == $me
+    requires |tidQueue| != 0 && tidQueue[0] == $me
+    ensures $me !in tidQueue
+  {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    label single:
+      assume $sb_empty;
+      assume |tidQueue| != 0 && tidQueue[0] == $me;
+      readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
+    if readTail != myLock {
+      while (locks[myLock].next == 0)
+        invariant myLock == $me
+        invariant |tidQueue| != 0 && tidQueue[0] == $me
+        invariant $sb_empty
+      {}
+
+      nextLock := locks[myLock].next;
+      assume |tidQueue| > 0 && tidQueue[0] == $me;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  // testing
+
+  method client()
+    requires $me !in tidQueue
+  {
+    while true
+    invariant $me !in tidQueue
+    {
+      acquire($me);
+      label first:
+        assume |tidQueue| > 0 && tidQueue[0] == $me;
+        log ::= log + [Left($me)];
+      label second:
+        assume |tidQueue| > 0 && tidQueue[0] == $me;
+        log ::= log + [Right($me)];
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+level L6 using MCSLock {
+  noaddr var locks: lock[18446744073709551616];
+  noaddr var tail: uint64 := 0;
+  ghost var tidQueue: seq<uint64> := [];
+
+  method acquire(myLock: uint64)
+    requires myLock == $me
+    requires $me !in tidQueue
+    ensures |tidQueue| != 0 && tidQueue[0] == $me
+  {
+    noaddr var oldTail: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    locks[myLock].next := 0;
+
+    oldTail := tail;
+    assume $sb_empty;
+    // hard to see when store buffer flushed, value is changed accordingly
+    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    while readTail != oldTail
+      invariant myLock == $me
+      invariant readTail != oldTail ==> $me !in tidQueue
+      invariant readTail == 0 && oldTail == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+      invariant readTail == oldTail ==> $me in tidQueue
+      invariant $sb_empty
+      invariant oldTail != $me
+      invariant readTail == oldTail && oldTail != 0 ==> oldTail in tidQueue && exists i :: 0 <= i < |tidQueue|-1 && tidQueue[i] == oldTail && tidQueue[i+1] == $me
+      invariant $me !in tidQueue ==> locks[myLock].next == 0
+    {
+      oldTail := tail;
+      assume $sb_empty;
+      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    }
+
+    if oldTail != 0 {
+      locks[myLock].wait := 1;
+      locks[oldTail].next := myLock;
+      label wait:
+        while (locks[myLock].wait != 0)
+          invariant myLock == $me
+          invariant $me in tidQueue
+          invariant locks[$me].wait == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+        {}
+    }
+    assume |tidQueue| != 0 && tidQueue[0] == $me;
+  }
+
+  method release(myLock: uint64)
+    requires myLock == $me
+    requires |tidQueue| != 0 && tidQueue[0] == $me
+    ensures $me !in tidQueue
+  {
+    noaddr var nextLock: uint64 := 0;
+    noaddr var readTail: uint64 := 0;
+    label single:
+      assume $sb_empty;
+      assume |tidQueue| != 0 && tidQueue[0] == $me;
+      readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
+    if readTail != myLock {
+      while (locks[myLock].next == 0)
+        invariant myLock == $me
+        invariant |tidQueue| != 0 && tidQueue[0] == $me
+        invariant $sb_empty
+      {}
+
+      nextLock := locks[myLock].next;
+      assume |tidQueue| > 0 && tidQueue[0] == $me;
+      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      locks[nextLock].wait := 0;
+    }
+  }
+
+  // testing
+
+  method client()
+    requires $me !in tidQueue
+  {
+    while true
+    invariant $me !in tidQueue
+    {
+      acquire($me);
+      atomic {
+        label first:
+          assume |tidQueue| > 0 && tidQueue[0] == $me;
+          log ::= log + [Left($me)];
+        label second:
+          assume |tidQueue| > 0 && tidQueue[0] == $me;
+          log ::= log + [Right($me)];
+      }
+      label third:
+      release($me);
+    }
+  }
+
+  method main() {
+    while true
+    {
+      create_thread client();
+    }
+  }
+}
+
+proof pseudo_impl_L1 {
+  refinement pseudo_impl L1
+  var_intro tidQueue
+}
+
+proof L1_L2 {
+  refinement L1 L2
+  combining acquire_begin acquire_end acquire_single
+}
+
+proof L2_L3 {
+  refinement L2 L3
+  combining acquire_begin acquire_end acquire_single
+}
+
+proof L3_L4 {
+  refinement L3 L4
+  combining release_begin release_end release_single
+}
+
+proof L4_L5 {
+  refinement L4 L5
+  assume_intro
+
+  include_file "L4_L5_helper.dfy"
+  import_module L4_L5_Helper
+
+  extra lemma_ActorlessActionsMaintainYieldPredicate_ghost_yp
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_waiting_facts
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_sb_facts
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_ok_inv
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_list_facts
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_ghost_mem_inv
+        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+
+  extra lemma_SpecificGlobalInv_sb_facts_PathLemma_release_TF_5
+        "L4_L5_Helper.sb_entry_fact_unfold(ss0.state.s);"
+
+  extra lemma_SpecificYieldPredicateForOtherActor_ghost_yp_PathLemma_release_TF_5
+        "L4_L5_Helper.sb_entry_fact_unfold(ss4.state.s);"
+
+  chl_invariant waiting_facts @"
+    var locks := s.s.mem.globals.locks;
+    forall tid :: tid in s.s.threads && 0 < tid as int < |locks| && s.s.threads[tid].pc.Armada_PC_acquire_wait? ==>
+      L4_L5_Helper.waiting_facts(tid, s.s)
+  "
+
+  chl_invariant sb_facts @"
+    forall tid :: tid in s.s.threads ==>
+    forall entry :: entry in s.s.threads[tid].storeBuffer ==>
+    L4_L5_Helper.sb_entry_fact(tid, entry, s.s)
+    "
+
+  chl_yield_pred ghost_yp @"
+    var queue, queue', locks, locks' := s.s.ghosts.tidQueue, s'.s.ghosts.tidQueue, s.s.mem.globals.locks, s'.s.mem.globals.locks;
+    tid in s.s.threads && tid in s'.s.threads && 0 < tid as int < |locks| ==>
+    0 < tid as int < |locks'| &&
+    // trivial yield predicates
+    (L4_L5_Helper.is_owner(tid, queue) ==> L4_L5_Helper.is_owner(tid, queue')) &&
+    (tid in queue <==> tid in queue') &&
+    (s.s.threads[tid].pc == s'.s.threads[tid].pc) &&
+    (s.s.threads[tid].top.Armada_StackFrame_acquire? <==> s'.s.threads[tid].top.Armada_StackFrame_acquire?) &&
+    (|s.s.threads[tid].storeBuffer| >= |s'.s.threads[tid].storeBuffer|) &&
+
+    // rule for becoming owner
+    (!L4_L5_Helper.is_owner(tid, queue) && L4_L5_Helper.is_owner(tid, queue') ==>
+     s.s.threads[tid].pc.Armada_PC_acquire_wait? && |s'.s.threads[tid].storeBuffer| == 0) &&
+    // rule for predecessor in queue
+    (tid in queue && !L4_L5_Helper.is_owner(tid, queue) ==>
+     L4_L5_Helper.is_owner(tid, queue') ||
+     (tid in queue' && L4_L5_Helper.prev(tid, queue) == L4_L5_Helper.prev(tid, queue'))) &&
+    (L4_L5_Helper.is_owner(tid, queue) ==>
+      queue <= queue' && (s.s.mem.globals.tail != 0 ==> s'.s.mem.globals.tail != 0)) &&
+    (tid !in queue ==> locks[tid].next == 0 ==> locks'[tid].next == 0) &&
+    (locks[tid].next != 0 && !s.s.threads[tid].top.Armada_StackFrame_acquire? ==> locks[tid].next == locks'[tid].next)
+  "
+
+  inductive_invariant trivial_inv @"
+    (forall tid :: tid in s.s.threads ==>
+      !s.s.threads[tid].pc.Armada_PC_main_End? && !s.s.threads[tid].pc.Armada_PC_client_End?) &&
+    (forall tid :: tid in s.s.threads ==>
+      s.s.threads[tid].top.Armada_StackFrame_main? ==> |s.s.threads[tid].storeBuffer| == 0 && tid !in s.s.ghosts.tidQueue)
+  "
+
+  chl_invariant ok_inv @"
+    // tid
+    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
+    (|s.s.mem.globals.locks| == 18446744073709551616) &&
+    (forall tid :: tid in s.s.threads ==>
+     var thread := s.s.threads[tid];
+     thread.pc.Armada_PC_acquire_1? || thread.pc.Armada_PC_acquire_2? ==>
+      tid !in s.s.ghosts.tidQueue && ((|thread.storeBuffer| != 0 && thread.storeBuffer[|thread.storeBuffer|-1] ==
+       L.Armada_StoreBufferEntry(L.Armada_StoreBufferLocation_Unaddressable(L.Armada_GlobalStaticVar_locks, [Armada_FieldArrayIndex(tid as int), Armada_FieldStruct(Armada_FieldType_lock'next)]), Armada_PrimitiveValue_uint64(0))) ||
+      (|thread.storeBuffer| == 0 && s.s.mem.globals.locks[tid].next == 0))) &&
+    var tidQueue, tail := s.s.ghosts.tidQueue, s.s.mem.globals.tail;
+    && (forall i, j :: 0 <= i < j < |tidQueue| ==> tidQueue[i] != tidQueue[j])
+    && (tail == 0 <==> |tidQueue| == 0)
+    && (tail != 0 ==> tail == tidQueue[|tidQueue|-1])
+  "
+
+  chl_invariant list_facts @"
+    // tid
+    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
+    (|s.s.mem.globals.locks| == 18446744073709551616) &&
+    (forall tid :: tid in s.s.ghosts.tidQueue ==> tid in s.s.threads) &&
+    var tidQueue, tail, locks := s.s.ghosts.tidQueue, s.s.mem.globals.tail, s.s.mem.globals.locks;
+    // linked-list correctness
+    && (forall tid :: tid in tidQueue && !L4_L5_Helper.is_owner(tid, tidQueue) ==>
+          locks[L4_L5_Helper.prev(tid, tidQueue)].next == 0 ||
+          (locks[L4_L5_Helper.prev(tid, tidQueue)].next == tid && s.s.threads[tid].pc.Armada_PC_acquire_wait?))
+    && (forall tid :: |tidQueue| != 0 && tid == tidQueue[|tidQueue|-1] ==> locks[tid].next == 0)
+  "
+
+  chl_invariant ghost_mem_inv @"
+    // tid
+    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
+    (|s.s.mem.globals.locks| == 18446744073709551616) &&
+    // tidQueue residency
+    (forall tid :: tid in s.s.ghosts.tidQueue ==> tid in s.s.threads) &&
+    // thread local boundary check
+    var tidQueue, tail := s.s.ghosts.tidQueue, s.s.mem.globals.tail;
+
+    // there is no next pointer to itself
+    && (forall tid :: tid in s.s.ghosts.tidQueue ==>
+        s.s.mem.globals.locks[tid].next != tid)
+    // release's nextLock never points to itself
+    && (forall tid :: tid in s.s.threads ==>
+        s.s.threads[tid].top.Armada_StackFrame_release? ==>
+        s.s.threads[tid].top.release'nextLock != tid)
+  "
+}
+
+proof L5_L6 {
+  refinement L5 L6
+  reduction phase2 client_second
+
+  include_file "L5_L6_helper.dfy"
+  import_module L5_L6_Helper
+
+  inductive_invariant non_terminate_inv @"
+    forall tid :: tid in s.s.threads ==>
+    var thread := s.s.threads[tid];
+    !thread.pc.Armada_PC_main_End? && !thread.pc.Armada_PC_client_End?
+  "
+
+  inductive_invariant length_inv @"
+    forall tid :: tid in s.s.threads ==>
+    L5_L6_Helper.Armada_GetThreadLocalViewLength(s.s, tid) == L.Armada_GetThreadLocalView(s.s, tid) &&
+    |s.s.mem.globals.locks| == 18446744073709551616
+  "
+
+  inductive_invariant ownership_inv @"
+    forall tid :: tid in s.s.threads ==>
+    (s.s.threads[tid].pc.Armada_PC_client_first? || s.s.threads[tid].pc.Armada_PC_client_second?) ==>
+    |s.s.ghosts.tidQueue| > 0 && s.s.ghosts.tidQueue[0] == tid
+  "
+}

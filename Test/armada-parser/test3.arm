@@ -1,0 +1,158 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs test3structs
+{
+    struct C1 {
+        var x:int32[4];
+        var y:int32[8];
+    }
+
+    struct C2 {
+        var a:int32
+        var b:C1
+    }
+
+    struct C3 {
+        var mno:C2
+        var pqr:C2
+        var s:int64
+    }
+
+    struct C4 {
+    }
+
+    ghost var log:seq<int> := [];
+
+    refinement_constraint @"
+       || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+       || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+    "
+}
+
+level test3 using test3structs
+{
+    datatype DT1 = DT1(a:int, b:set<int>)
+
+    var w:int32
+    noaddr var x:int32 := 0;
+    var y:int32
+    noaddr var z:int32 := 7;
+    var g1:uint8[10];
+    var g2:C2;
+    var g3:C2[5];
+    noaddr var g4:C3;
+    ghost var g5:seq<int>;
+    ghost var g6:DT1;
+
+    method {:extern} ExternalMethod(a:uint32, p:ptr<int32>) returns (b:uint32)
+        reads    x, g2.a
+        modifies y, g1[4], log
+        ensures  y == old(y + *p) + 3
+        ensures  b == a * 2
+        ensures  log == old(log) + [2, 47]
+
+    function method increment(x:uint32) : uint32
+    {
+        if (0 < x < 10) then x + 1 else 0
+    }
+
+    method C1Test(ths:ptr<C1>)
+    {
+        explicit_yield {
+            var w:int32;
+            noaddr var z:int32;
+            z ::= (*ths).x[2];
+            yield;
+            assume z - (*ths).x[2] == 0;
+            wait_until w > 3;
+            (*ths).x[2] ::= z + 3;
+            g5 ::= [1, 2, 3];
+            g6.b := g6.b + {3};
+        }
+    }
+
+    method C2Help(ths:ptr<C2>)
+    {
+        noaddr var q:int32[4];
+    }
+
+    method InterestingControlFlow(a:int32, b:int64, p:ptr<int32>)
+    {
+        explicit_yield {
+            yield;
+            while (a > *p) {
+                if (b < 3) {
+                    a := a - 1;
+                    yield;
+                    assume a != 13;
+                    continue;
+                }
+                else if (b > 10) {
+                    a := a - 2;
+                    b := b - 1;
+                    return;
+                }
+                else {
+                    assume b > 17;
+                    break;
+                }
+                *p := *p + 1;
+                yield;
+                assert *p > 7;
+            }
+        }
+        if *p == 10 {
+            *p := 11;
+        }
+    }
+
+    method Foo(a:uint32, b:uint64) returns (c:uint32, d:uint64)
+    {
+        noaddr var z:uint64;
+        var x:uint64;
+        var y:uint64;
+        noaddr var cnew:C2;
+
+        explicit_yield {
+            x := (var q:bool := (b == 9); if q then 3 as uint64 else 17);
+            y := if (a > 3) then 4 else 0;
+            {
+               yield;
+               z := y / b;
+               yield;
+               y := z;
+            }
+            atomic {
+               c := a + a;
+               d := z - 6;
+            }
+        }
+    }
+
+    method Bar(a:int16, b:uint32) returns (c:uint32, d:uint32)
+    {
+        var z:int32 := 88;
+        var w:C2[10];
+        noaddr var x:uint32 := 37;
+        noaddr var y:int32, q:C2[8];
+
+        x, y, c := 5, 6, x + 1;
+        a := -a;
+        b := increment(c);
+    }
+
+    method Baz(p:ptr<int16>, q:ptr<uint32>) returns (c:uint32)
+    {
+        var d:uint32;
+        var h:uint64;
+
+        *q, *(q+1) := Bar(*p, *q);
+        h := create_thread Bar(4, 6);
+        g4.mno.b.x[2] := 3;
+    }
+
+    method main(p: ptr<int32>, c:C1) {
+        *p, *(p+1), c.x[3] := 0, 1, 78;
+    }
+
+}

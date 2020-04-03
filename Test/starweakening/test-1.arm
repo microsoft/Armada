@@ -1,0 +1,28 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+}
+
+level A using SharedStructs {
+    noaddr var x:int32;
+   
+    method main()
+    {
+        x, x ::= 1, 2;
+    }
+}
+
+level B using SharedStructs {
+    noaddr var x:int32;
+   
+    method main()
+    {
+               somehow modifies x;
+       }
+}
+
+proof AB {
+       refinement A B
+       starweakening
+}

@@ -1,0 +1,30 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs4 {
+
+}
+
+level G using SharedStructs4 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+    
+    method main()
+    {
+        x, y ::= 0, *;
+    }
+}
+
+level H using SharedStructs4 {
+    noaddr var x:int32;
+    noaddr var y:int32;
+    
+    method main()
+    {
+        x, y ::= *, *;
+    }
+}
+
+proof GH {
+    refinement G H
+    starweakening
+}

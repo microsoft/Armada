@@ -1,0 +1,41 @@
+// Test the regions invariant generation
+
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs2 {
+
+}
+
+layer C using SharedStructs2 {
+    var x:int32;
+    var y:int32;
+
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        p1 := &x;
+        p2 := malloc(int32);
+        *p2, *p1 ::= 2, 1;
+    }
+}
+
+layer D using SharedStructs2 {
+    var x:int32;
+    var y:int32;
+
+    method main()
+    {
+        noaddr var p1:ptr<int32> := null;
+        noaddr var p2:ptr<int32> := null;
+        p1 := &x;
+        p2 := malloc(int32);
+        *p1, *p2 ::= 1, 2;
+    }
+}
+
+proof CD {
+    refinement C D
+    weakening
+    use_regions
+}

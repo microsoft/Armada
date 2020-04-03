@@ -1,0 +1,173 @@
+import re
+import sys
+import os, os.path
+import subprocess
+import traceback
+import pdb
+import SCons.Util
+import atexit
+import platform
+
+Import("*")
+
+env = Environment()
+if sys.platform != 'win32' and sys.platform != 'cygwin':
+  env['MONO'] = 'mono'
+
+# Retrieve tool-specific command overrides passed in by the user
+# We don't really need --DAFNYPATH, but it's OK if the user
+# specifies it.
+AddOption('--DAFNYPATH',
+  dest='dafny_path',
+  type='string',
+  default=None,
+  action='store',
+  help='Specify the path to Dafny tool binaries (not needed)')
+
+armada_exe = os.path.abspath('Binaries/Armada.exe')
+
+####################################################################
+#
+#   Describe the files needed for Mono
+#
+####################################################################
+
+if sys.platform == 'win32' or sys.platform == 'cygwin':
+  env['CSC'] = env.Detect('csc')
+else: # mono
+  env['CSC'] = env.Detect('dmcs')
+
+####################################################################
+#
+#   Define Armada transformation Builders
+#
+####################################################################
+
+def generate_armada_actions(source, target, env, for_signature):
+  source_path = File(source[0]).path
+  source_dir = os.path.dirname(source_path)
+  source_name = os.path.basename(source_path)
+  num_slashes = source_path.count("/")
+  if num_slashes > 0:
+    armada_path = "../" * (num_slashes-1) + ".."
+  else:
+    armada_path = "."
+  return "cd %s; $MONO %s /armadaPath:%s %s" % (source_dir, armada_exe, armada_path, source_name)
+
+def add_armada(env):
+  armada = Builder(generator=generate_armada_actions)
+  env.Append(BUILDERS = {'Armada' : armada})
+
+####################################################################
+#
+#   Put it all together
+#
+####################################################################
+
+add_armada(env)
+
+####################################################################
+#
+#   Create dependencies
+#
+####################################################################
+
+def run_directory(dir_name, entries):
+  for (armada_name, dafny_files, proof_dirs) in entries:
+    source = "Test/%s/%s.arm" % (dir_name, armada_name)
+    targets = ["Test/%s/%s.dfy" % (dir_name, dafny_file) for dafny_file in dafny_files]
+    cmd = env.Armada(targets, [source, armada_exe])
+    for proof_dir in proof_dirs:
+      subdir = "Test/%s/%s" % (dir_name, proof_dir)
+      if os.path.isdir(subdir):
+        for filename in os.listdir(subdir):
+          if os.path.splitext(filename)[1] == '.dfy':
+            Clean(cmd, "%s/%s" % (subdir, filename))
+        Clean(cmd, subdir)
+
+
+run_directory("assume-intro", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+])
+
+run_directory("barrier", [
+    ("barrier", ["SharedStructs", "Impl", "L1", "L2", "ImplRefinesL1", "L1RefinesL2"], ["ImplRefinesL1", "L1RefinesL2"]),
+])
+
+run_directory("tsoelim", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+])
+
+run_directory("reduction", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+])
+
+run_directory("combining", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+])
+
+run_directory("starweakening", [
+    ("test-1", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test-4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+])
+
+run_directory("varhiding", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+])
+
+run_directory("varintro", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test4", ["SharedStructs4", "X", "Y", "XY"], ["XY"]),
+])
+
+run_directory("weakening", [
+    ("test-1", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+])
+
+run_directory("regions", [
+    ("test-1", ["SharedStructs1", "A", "B", "AB"], ["AB"]),
+    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test-4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+    ("pointers", ["SharedStructs", "level0", "level1"], ["level01proof"])
+])
+
+run_directory("armada-parser", [
+    ("test1", ["test1structs", "test1"], []),
+    ("test2", ["test2structs", "test2"], []),
+    ("test3", ["test3structs", "test3"], []),
+    ("test4", ["test4structs", "test4"], []),
+    ("test5", ["test5structs", "test5"], []),
+    ("test6", ["test6structs", "test6"], []),
+])
+
+run_directory("mcslock", [
+    ("lock-array", ["MCSLock", "pseudo_impl", "L1", "L2", "L3", "L4", "L5", "L6"],
+     ["pseudo_impl_L1", "L1_L2", "L2_L3", "L3_L4", "L4_L5", "L5_L6"])
+])
+
+run_directory("qbss", [
+    ("queue", ["SharedStructs", "QueueBSSNoTSO", "QueueBSSNoTSO_AbstractQueueIntroduced",
+               "QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue",
+               "QueueBSSNoTSO_WithAbstractQueue", "QueueBSSNoTSO_AbstractLogs",
+               "QueueBSSNoTSO_AbstractLogsStarweakened", "QueueBSSNoTSO_HiddenEnqLocals",
+               "QueueBSSNoTSO_HiddenEnqDeqLocals", "QueueBSSNoTSO_HiddenImpl"],
+     ["NoTSOIntroduceAbstractQueue", "CombineEnqueueAtomicAbstractQueue",
+      "CombineDequeueAtomicAbstractQueue", "NoTSOUseAbstractQueueForLog",
+      "NoTSOStarWeaken", "HideEnqueueLocals", "HideDequeueLocals", "HideGlobal"])
+])

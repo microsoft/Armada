@@ -1,0 +1,61 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs { }
+
+layer {:concrete} A using SharedStructs {
+
+  var mutex:uint64
+  noaddr var best_guess:uint32 := 0
+
+  method {:extern} rnd() returns (x:uint32)
+    ensures 0 <= x < 0xFFFF
+
+  method {:extern} print_uint32(i:uint32)
+
+  method {:extern} init_random()
+
+  method worker(n:uint32)
+  {
+    noaddr var i:int32 := 0;
+    noaddr var g:uint32;
+    noaddr var m:uint32;
+
+    init_random(); // On Microsoft platforms, srand is per-thread so you have to call it from worker
+    while (i < 10000) {
+      i := i + 1;
+      g := rnd();
+      m := g * g;
+      if (m > n) {
+        continue;
+      }
+label lb_to_be_weakened:
+      if (g <= best_guess) {
+        continue;
+      }
+      //somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      if (g > best_guess) {
+        best_guess := g;
+      }
+      //somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+    }
+  }
+
+  method main() returns (x:int32)
+  {
+    var arg:uint32 := 100000000;
+    noaddr var tid1:uint64 := 0;
+    noaddr var tid2:uint64 := 0;
+    noaddr var tid3:uint64 := 0;
+
+    tid1 := create_thread worker(arg);
+    tid2 := create_thread worker(arg);
+    tid3 := create_thread worker(arg);
+
+    join tid1;
+    join tid2;
+    join tid3;
+
+    print_uint32(best_guess);
+  }
+
+}

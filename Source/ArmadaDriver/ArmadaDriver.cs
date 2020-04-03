@@ -1,0 +1,590 @@
+//-----------------------------------------------------------------------------
+//
+// Copyright (C) Microsoft Corporation.  All Rights Reserved.
+//
+//-----------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------
+// DafnyDriver
+//       - main program for taking a Dafny program and verifying it
+//---------------------------------------------------------------------------------------------
+
+namespace Microsoft.Armada
+{
+  using System;
+  using System.Collections.Generic;
+  using System.Collections.ObjectModel;
+  using System.Diagnostics.Contracts;
+  using System.IO;
+  using System.Linq;
+
+  using Microsoft.Boogie;
+  using Bpl = Microsoft.Boogie;
+  using System.Diagnostics;
+
+  public class DafnyDriver
+  {
+    public enum ExitValue { VERIFIED = 0, PREPROCESSING_ERROR, DAFNY_ERROR, COMPILE_ERROR, NOT_VERIFIED }
+
+    public static int Main(string[] args)
+    {
+      int ret = 0;
+      var thread = new System.Threading.Thread(
+        new System.Threading.ThreadStart(() =>
+          { ret = ThreadMain(args); }),
+          0x10000000); // 256MB stack size to prevent stack overflow
+      thread.Start();
+      thread.Join();
+      return ret;
+    }
+
+    public static int ThreadMain(string[] args)
+    {
+      Contract.Requires(cce.NonNullElements(args));
+
+      ErrorReporter reporter = new ConsoleErrorReporter();
+      ExecutionEngine.printer = new DafnyConsolePrinter(); // For boogie errors
+
+      ArmadaOptions.Install(new ArmadaOptions(reporter));
+
+      List<DafnyFile> dafnyFiles;
+      List<string> otherFiles;
+
+      ExitValue exitValue = ProcessCommandLineArguments(args, out dafnyFiles, out otherFiles);
+
+      if (exitValue == ExitValue.VERIFIED)
+      {
+        exitValue = ProcessFiles(dafnyFiles, otherFiles.AsReadOnly(), reporter);
+      }
+
+      if (CommandLineOptions.Clo.XmlSink != null) {
+        CommandLineOptions.Clo.XmlSink.Close();
+      }
+      if (CommandLineOptions.Clo.Wait)
+      {
+        Console.WriteLine("Press Enter to exit.");
+        Console.ReadLine();
+      }
+      if (!ArmadaOptions.O.CountVerificationErrors && exitValue != ExitValue.PREPROCESSING_ERROR)
+      {
+        return 0;
+      }
+      //Console.ReadKey();
+      return (int)exitValue;
+    }
+
+    public static ExitValue ProcessCommandLineArguments(string[] args, out List<DafnyFile> dafnyFiles, out List<string> otherFiles)
+    {
+      dafnyFiles = new List<DafnyFile>();
+      otherFiles = new List<string>();
+
+      CommandLineOptions.Clo.RunningBoogieFromCommandLine = true;
+      CommandLineOptions.Clo.DontShowLogo = true;
+      try {
+        if (!CommandLineOptions.Clo.Parse(args)) {
+          return ExitValue.PREPROCESSING_ERROR;
+        }
+      } catch (ProverException pe) {
+        ExecutionEngine.printer.ErrorWriteLine(Console.Out, "*** ProverException: {0}", pe.Message);
+        return ExitValue.PREPROCESSING_ERROR;
+      }
+
+      if (CommandLineOptions.Clo.Files.Count == 0)
+      {
+        ExecutionEngine.printer.ErrorWriteLine(Console.Out, "*** Error: No input files were specified.");
+        return ExitValue.PREPROCESSING_ERROR;
+      }
+      if (CommandLineOptions.Clo.XmlSink != null) {
+        string errMsg = CommandLineOptions.Clo.XmlSink.Open();
+        if (errMsg != null) {
+          ExecutionEngine.printer.ErrorWriteLine(Console.Out, "*** Error: " + errMsg);
+          return ExitValue.PREPROCESSING_ERROR;
+        }
+      }
+      if (!CommandLineOptions.Clo.DontShowLogo)
+      {
+        Console.WriteLine(CommandLineOptions.Clo.Version);
+      }
+      if (CommandLineOptions.Clo.ShowEnv == CommandLineOptions.ShowEnvironment.Always)
+      {
+        Console.WriteLine("---Command arguments");
+        foreach (string arg in args)
+        {Contract.Assert(arg != null);
+          Console.WriteLine(arg);
+        }
+        Console.WriteLine("--------------------");
+      }
+
+      foreach (string file in CommandLineOptions.Clo.Files)
+      { Contract.Assert(file != null);
+        string extension = Path.GetExtension(file);
+        if (extension != null) { extension = extension.ToLower(); }
+        try { dafnyFiles.Add(new DafnyFile(file)); } catch (IllegalDafnyFile) {
+          if (ArmadaOptions.O.CompileTarget == ArmadaOptions.CompilationTarget.Clight) {
+            if (extension == ".h") {
+              otherFiles.Add(file);
+            } else {
+              ExecutionEngine.printer.ErrorWriteLine(Console.Out, "*** Error: '{0}': Filename extension '{1}' is not supported. Input files must be Dafny programs (.dfy) or C headers (.h)", file,
+                extension == null ? "" : extension);
+              return ExitValue.PREPROCESSING_ERROR;
+            }
+          }
+        }
+      }
+      return ExitValue.VERIFIED;
+    }
+
+    static ExitValue ProcessFiles(IList<DafnyFile/*!*/>/*!*/ dafnyFiles, ReadOnlyCollection<string> otherFileNames,
+                                  ErrorReporter reporter, bool lookForSnapshots = true, string programId = null)
+   {
+      Contract.Requires(cce.NonNullElements(dafnyFiles));
+      var dafnyFileNames = DafnyFile.fileNames(dafnyFiles);
+
+      ExitValue exitValue = ExitValue.VERIFIED;
+      if (CommandLineOptions.Clo.VerifySeparately && 1 < dafnyFiles.Count)
+      {
+        foreach (var f in dafnyFiles)
+        {
+          Console.WriteLine();
+          Console.WriteLine("-------------------- {0} --------------------", f);
+          var ev = ProcessFiles(new List<DafnyFile> { f }, new List<string>().AsReadOnly(), reporter, lookForSnapshots, f.FilePath);
+          if (exitValue != ev && ev != ExitValue.VERIFIED)
+          {
+            exitValue = ev;
+          }
+        }
+        return exitValue;
+      }
+
+      if (0 <= CommandLineOptions.Clo.VerifySnapshots && lookForSnapshots)
+      {
+        var snapshotsByVersion = ExecutionEngine.LookForSnapshots(dafnyFileNames);
+        foreach (var s in snapshotsByVersion)
+        {
+          var snapshots = new List<DafnyFile>();
+          foreach (var f in s) {
+            snapshots.Add(new DafnyFile(f));
+          }
+          var ev = ProcessFiles(snapshots, new List<string>().AsReadOnly(), reporter, false, programId);
+          if (exitValue != ev && ev != ExitValue.VERIFIED)
+          {
+            exitValue = ev;
+          }
+        }
+        return exitValue;
+      }
+
+      Microsoft.Armada.Program dafnyProgram;
+      string programName = dafnyFileNames.Count == 1 ? dafnyFileNames[0] : "the program";
+      string err = Microsoft.Armada.Main.ParseCheck(dafnyFiles, programName, reporter, out dafnyProgram);
+
+      if (err != null) {
+        exitValue = ExitValue.DAFNY_ERROR;
+        ExecutionEngine.printer.ErrorWriteLine(Console.Out, err);
+      } else if (dafnyProgram != null && !CommandLineOptions.Clo.NoResolve && !CommandLineOptions.Clo.NoTypecheck
+          && ArmadaOptions.O.DafnyVerify) {
+        var boogiePrograms = Translate(dafnyProgram);
+
+        Dictionary<string, PipelineStatistics> statss;
+        PipelineOutcome oc;
+        string baseName = cce.NonNull(Path.GetFileName(dafnyFileNames[dafnyFileNames.Count - 1]));
+        var verified = Boogie(baseName, boogiePrograms, programId, out statss, out oc);
+        var compiled = Compile(dafnyFileNames[0], otherFileNames, dafnyProgram, oc, statss, verified);
+        exitValue = verified && compiled ? ExitValue.VERIFIED : !verified ? ExitValue.NOT_VERIFIED : ExitValue.COMPILE_ERROR;
+      }
+      else
+      {
+        // Console.WriteLine("Force compiling!");
+        Dictionary<string, PipelineStatistics> statss;
+        PipelineOutcome oc;
+        oc = PipelineOutcome.VerificationCompleted;
+        statss = new Dictionary<string, PipelineStatistics>();
+
+        var compiled = Compile(dafnyFileNames[0], otherFileNames, dafnyProgram, oc, statss, false);
+      }
+
+      if (err == null && dafnyProgram != null && ArmadaOptions.O.PrintStats) {
+        Util.PrintStats(dafnyProgram);
+      }
+      if (err == null && dafnyProgram != null && ArmadaOptions.O.PrintFunctionCallGraph) {
+        Util.PrintFunctionCallGraph(dafnyProgram);
+      }
+      return exitValue;
+    }
+
+    private static string BoogieProgramSuffix(string printFile, string suffix) {
+      var baseName = Path.GetFileNameWithoutExtension(printFile);
+      var dirName = Path.GetDirectoryName(printFile);
+
+      return Path.Combine(dirName, baseName + "_" + suffix + Path.GetExtension(printFile));
+    }
+
+    public static IEnumerable<Tuple<string, Bpl.Program>> Translate(Program dafnyProgram) {
+      var nmodules = Translator.VerifiableModules(dafnyProgram).Count();
+
+
+      foreach (var prog in Translator.Translate(dafnyProgram, dafnyProgram.reporter)) {
+
+        if (CommandLineOptions.Clo.PrintFile != null) {
+
+          var nm = nmodules > 1 ? BoogieProgramSuffix(CommandLineOptions.Clo.PrintFile, prog.Item1) : CommandLineOptions.Clo.PrintFile;
+
+          ExecutionEngine.PrintBplFile(nm, prog.Item2, false, false, CommandLineOptions.Clo.PrettyPrint);
+        }
+
+        yield return prog;
+
+      }
+    }
+
+    public static bool BoogieOnce(string baseFile, string moduleName, Bpl.Program boogieProgram, string programId,
+                              out PipelineStatistics stats, out PipelineOutcome oc)
+    {
+      if (programId == null)
+      {
+        programId = "main_program_id";
+      }
+      programId += "_" + moduleName;
+
+      string bplFilename;
+      if (CommandLineOptions.Clo.PrintFile != null)
+      {
+        bplFilename = CommandLineOptions.Clo.PrintFile;
+      }
+      else
+      {
+        string baseName = cce.NonNull(Path.GetFileName(baseFile));
+        baseName = cce.NonNull(Path.ChangeExtension(baseName, "bpl"));
+        bplFilename = Path.Combine(Path.GetTempPath(), baseName);
+      }
+
+      bplFilename = BoogieProgramSuffix(bplFilename, moduleName);
+      stats = null;
+      oc = BoogiePipelineWithRerun(boogieProgram, bplFilename, out stats, 1 < Microsoft.Armada.ArmadaOptions.Clo.VerifySnapshots ? programId : null);
+      return (oc == PipelineOutcome.Done || oc == PipelineOutcome.VerificationCompleted) && stats.ErrorCount == 0 && stats.InconclusiveCount == 0 && stats.TimeoutCount == 0 && stats.OutOfMemoryCount == 0;
+    }
+
+    public static bool Boogie(string baseName, IEnumerable<Tuple<string, Bpl.Program>> boogiePrograms, string programId, out Dictionary<string, PipelineStatistics> statss, out PipelineOutcome oc) {
+
+      bool isVerified = true;
+      oc = PipelineOutcome.VerificationCompleted;
+      statss = new Dictionary<string, PipelineStatistics>();
+
+      Stopwatch watch = new Stopwatch();
+      watch.Start();
+
+      foreach (var prog in boogiePrograms) {
+        PipelineStatistics newstats;
+        PipelineOutcome newoc;
+
+        if (ArmadaOptions.O.SeparateModuleOutput) {
+          ExecutionEngine.printer.AdvisoryWriteLine("For module: {0}", prog.Item1);
+        }
+
+        isVerified = BoogieOnce(baseName, prog.Item1, prog.Item2, programId, out newstats, out newoc) && isVerified;
+
+        watch.Stop();
+
+        if ((oc == PipelineOutcome.VerificationCompleted || oc == PipelineOutcome.Done) && newoc != PipelineOutcome.VerificationCompleted) {
+          oc = newoc;
+        }
+
+        if (ArmadaOptions.O.SeparateModuleOutput) {
+          TimeSpan ts = watch.Elapsed;
+          string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}",
+            ts.Hours, ts.Minutes, ts.Seconds);
+
+          ExecutionEngine.printer.AdvisoryWriteLine("Elapsed time: {0}", elapsedTime);
+          ExecutionEngine.printer.WriteTrailer(newstats);
+        }
+
+        statss.Add(prog.Item1, newstats);
+        watch.Restart();
+      }
+      watch.Stop();
+
+      return isVerified;
+    }
+
+    private static void WriteStatss(Dictionary<string, PipelineStatistics> statss) {
+      var statSum = new PipelineStatistics();
+      foreach (var stats in statss) {
+        statSum.VerifiedCount += stats.Value.VerifiedCount;
+        statSum.ErrorCount += stats.Value.ErrorCount;
+        statSum.TimeoutCount += stats.Value.TimeoutCount;
+        statSum.OutOfMemoryCount += stats.Value.OutOfMemoryCount;
+        statSum.CachedErrorCount += stats.Value.CachedErrorCount;
+        statSum.CachedInconclusiveCount += stats.Value.CachedInconclusiveCount;
+        statSum.CachedOutOfMemoryCount += stats.Value.CachedOutOfMemoryCount;
+        statSum.CachedTimeoutCount += stats.Value.CachedTimeoutCount;
+        statSum.CachedVerifiedCount += stats.Value.CachedVerifiedCount;
+        statSum.InconclusiveCount += stats.Value.InconclusiveCount;
+      }
+      ExecutionEngine.printer.WriteTrailer(statSum);
+    }
+
+
+    public static bool Compile(string fileName, ReadOnlyCollection<string> otherFileNames, Program dafnyProgram,
+                               PipelineOutcome oc, Dictionary<string, PipelineStatistics> statss, bool verified)
+    {
+      var resultFileName = ArmadaOptions.O.DafnyPrintCompiledFile ?? fileName;
+      bool compiled = true;
+      switch (oc)
+      {
+        case PipelineOutcome.VerificationCompleted:
+          // WriteStatss(statss);
+          if ((ArmadaOptions.O.Compile && verified && CommandLineOptions.Clo.ProcsToCheck == null) || ArmadaOptions.O.ForceCompile) {
+            Console.WriteLine("Invoke Compiler = True");
+            compiled = CompileDafnyProgram(dafnyProgram, resultFileName, otherFileNames, true);
+          } else if ((2 <= ArmadaOptions.O.SpillTargetCode && verified && CommandLineOptions.Clo.ProcsToCheck == null) || 3 <= ArmadaOptions.O.SpillTargetCode) {
+            Console.WriteLine("Invoke Compiler = False");
+            compiled = CompileDafnyProgram(dafnyProgram, resultFileName, otherFileNames, false);
+          }
+          break;
+        case PipelineOutcome.Done:
+          // Console.WriteLine("Done");
+          // WriteStatss(statss);
+          if (ArmadaOptions.O.ForceCompile || 3 <= ArmadaOptions.O.SpillTargetCode) {
+            compiled = CompileDafnyProgram(dafnyProgram, resultFileName, otherFileNames, ArmadaOptions.O.ForceCompile);
+          }
+          break;
+        default:
+          // error has already been reported to user
+          break;
+      }
+      return compiled;
+    }
+
+    /// <summary>
+    /// Resolve, type check, infer invariants for, and verify the given Boogie program.
+    /// The intention is that this Boogie program has been produced by translation from something
+    /// else.  Hence, any resolution errors and type checking errors are due to errors in
+    /// the translation.
+    /// The method prints errors for resolution and type checking errors, but still returns
+    /// their error code.
+    /// </summary>
+    static PipelineOutcome BoogiePipelineWithRerun(Bpl.Program/*!*/ program, string/*!*/ bplFileName,
+        out PipelineStatistics stats, string programId)
+    {
+      Contract.Requires(program != null);
+      Contract.Requires(bplFileName != null);
+      Contract.Ensures(0 <= Contract.ValueAtReturn(out stats).InconclusiveCount && 0 <= Contract.ValueAtReturn(out stats).TimeoutCount);
+
+      stats = new PipelineStatistics();
+      LinearTypeChecker ltc;
+      CivlTypeChecker ctc;
+      PipelineOutcome oc = ExecutionEngine.ResolveAndTypecheck(program, bplFileName, out ltc, out ctc);
+      switch (oc) {
+        case PipelineOutcome.Done:
+          return oc;
+
+        case PipelineOutcome.ResolutionError:
+        case PipelineOutcome.TypeCheckingError:
+          {
+            ExecutionEngine.PrintBplFile(bplFileName, program, false, false, CommandLineOptions.Clo.PrettyPrint);
+            Console.WriteLine();
+            Console.WriteLine("*** Encountered internal translation error - re-running Boogie to get better debug information");
+            Console.WriteLine();
+
+            List<string/*!*/>/*!*/ fileNames = new List<string/*!*/>();
+            fileNames.Add(bplFileName);
+            Bpl.Program reparsedProgram = ExecutionEngine.ParseBoogieProgram(fileNames, true);
+            if (reparsedProgram != null) {
+              ExecutionEngine.ResolveAndTypecheck(reparsedProgram, bplFileName, out ltc, out ctc);
+            }
+          }
+          return oc;
+
+        case PipelineOutcome.ResolvedAndTypeChecked:
+          ExecutionEngine.EliminateDeadVariables(program);
+          ExecutionEngine.CollectModSets(program);
+          ExecutionEngine.CoalesceBlocks(program);
+          ExecutionEngine.Inline(program);
+          return ExecutionEngine.InferAndVerify(program, stats, programId);
+
+        default:
+          Contract.Assert(false); throw new cce.UnreachableException();  // unexpected outcome
+      }
+    }
+
+
+    #region Output
+
+    class DafnyConsolePrinter : ConsolePrinter
+    {
+      public override void ReportBplError(IToken tok, string message, bool error, TextWriter tw, string category = null)
+      {
+        // Dafny has 0-indexed columns, but Boogie counts from 1
+        var realigned_tok = new Token(tok.line, tok.col - 1);
+        realigned_tok.kind = tok.kind;
+        realigned_tok.pos = tok.pos;
+        realigned_tok.val = tok.val;
+        realigned_tok.filename = tok.filename;
+        base.ReportBplError(realigned_tok, message, error, tw, category);
+
+        if (tok is Microsoft.Armada.NestedToken)
+        {
+          var nt = (Microsoft.Armada.NestedToken)tok;
+          ReportBplError(nt.Inner, "Related location", false, tw);
+        }
+      }
+    }
+
+    #endregion
+
+
+    #region Compilation
+
+    static string WriteDafnyProgramToFiles(string dafnyProgramName, string targetProgram, bool completeProgram, Dictionary<String, String> otherFiles, TextWriter outputWriter)
+    {
+
+      outputWriter.WriteLine("Running WriteDafnyProgramToFiles!");
+      string targetExtension;
+      string baseName = Path.GetFileNameWithoutExtension(dafnyProgramName);
+      string targetBaseDir = "";
+      switch (ArmadaOptions.O.CompileTarget) {
+        case ArmadaOptions.CompilationTarget.Clight:
+          targetExtension = "c";
+          targetBaseDir = "";
+          break;
+        default:
+          Contract.Assert(false);
+          throw new cce.UnreachableException();
+      }
+      string targetBaseName = Path.ChangeExtension(dafnyProgramName, targetExtension);
+      string targetDir = Path.Combine(Path.GetDirectoryName(dafnyProgramName), targetBaseDir);
+      string targetFilename = Path.Combine(targetDir, targetBaseName);
+      if (targetProgram != null) {
+        WriteFile(targetFilename, targetProgram);
+      }
+
+      string relativeTarget = Path.Combine(targetBaseDir, targetBaseName);
+      if (completeProgram && targetProgram != null) {
+        if (ArmadaOptions.O.CompileVerbose) {
+          outputWriter.WriteLine("Compiled program written to {0}", relativeTarget);
+        }
+      }
+      else {
+        outputWriter.WriteLine("File {0} contains the partially compiled program", relativeTarget);
+      }
+
+      foreach (var entry in otherFiles) {
+        var filename = entry.Key;
+        WriteFile(Path.Combine(targetDir, filename), entry.Value);
+        if (ArmadaOptions.O.CompileVerbose) {
+          outputWriter.WriteLine("Additional code written to {0}", Path.Combine(targetBaseDir, filename));
+        }
+      }
+      return targetFilename;
+    }
+
+    static void WriteFile(string filename, string text) {
+      var dir = Path.GetDirectoryName(filename);
+      if (dir != "") {
+        Directory.CreateDirectory(dir);
+      }
+
+      using (TextWriter target = new StreamWriter(new FileStream(filename, System.IO.FileMode.Create))) {
+        target.Write(text);
+      }
+    }
+
+    /// <summary>
+    /// Generate a C# program from the Dafny program and, if "invokeCompiler" is "true", invoke
+    /// the C# compiler to compile it.
+    /// </summary>
+    public static bool CompileDafnyProgram(Microsoft.Armada.Program dafnyProgram, string dafnyProgramName,
+                                           ReadOnlyCollection<string> otherFileNames, bool invokeCompiler,
+                                           TextWriter outputWriter = null)
+    {
+      Contract.Requires(dafnyProgram != null);
+      Contract.Assert(dafnyProgramName != null);
+      Console.WriteLine("Running CompileDafnyProgram : {0}", dafnyProgramName);
+      Console.WriteLine("Number of modules = {0}", dafnyProgram.CompileModules.Count);
+
+      if (outputWriter == null)
+      {
+        outputWriter = Console.Out;
+      }
+
+      // Compile the Dafny program into a string that contains the target program
+      var oldErrorCount = dafnyProgram.reporter.Count(ErrorLevel.Error);
+      Microsoft.Armada.Compiler compiler;
+
+      switch (ArmadaOptions.O.CompileTarget) {
+        case ArmadaOptions.CompilationTarget.Clight:
+        default:
+          compiler = new Microsoft.Armada.ClightTsoCompiler(dafnyProgram.reporter, otherFileNames);
+          break;
+      }
+
+      Method mainMethod;
+      var hasMain = compiler.HasMain(dafnyProgram, out mainMethod);
+      string targetProgramText;
+      var otherFiles = new Dictionary<string, string>();
+      {
+        var fileQueue = new Queue<FileTargetWriter>();
+        using (var wr = new TargetWriter(0)) {
+          compiler.Compile(dafnyProgram, wr);
+          var sw = new StringWriter();
+          wr.Collect(sw, fileQueue);
+          targetProgramText = sw.ToString();
+        }
+
+        while (fileQueue.Count > 0) {
+          var wr = fileQueue.Dequeue();
+          var sw = new StringWriter();
+          wr.Collect(sw, fileQueue);
+          otherFiles.Add(wr.Filename, sw.ToString());
+        }
+      }
+      string baseName = Path.GetFileNameWithoutExtension(dafnyProgramName);
+      string callToMain = null;
+      if (hasMain) {
+        using (var wr = new TargetWriter(0)) {
+          compiler.EmitCallToMain(mainMethod, wr);
+          callToMain = wr.ToString(); // assume there aren't multiple files just to call main
+        }
+      }
+      bool completeProgram = dafnyProgram.reporter.Count(ErrorLevel.Error) == oldErrorCount;
+
+      // blurt out the code to a file, if requested, or if other files were specified for the C# command line.
+      string targetFilename = null;
+      if (ArmadaOptions.O.SpillTargetCode > 0 || otherFileNames.Count > 0 || (invokeCompiler && !compiler.SupportsInMemoryCompilation))
+      {
+        var p = callToMain == null ? targetProgramText : targetProgramText + callToMain;
+        targetFilename = WriteDafnyProgramToFiles(dafnyProgramName, p, completeProgram, otherFiles, outputWriter);
+      }
+
+      // compile the program into an assembly
+      if (!completeProgram || !invokeCompiler) {
+        // don't compile
+        // Caller interprets this as success/fail and returns an error if false,
+        //  but we didn't actually hit an error, we just didn't invoke the compiler
+        return true;
+      }
+
+      // compile the program into an assembly
+      object compilationResult;
+      var compiledCorrectly = compiler.CompileTargetProgram(dafnyProgramName, targetProgramText, callToMain, targetFilename, otherFileNames,
+        hasMain, hasMain && ArmadaOptions.O.RunAfterCompile, outputWriter, out compilationResult);
+      if (compiledCorrectly && ArmadaOptions.O.RunAfterCompile) {
+        if (hasMain) {
+          if (ArmadaOptions.O.CompileVerbose) {
+            outputWriter.WriteLine("Running...");
+            outputWriter.WriteLine();
+          }
+          compiledCorrectly = compiler.RunTargetProgram(dafnyProgramName, targetProgramText, callToMain, targetFilename, otherFileNames, compilationResult, outputWriter);
+        } else {
+          // make sure to give some feedback to the user
+          if (ArmadaOptions.O.CompileVerbose) {
+            outputWriter.WriteLine("Program compiled successfully");
+          }
+        }
+      }
+      return compiledCorrectly;
+    }
+
+    #endregion
+
+  }
+}

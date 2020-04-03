@@ -1,0 +1,90 @@
+// mono --debug $CDFY /compile:0 /dafnyVerify:0 src/armada-parser/scheduler_spec.arm
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "../../Armada/option.s.dfy"
+
+
+level spec_level {
+    import opened ArmadaCommonDefinitions
+	import opened util_option_s
+    type Tid = uint64
+    // the data structure for disk schedule requests.
+    struct Request {
+        // The tid of process sending the request
+        var tid: Option<Tid>;
+        // The target disk track.  
+        var track: int32;
+    }
+    function method min(a: int32, b: int32): int32 
+    {   
+        if a <= b then a else b
+    }
+
+    function method abs(a: int32): int32 
+    {
+        if a >= 0 then a else -a
+    }
+    
+
+    // define the global variables
+    var requesterTids: Tid[5];          // The Tid of requesters
+    var servicerTid: Tid;               // The Tid of the servicer
+    var requests: Request[5];           // The request that each requester is currently waiting on
+    var maxDiskQueue: int32;            // The size of the disk queue
+    var currentTrack: int32;            // The current disk track
+    var NumberOfActiveThreads: int32;   // The number of request threads currently alive 
+    var NumberOfRequests: int32;        // The number of outstanding requests
+
+    
+    // The external method to get new requests.
+    // will block if there is no new request
+    method {:extern} getNewRequest(tid:Tid) returns (request: Request)
+
+    method Servicer() 
+    {
+        while (true) {
+            explicit_yield {
+                assume NumberOfRequests == min(NumberOfActiveThreads,maxDiskQueue) && NumberOfActiveThreads != 0;
+                var winnerIndex: int32;
+                somehow modifies winnerIndex ensures 0 <= winnerIndex < 5 && requests[winnerIndex].tid != None && (forall i :: 0 <= i < 5 ==> requests[i].tid == None || abs(requests[i].track - currentTrack) >= abs(requests[winnerIndex].track - currentTrack));
+                currentTrack := requests[winnerIndex].track;
+                requests[winnerIndex].tid, requests[winnerIndex].track := None, -1;
+                NumberOfRequests := NumberOfRequests - 1;
+            }
+        }
+    }
+
+    method Requester(index:int32) {
+        var request: Request;
+        NumberOfActiveThreads := NumberOfActiveThreads + 1;
+        while(true) {
+            request := getNewRequest($me);
+            explicit_yield {
+                assume NumberOfRequests < maxDiskQueue && requests[index].tid == None;  
+                NumberOfRequests, requests[index]  := NumberOfRequests + 1, request;
+            }
+        } 
+        NumberOfActiveThreads := NumberOfActiveThreads - 1;
+    }
+
+    method main() 
+    {
+        maxDiskQueue := 3;
+        currentTrack := 0;
+
+        var i:int32;
+        i := 0;
+        while(i < 5) {
+            requests[i].tid := None;
+            requests[i].track := -1;
+            i := i + 1;
+        }
+
+        i := 0;
+        while (i < 5) {
+            //Error: Element of type {st.Range} used as type {ty}
+            //requesterTids[i] := create_thread Requester(i);
+            i := i + 1;
+        }
+        servicerTid := create_thread Servicer();
+    }
+}

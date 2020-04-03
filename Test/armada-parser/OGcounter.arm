@@ -1,0 +1,127 @@
+// mono --debug $CDFY /compile:0 /dafnyVerify:0 src/armada-parser/Counter_No_CLass.arm
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "../../Armada/util/option.s.dfy"
+
+level CounterLayer1 {
+	import opened ArmadaCommonDefinitions
+	import opened util_option_s
+
+	var x: int32;
+	var acquired: Option<uint64>;
+	// Error: Invalid type for static variable {f.Name}
+	//ghost var counter_map: map<int, int>;
+
+	// decl acquire lock
+	method {:extern} Acquire() 
+		awaits acquired == None
+		modifies acquired
+		ensures acquired == Some($me)
+
+	// decl release lock
+	method {:extern} Release() 
+		requires acquired == Some($me)
+		modifies acquired
+		ensures acquired == None
+	
+	// how to prove / annotate this is an atomic action?
+	method Worker_thread()
+	{	
+		//label1:
+		Acquire();
+		x := x + 1;
+		//label2:
+		Release();
+	}
+
+	method main() 
+	{
+		x := 0;
+		acquired := Some(-1);
+		var t1: uint64;
+		var t2: uint64;
+		t1 := create_thread Worker_thread();
+		t2 := create_thread Worker_thread();
+		join t1;
+		join t2;
+	}
+}
+
+// Hide the acquired/lock?
+level CounterLayer2 {
+	import opened ArmadaCommonDefinitions
+
+	var x: int32;
+	//var acquired: int32;
+
+	/*
+	// decl acquire lock
+	method {:extern} Acquire(tid:int32) 
+		awaits acquired == -1
+		modifies acquired
+		ensures acquired == tid
+
+	// decl release lock
+	method {:extern} Release(tid:int32) 
+		requires acquired == tid
+		modifies acquired
+		ensures acquired == -1
+	*/
+
+	// Need keyword action ?
+	method Worker_thread(tid:int32)
+	{	
+		//Acquire(tid);
+		x := x + 1;
+		//Release(tid);
+	}
+
+	method main() 
+	{
+		x := 0;
+		var t1: uint64;
+		var t2: uint64;
+		t1 := create_thread Worker_thread(1);
+		t2 := create_thread Worker_thread(2);
+		join t1;
+		join t2;
+	}
+}
+
+// Remove the thread?
+level CounterLayer3 {
+	import opened ArmadaCommonDefinitions
+	var x: int32;
+	method main()
+	{
+		x := 0;
+		// par x := x + 1 | x := x + 1;
+		assert(x == 2);
+		// print(x);
+	}
+	
+}
+
+
+// Hide the x?
+level CounterLayer4 {
+	import opened ArmadaCommonDefinitions
+	method main()
+	{
+		print(2);
+	}
+}
+
+
+/*proof level1to2refinement {
+    import opened ArmadaCommonDefinitions
+	refinement CounterLayer1 CounterLayer2
+    // reduction 
+	//var_hiding acquired
+
+}*/
+/*
+proof level3to4refinement {
+    import opened ArmadaCommonDefinitions
+	refinement CounterLayer3 CounterLayer4
+    var_hiding x
+}*/

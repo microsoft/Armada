@@ -1,0 +1,105 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+    struct S1
+    {
+      var e:int32[4];
+      var f:int32[8];
+    }
+
+    struct S2
+    {
+       var g:S1[10];
+    }
+
+    struct S3
+    {
+    }
+
+}
+
+level A using SharedStructs {
+    noaddr var x:S1;
+    noaddr var y:int32 := 0;
+    noaddr var z:int32;
+    noaddr var q:S1;
+    noaddr var r:S2[8];
+    ghost var g:seq<int>;
+    var s:S1[3];
+
+    method {:extern} ExternalMethod()
+      reads x
+
+    method main(a:S1) returns (b:S2)
+    {
+        var c:S2[3];
+        noaddr var d:S2[4];
+
+        g[3] := 7;
+        label lb1:
+        atomic {
+            x ::= *;
+            label lb2:
+            y ::= 4;
+        }
+        z ::= 5;
+    }
+
+    invariant YZeroOrFour
+    {
+        y == 0 || y == 4
+    }
+
+    invariant YNonNegative
+    {
+        y >= 0
+    }
+}
+
+level B using SharedStructs {
+    noaddr var x:S1;
+    noaddr var y:int32 := 0;
+    noaddr var q:S1;
+    noaddr var r:S2[8];
+    ghost var g:seq<int>;
+    var s:S1[3];
+
+    method {:extern} ExternalMethod()
+      reads x
+
+    method main(a:S1) returns (b:S2)
+    {
+        var c:S2[3];
+        noaddr var d:S2[4];
+
+        g[3] := 7;
+        atomic {
+            x ::= *;
+            y ::= 4;
+        }
+    }
+}
+
+proof AB {
+    refinement A B
+    var_hiding z
+
+    auxiliary num_steps
+    "int"
+    "datatype MyInt = MyInt(x:int)"
+    "0"
+    "s.num_steps + 1"
+
+    inductive_invariant YZeroOrFour depends_on YNeverInStoreBuffers
+    inductive_invariant YNonNegative depends_on YNeverInStoreBuffers
+    inductive_invariant YNeverInStoreBuffers @"
+      forall tid, entry ::
+        && tid in s.s.threads
+        && entry in s.s.threads[tid].storeBuffer
+        && entry.loc.Armada_StoreBufferLocation_Unaddressable?
+        ==> !entry.loc.v.Armada_GlobalStaticVar_y?
+    "
+
+    inductive_invariant NumStepsPositive "s.num_steps >= 0"
+}

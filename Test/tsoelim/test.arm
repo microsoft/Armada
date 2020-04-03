@@ -1,0 +1,135 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+
+  datatype OptionalThread = OptionalThreadSome(tid:uint64) | OptionalThreadNone
+
+  struct S1 {
+    var e:uint32[10];
+    var f:uint32[10];
+  }
+
+  struct S2 {
+    var c:S1[20];
+    var d:S1[20];
+  }
+
+  struct S3 {
+    var a:S2[30];
+    var b:S2[30];
+  }
+
+}
+
+level A using SharedStructs {
+
+  ghost var lock_holder:seq<OptionalThread>
+  var w:int32;
+  noaddr var x:S3[10];
+  noaddr var y:int32 := 0;
+  noaddr var z:int32 := 0;
+
+  import opened util_option_s
+
+  method Worker(i:int)
+  {
+    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
+            modifies lock_holder
+            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+
+    label lb1:
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    x[4].a[7].c[i].e[3] := x[4].a[7].c[i].e[3] + 1;
+
+    label lb2:
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    y := y + 1;
+
+    label lb3:
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    z ::= z + 1;
+
+    label lb4:
+    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
+            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+
+    w := w + 1;
+
+    assert true;
+  }
+
+  method main()
+  {
+    create_thread Worker(1);
+    create_thread Worker(2);
+    w := w + 1;
+    y ::= y + 1;
+    z := z + 1;
+  }
+
+}
+
+level B using SharedStructs {
+
+  ghost var lock_holder:seq<OptionalThread>
+  var w:int32;
+  noaddr var x:S3[10];
+  noaddr var y:int32 := 0;
+  noaddr var z:int32 := 0;
+
+  import opened util_option_s
+
+  method Worker(i:int)
+  {
+    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
+            modifies lock_holder
+            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    x[4].a[7].c[i].e[3] ::= x[4].a[7].c[i].e[3] + 1;
+
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    y := y + 1;
+
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
+    z ::= z + 1;
+
+    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
+            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+
+    w := w + 1;
+
+    assert true;
+  }
+
+  method main()
+  {
+    create_thread Worker(1);
+    create_thread Worker(2);
+    w := w + 1;
+    y ::= y + 1;
+    z := z + 1;
+  }
+
+}
+
+proof AB
+{
+  refinement A B
+
+  tso_elim x.a.c.e @"
+    && tid in s.s.threads
+    && (var pc := s.s.threads[tid].pc;
+       || pc.Armada_PC_Worker_lb1?
+       || pc.Armada_PC_Worker_lb2?
+       || pc.Armada_PC_Worker_lb3?
+       || pc.Armada_PC_Worker_lb4?)
+    && s.s.threads[tid].top.Armada_StackFrame_Worker?
+    && idx0 == 4
+    && idx1 == 7
+    && idx2 == s.s.threads[tid].top.Worker'i
+    && idx3 == 3
+    && 0 <= idx2 < |s.s.ghosts.lock_holder|
+    && s.s.ghosts.lock_holder[idx2] == OptionalThreadSome(tid)
+  "
+}

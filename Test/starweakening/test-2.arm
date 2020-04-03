@@ -1,0 +1,29 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs2 {
+
+}
+
+level C using SharedStructs2 {
+    noaddr var y:int32;
+    
+    method main()
+    {
+label lbl1:   y ::= y + 1;
+    }
+}
+
+level D using SharedStructs2 {
+    noaddr var y:int32;
+    
+    method main()
+    {
+        somehow modifies y
+            ensures y == old(y) + 1;
+    }
+}
+
+proof CD {
+    refinement C D
+    starweakening statements main_lbl1 variables y
+}

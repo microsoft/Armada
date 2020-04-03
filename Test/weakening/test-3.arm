@@ -1,0 +1,35 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs3 {
+
+}
+
+level E using SharedStructs3 {
+    ghost var x:int;
+    ghost var y:int;
+
+    method main()
+    {
+        label lb:
+        y := (x + 1) * (x + 1);
+    }
+}
+
+level F using SharedStructs3 {
+    ghost var x:int;
+    ghost var y:int;
+
+    method main()
+    {
+        y := x * x + x * 2 + 1;
+    }
+}
+
+proof EF {
+    refinement E F
+    weakening
+
+    include_file "ArithmeticFacts.dfy" which_includes "EF/specs.dfy"
+    import_module ArithmeticFactsModule which_imports ArmadaModule_specs
+    extra lemma_LiftNext_Update_main_lb "ArithmeticFactsModule.lemma_Equivalence(lps.s.ghosts.x as int);"
+}

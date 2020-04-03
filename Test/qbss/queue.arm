@@ -1,0 +1,918 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs {
+    struct BSSQueueElement {
+        var key:uint64 /*Key*/;
+        var value:uint64 /*Value*/;
+    }
+
+    struct QbssState {
+        var number_elements:uint64;
+        var mask:uint64;
+        var write_index:uint64;
+        var read_index:uint64;
+        var element_array:ptr<BSSQueueElement>; // need to make sure the array is 2^N = number_elements
+        var array_size:uint64;
+    }
+
+    datatype QbssElement = QbssElement(key:uint64, value:uint64)
+
+    datatype QbssLogEntry = EnqueueLogEntry(key:uint64, value:uint64) | DequeueLogEntry(key:uint64, value:uint64)
+    ghost var log:seq<QbssLogEntry> := [];
+
+    refinement_constraint @"
+       || (ls.stop_reason == hs.stop_reason && ls.ghosts.log == hs.ghosts.log)
+       || (ls.stop_reason.Armada_NotStopped? && ls.ghosts.log <= hs.ghosts.log)
+    "
+}
+
+level QueueBSSNoTSO using SharedStructs {
+    noaddr var queue:QbssState;
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+        write_index := queue.write_index;
+        tmp_write_index := write_index + 1;
+        modulo := tmp_write_index % queue.number_elements;
+        read_index := queue.read_index;
+        if(read_index != modulo) {
+            write_index := queue.write_index;
+
+            e := queue.element_array + write_index;
+            (*e).key ::= k;
+            (*e).value ::= v;
+            write_index := queue.write_index;
+
+
+            tmp_write_index := write_index + 1;
+            modulo := tmp_write_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            queue.write_index ::= modulo;
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := queue.read_index;
+        write_index := queue.write_index;
+        if(read_index != write_index) {
+            read_index := queue.read_index;
+            e := queue.element_array + read_index;
+
+            if(k != null) {
+            tmp_int := (*e).key;
+                *k ::= tmp_int;
+            }
+            if(v != null) {
+                tmp_int := (*e).value;
+                *v ::= tmp_int;
+            }
+
+            read_index := queue.read_index;
+            tmp_read_index := read_index + 1;
+            modulo := tmp_read_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry((*e).key,(*e).value)];
+            queue.read_index ::= modulo;
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= 512;
+        queue.read_index ::= 0;
+        queue.write_index ::= 0;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (queue.element_array != null && k != null && v != null) {
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+level QueueBSSNoTSO_AbstractQueueIntroduced using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+        write_index := queue.write_index;
+        tmp_write_index := write_index + 1;
+        modulo := tmp_write_index % queue.number_elements;
+        read_index := queue.read_index;
+        if(read_index != modulo) {
+            write_index := queue.write_index;
+
+            e := queue.element_array + write_index;
+            (*e).key ::= k;
+            (*e).value ::= v;
+            write_index := queue.write_index;
+
+
+            tmp_write_index := write_index + 1;
+            modulo := tmp_write_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            atomic {
+        label start:
+                queue.write_index ::= modulo;
+        label end:
+                q ::= q + [QbssElement(k, v)];
+            }
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := queue.read_index;
+        write_index := queue.write_index;
+        if(read_index != write_index) {
+            read_index := queue.read_index;
+            e := queue.element_array + read_index;
+
+            if(k != null) {
+            tmp_int := (*e).key;
+                *k ::= tmp_int;
+            }
+            if(v != null) {
+                tmp_int := (*e).value;
+                *v ::= tmp_int;
+            }
+
+            read_index := queue.read_index;
+            tmp_read_index := read_index + 1;
+            modulo := tmp_read_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry((*e).key,(*e).value)];
+            atomic {
+                queue.read_index ::= modulo;
+                q ::= if q != [] then q[1..] else q;
+            }
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= 512;
+        queue.read_index ::= 0;
+        queue.write_index ::= 0;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (queue.element_array != null && k != null && v != null) {
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof NoTSOIntroduceAbstractQueue {
+    refinement QueueBSSNoTSO QueueBSSNoTSO_AbstractQueueIntroduced
+    var_intro q
+}
+
+level QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+        write_index := queue.write_index;
+        tmp_write_index := write_index + 1;
+        modulo := tmp_write_index % queue.number_elements;
+        read_index := queue.read_index;
+        if(read_index != modulo) {
+            write_index := queue.write_index;
+
+            e := queue.element_array + write_index;
+            (*e).key ::= k;
+            (*e).value ::= v;
+            write_index := queue.write_index;
+
+
+            tmp_write_index := write_index + 1;
+            modulo := tmp_write_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+        label single:
+            queue.write_index, q ::= modulo, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := queue.read_index;
+        write_index := queue.write_index;
+        if(read_index != write_index) {
+            read_index := queue.read_index;
+            e := queue.element_array + read_index;
+
+            if(k != null) {
+            tmp_int := (*e).key;
+                *k ::= tmp_int;
+            }
+            if(v != null) {
+                tmp_int := (*e).value;
+                *v ::= tmp_int;
+            }
+
+            read_index := queue.read_index;
+            tmp_read_index := read_index + 1;
+            modulo := tmp_read_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry((*e).key,(*e).value)];
+            atomic {
+        label start:
+                queue.read_index ::= modulo;
+        label end:
+                q ::= if q != [] then q[1..] else q;
+            }
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= 512;
+        queue.read_index ::= 0;
+        queue.write_index ::= 0;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (queue.element_array != null && k != null && v != null) {
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof CombineEnqueueAtomicAbstractQueue {
+    refinement QueueBSSNoTSO_AbstractQueueIntroduced QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue
+    combining enqueue_start enqueue_end enqueue_single
+}
+
+level QueueBSSNoTSO_WithAbstractQueue using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+    label write_index_init:
+        write_index := queue.write_index;
+    label tmp_write_index_init:
+        tmp_write_index := write_index + 1;
+    label modulo_init:
+        modulo := tmp_write_index % queue.number_elements;
+    label read_index_init:
+        read_index := queue.read_index;
+        if(read_index != modulo) {
+    label inside_if_start:
+            write_index := queue.write_index;
+
+    label e_init:
+            e := queue.element_array + write_index;
+    label k_update:
+            (*e).key ::= k;
+    label v_update:
+            (*e).value ::= v;
+            write_index := queue.write_index;
+
+
+            tmp_write_index := write_index + 1;
+            modulo := tmp_write_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+    label write_index_update:
+    // label abs_queue_update:
+            // q ::= q + [QbssElement(k, v)];
+            queue.write_index, q ::= modulo, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+    label read_index_init:
+        read_index := queue.read_index;
+    label write_index_init:
+        write_index := queue.write_index;
+        if(read_index != write_index) {
+    label inside_if_start:
+            read_index := queue.read_index;
+    label e_init:
+            e := queue.element_array + read_index;
+
+            if(k != null) {
+    label tmp_int_update_key:
+            tmp_int := (*e).key;
+    label k_update:
+                *k ::= tmp_int;
+            }
+            if(v != null) {
+    label tmp_int_update_value:
+                tmp_int := (*e).value;
+    label v_update:
+                *v ::= tmp_int;
+            }
+
+            read_index := queue.read_index;
+    label tmp_read_index_init:
+            tmp_read_index := read_index + 1;
+    label modulo_init:
+            modulo := tmp_read_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry((*e).key,(*e).value)];
+    label read_index_update:
+                queue.read_index, q ::= modulo , if q != [] then q[1..] else q;
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+    label k_alloc:
+        k ::= malloc(uint64);
+    label v_alloc:
+        v ::= malloc(uint64);
+    label number_elements_init:
+        queue.number_elements ::= 512;
+    label read_index_init:
+        queue.read_index ::= 0;
+    label write_index_init:
+        queue.write_index ::= 0;
+    label array_calloc:
+        a ::= calloc(BSSQueueElement, 512);
+    label element_array_alloc:
+        queue.element_array ::= a;
+    label before_if:
+        if (queue.element_array != null && k != null && v != null) {
+    label BeforeEnqueueCreate:
+            tid1 ::= create_thread enqueue(*k,*v);
+    label BeforeDequeueCreate:
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof CombineDequeueAtomicAbstractQueue {
+    refinement QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue QueueBSSNoTSO_WithAbstractQueue
+    combining dequeue_start dequeue_end dequeue_read_index_update
+}
+
+level QueueBSSNoTSO_AbstractLogs using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+        write_index := *;
+        tmp_write_index := *;
+
+        assume queue.number_elements > 0;
+        modulo := tmp_write_index % queue.number_elements;
+        read_index := *;
+        if(*) {
+            write_index := *;
+            assume queue.element_array + write_index == queue.element_array + write_index;
+            e := queue.element_array + write_index;
+
+            assume allocated(e);
+            (*e).key ::= *;
+            assume allocated(e);
+            (*e).value ::= *;
+            write_index := *;
+
+            tmp_write_index := *;
+            assume queue.number_elements > 0;
+            modulo := tmp_write_index % queue.number_elements;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            queue.write_index, q ::= *, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := *;
+        write_index := *;
+        if(*) {
+            read_index := *;
+            assume queue.element_array + read_index == queue.element_array + read_index;
+            e := queue.element_array + read_index;
+
+            if(k != null) {
+                assume allocated(e);
+                tmp_int := (*e).key;
+                assume q != [];
+                *k ::= q[0].key;
+            }
+            if(v != null) {
+                assume allocated(e);
+                tmp_int := (*e).value;
+                assume q != [];
+                *v ::= q[0].value;
+            }
+
+            read_index := *;
+            tmp_read_index := *;
+            assume queue.number_elements > 0;
+            modulo := tmp_read_index % queue.number_elements;
+            assume q != [];
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry(q[0].key, q[0].value)];
+            assume q != [];
+            queue.read_index, q ::= * , q[1..];
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= *;
+        queue.read_index ::= *;
+        queue.write_index ::= *;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (*) {
+            assume k != null && v != null;
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof NoTSOUseAbstractQueueForLog {
+  refinement QueueBSSNoTSO_WithAbstractQueue QueueBSSNoTSO_AbstractLogs
+  starweakening
+
+    include_file "queue_tsobypassing_abstractloginvariant.dfy" which_includes "NoTSOUseAbstractQueueForLog/specs.dfy"
+    import_module queue_tsobypassing_abstractloginvariant which_imports ArmadaModule_specs
+
+    include_file "../../Armada/util/math/mod_auto.i.dfy"
+    import_module Math__mod_auto_i
+
+    inductive_invariant WeakeningInvariant @"
+    WeakeningInvariant_ext(s)
+    " depends_on AddressableInvariant
+
+    use_address_invariant
+
+    extra lemma_InvariantPredicateImpliedByInit_WeakeningInvariant
+    @"
+    var h := s.s.mem.heap;
+    lemma_NoSetIntersectionImpliesNoCommonElements(h.valid, h.freed);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_IfTrue_main_before_if
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_CreateThread_main_BeforeEnqueueCreate
+    @"
+    assert s'.s.mem == s.s.mem;
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_CreateThread_main_BeforeDequeueCreate
+    @"
+    assert s'.s.mem == s.s.mem;
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_write_index_update
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    assert WeakeningInvariant_ext(s');
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_read_index_update
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    assert WeakeningInvariant_ext(s);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_IfTrue_dequeue_2
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_abs_queue_update
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_e_init
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_enqueue_End
+    @"
+    assert s.s.threads[step.tid].new_ptrs == {};
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_dequeue_End
+    @"
+    assert s.s.threads[step.tid].new_ptrs == {};
+    "
+
+    extra
+    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_main_End
+    @"
+    assert s.s.threads[step.tid].new_ptrs == {};
+    "
+
+    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_k_update
+    @"
+    assert WeakeningInvariant_ext(s');
+    "
+
+    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_v_update
+    @"
+    assert WeakeningInvariant_ext(s');
+    "
+
+    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_k_update
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    assert WeakeningInvariant_ext(s');
+    "
+
+    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_v_update
+    @"
+    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    assert WeakeningInvariant_ext(s');
+    "
+}
+
+level QueueBSSNoTSO_AbstractLogsStarweakened using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_write_index:uint64;
+
+        write_index := *;
+        tmp_write_index := *;
+
+        modulo := *;
+        read_index := *;
+        if(*) {
+            write_index := *;
+            e := *;
+
+            assume allocated(e);
+            (*e).key ::= *;
+            assume allocated(e);
+            (*e).value ::= *;
+            write_index := *;
+
+            tmp_write_index := *;
+            modulo := *;
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            queue.write_index, q ::= *, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := *;
+        write_index := *;
+        if(*) {
+            read_index := *;
+            e := *;
+
+            if(k != null) {
+                tmp_int := *;
+                assume q != [];
+                *k ::= q[0].key;
+            }
+            if(v != null) {
+                tmp_int := *;
+                assume q != [];
+                *v ::= q[0].value;
+            }
+
+            read_index := *;
+            tmp_read_index := *;
+            modulo := *;
+            assume q != [];
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry(q[0].key, q[0].value)];
+            assume q != [];
+            queue.read_index, q ::= * , q[1..];
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 := 0;
+      noaddr var tid2:uint64 := 0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= *;
+        queue.read_index ::= *;
+        queue.write_index ::= *;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (*) {
+            assume k != null && v != null;
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof NoTSOStarWeaken {
+  refinement QueueBSSNoTSO_AbstractLogs QueueBSSNoTSO_AbstractLogsStarweakened
+  starweakening
+}
+
+level QueueBSSNoTSO_HiddenEnqLocals using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        if(*) {
+            e := *;
+            assume allocated(e);
+            (*e).key ::= *;
+            assume allocated(e);
+            (*e).value ::= *;
+
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            queue.write_index, q ::= *, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        noaddr var e:ptr<BSSQueueElement>;
+        noaddr var read_index:uint64;
+        noaddr var write_index:uint64;
+        noaddr var modulo:uint64;
+        noaddr var tmp_read_index:uint64;
+        noaddr var tmp_int:uint64;
+
+        read_index := *;
+        write_index := *;
+        if(*) {
+            read_index := *;
+            e := *;
+
+            if(k != null) {
+                tmp_int := *;
+                assume q != [];
+                *k ::= q[0].key;
+            }
+            if(v != null) {
+                tmp_int := *;
+                assume q != [];
+                *v ::= q[0].value;
+            }
+
+            read_index := *;
+            tmp_read_index := *;
+            modulo := *;
+            assume q != [];
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry(q[0].key, q[0].value)];
+            assume q != [];
+            queue.read_index, q ::= * , q[1..];
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= *;
+        queue.read_index ::= *;
+        queue.write_index ::= *;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (*) {
+            assume k != null && v != null;
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof HideEnqueueLocals {
+    refinement QueueBSSNoTSO_AbstractLogsStarweakened QueueBSSNoTSO_HiddenEnqLocals
+
+    stack_var_hiding enqueue read_index, write_index, modulo, tmp_write_index
+}
+
+level QueueBSSNoTSO_HiddenEnqDeqLocals using SharedStructs {
+    noaddr var queue:QbssState;
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        if(*) {
+            e := *;
+            assume allocated(e);
+            (*e).key ::= *;
+            assume allocated(e);
+            (*e).value ::= *;
+
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            queue.write_index, q ::= *, q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        if(*) {
+            if(k != null) {
+                assume q != [];
+                *k ::= q[0].key;
+            }
+            if(v != null) {
+                assume q != [];
+                *v ::= q[0].value;
+            }
+
+            assume q != [];
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry(q[0].key, q[0].value)];
+            assume q != [];
+            queue.read_index, q ::= * , q[1..];
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+      noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        queue.number_elements ::= *;
+        queue.read_index ::= *;
+        queue.write_index ::= *;
+        a ::= calloc(BSSQueueElement, 512);
+        queue.element_array ::= a;
+        if (*) {
+            assume k != null && v != null;
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof HideDequeueLocals {
+    refinement QueueBSSNoTSO_HiddenEnqLocals QueueBSSNoTSO_HiddenEnqDeqLocals
+
+    stack_var_hiding dequeue e, read_index, write_index, modulo, tmp_read_index, tmp_int
+}
+
+level QueueBSSNoTSO_HiddenImpl using SharedStructs {
+    ghost noaddr var q:seq<QbssElement> := [];
+
+    method enqueue(k:uint64, v:uint64) {
+        noaddr var e:ptr<BSSQueueElement>;
+        if(*) {
+            e := *;
+            assume allocated(e);
+            (*e).key ::= *;
+            assume allocated(e);
+            (*e).value ::= *;
+
+            somehow modifies log ensures log == old(log) + [EnqueueLogEntry(k,v)];
+            q ::= q + [QbssElement(k, v)];
+        }
+    }
+
+    method dequeue(k:ptr<uint64>, v:ptr<uint64>) {
+        if(*) {
+            if(k != null) {
+                assume q != [];
+                *k ::= q[0].key;
+            }
+            if(v != null) {
+                assume q != [];
+                *v ::= q[0].value;
+            }
+
+            assume q != [];
+            somehow modifies log ensures log == old(log) + [DequeueLogEntry(q[0].key, q[0].value)];
+            assume q != [];
+            q ::= q[1..];
+        }
+    }
+
+    method main() {
+        noaddr var tid1:uint64 :=0;
+        noaddr var tid2:uint64 :=0;
+        noaddr var k:ptr<uint64> := null;
+        noaddr var v:ptr<uint64> := null;
+        noaddr var a:ptr<BSSQueueElement> := null;
+        k ::= malloc(uint64);
+        v ::= malloc(uint64);
+        a ::= calloc(BSSQueueElement, 512);
+        if (*) {
+            assume k != null && v != null;
+            tid1 ::= create_thread enqueue(*k,*v);
+            tid2 ::= create_thread dequeue(k,v);
+        }
+    }
+}
+
+proof HideGlobal {
+    refinement QueueBSSNoTSO_HiddenEnqDeqLocals QueueBSSNoTSO_HiddenImpl
+    var_hiding queue
+}
