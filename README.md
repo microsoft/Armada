@@ -34,11 +34,11 @@ To create the Armada tool, open Source/Armada.sln in Visual Studio and build it.
 # Generating and testing proofs
 
 To use the Armada tool to generate proofs for all the included test Armada files (`Test/*/*.arm`),
-run, from the Armada top-level directory, `scons -j <n> -f SConstruct1` where <n> is the number of
+run, from the Armada top-level directory, `scons -j <n> -f SConstruct1` where `<n>` is the number of
 threads you want scons to use.
 
 To verify all the generated proofs, run, from the same directory, `scons -j <n> -f SConstruct2
---DAFNYPATH=<dafny-path>` where <dafny-path> is the directory containing the `Dafny.exe` binary you
+--DAFNYPATH=<dafny-path>` where `<dafny-path>` is the directory containing the `Dafny.exe` binary you
 installed.
 
 If this second scons finishes without printing an error message, this means that everything worked.
