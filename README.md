@@ -2,7 +2,7 @@
 
 Safely writing high-performance concurrent programs is notoriously difficult. To aid developers, we
 introduce Armada, a language and tool designed to formally verify such programs with relatively
-little effort. Via a C-like language that compiles to ClightTSO and a small-step,
+little effort. Via a C-like language that compiles to the C subset ClightTSO and a small-step,
 state-machine-based semantics, Armada gives developers the flexibility to choose arbitrary memory
 layout and synchronization primitives so they are never constrained in their pursuit of
 performance. To reduce developer effort, Armada leverages SMT-powered automation and a library of
