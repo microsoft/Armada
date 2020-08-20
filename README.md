@@ -22,14 +22,13 @@ pages. https://doi.org/10.1145/3385412.3385971
 
 # Getting started
 
+To build Armada, please follow the detailed instructions documented in [BUILD.md](BUILD.md).
+
 To use Armada, you'll need the following tools:
 
-  * Visual Studio 2017 (any version, including the free Community one available from Microsoft)
   * pip (needed for installing scons)
   * scons (installable by running `pip install scons`)
   * Dafny (available at https://github.com/dafny-lang/dafny)
-
-To create the Armada tool, open Source/Armada.sln in Visual Studio and build it.
 
 
 # Generating and testing proofs
