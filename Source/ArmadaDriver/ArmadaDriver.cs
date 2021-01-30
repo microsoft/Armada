@@ -78,7 +78,6 @@ namespace Microsoft.Armada
       otherFiles = new List<string>();
 
       CommandLineOptions.Clo.RunningBoogieFromCommandLine = true;
-      CommandLineOptions.Clo.DontShowLogo = true;
       try {
         if (!CommandLineOptions.Clo.Parse(args)) {
           return ExitValue.PREPROCESSING_ERROR;
@@ -99,10 +98,6 @@ namespace Microsoft.Armada
           ExecutionEngine.printer.ErrorWriteLine(Console.Out, "*** Error: " + errMsg);
           return ExitValue.PREPROCESSING_ERROR;
         }
-      }
-      if (!CommandLineOptions.Clo.DontShowLogo)
-      {
-        Console.WriteLine(CommandLineOptions.Clo.Version);
       }
       if (CommandLineOptions.Clo.ShowEnv == CommandLineOptions.ShowEnvironment.Always)
       {
@@ -332,10 +327,10 @@ namespace Microsoft.Armada
       {
         case PipelineOutcome.VerificationCompleted:
           // WriteStatss(statss);
-          if ((ArmadaOptions.O.Compile && verified && CommandLineOptions.Clo.ProcsToCheck == null) || ArmadaOptions.O.ForceCompile) {
+          if ((ArmadaOptions.O.Compile && verified && CommandLineOptions.Clo.UserConstrainedProcsToCheck) || ArmadaOptions.O.ForceCompile) {
             Console.WriteLine("Invoke Compiler = True");
             compiled = CompileDafnyProgram(dafnyProgram, resultFileName, otherFileNames, true);
-          } else if ((2 <= ArmadaOptions.O.SpillTargetCode && verified && CommandLineOptions.Clo.ProcsToCheck == null) || 3 <= ArmadaOptions.O.SpillTargetCode) {
+          } else if ((2 <= ArmadaOptions.O.SpillTargetCode && verified && !CommandLineOptions.Clo.UserConstrainedProcsToCheck) || 3 <= ArmadaOptions.O.SpillTargetCode) {
             Console.WriteLine("Invoke Compiler = False");
             compiled = CompileDafnyProgram(dafnyProgram, resultFileName, otherFileNames, false);
           }
@@ -370,9 +365,8 @@ namespace Microsoft.Armada
       Contract.Ensures(0 <= Contract.ValueAtReturn(out stats).InconclusiveCount && 0 <= Contract.ValueAtReturn(out stats).TimeoutCount);
 
       stats = new PipelineStatistics();
-      LinearTypeChecker ltc;
       CivlTypeChecker ctc;
-      PipelineOutcome oc = ExecutionEngine.ResolveAndTypecheck(program, bplFileName, out ltc, out ctc);
+      PipelineOutcome oc = ExecutionEngine.ResolveAndTypecheck(program, bplFileName, out ctc);
       switch (oc) {
         case PipelineOutcome.Done:
           return oc;
@@ -389,7 +383,7 @@ namespace Microsoft.Armada
             fileNames.Add(bplFileName);
             Bpl.Program reparsedProgram = ExecutionEngine.ParseBoogieProgram(fileNames, true);
             if (reparsedProgram != null) {
-              ExecutionEngine.ResolveAndTypecheck(reparsedProgram, bplFileName, out ltc, out ctc);
+              ExecutionEngine.ResolveAndTypecheck(reparsedProgram, bplFileName, out ctc);
             }
           }
           return oc;

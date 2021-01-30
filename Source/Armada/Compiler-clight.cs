@@ -1770,10 +1770,10 @@ namespace Microsoft.Armada {
         wr.Write("({0}){1}", GetNativeTypeName(nt), (BigInteger)e.Value);
       } else if (e.Value is BigInteger i) {
         EmitIntegerLiteral(i, wr);
-      } else if (e.Value is Basetypes.BigDec) {
-        throw NotSupported("EmitLiteralExpr of Basetypes.BigDec");
+      } else if (e.Value is BaseTypes.BigDec) {
+        throw NotSupported("EmitLiteralExpr of BaseTypes.BigDec");
         /* 
-        var n = (Basetypes.BigDec)e.Value;
+        var n = (BaseTypes.BigDec)e.Value;
         if (0 <= n.Exponent) {
           wr.Write("new _dafny.BigRational(new BigNumber(\"{0}", n.Mantissa);
           for (int i = 0; i < n.Exponent; i++) {

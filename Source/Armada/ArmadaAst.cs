@@ -5,7 +5,6 @@
 //
 //-----------------------------------------------------------------------------
 using System;
-using System.Text;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Numerics;
@@ -4886,8 +4885,6 @@ namespace Microsoft.Armada {
     public readonly ArmadaOptions.CompilationTarget CompilationTargets;
     public NativeType(string Name, BigInteger LowerBound, BigInteger UpperBound, int bitwidth, Selection sel, ArmadaOptions.CompilationTarget compilationTargets) {
       Contract.Requires(Name != null);
-      Contract.Requires(LowerBound != null);
-      Contract.Requires(UpperBound != null);
       Contract.Requires(0 <= bitwidth && (bitwidth == 0 || LowerBound == 0));
       this.Name = Name;
       this.LowerBound = LowerBound;
@@ -8893,7 +8890,7 @@ namespace Microsoft.Armada {
     /// <summary>
     /// Create a resolved expression of the form "x"
     /// </summary>
-    public static Expression CreateRealLiteral(IToken tok, Basetypes.BigDec x) {
+    public static Expression CreateRealLiteral(IToken tok, BaseTypes.BigDec x) {
       Contract.Requires(tok != null);
       var nn = new LiteralExpr(tok, x);
       nn.Type = Type.Real;
@@ -9277,7 +9274,7 @@ namespace Microsoft.Armada {
     ///   * 'null' for the 'null' literal (a special case of which is the subclass StaticReceiverExpr)
     ///   * a bool for a bool literal
     ///   * a BigInteger for int literal
-    ///   * a Basetypes.BigDec for a (rational) real literal
+    ///   * a BaseTypes.BigDec for a (rational) real literal
     ///   * a string for a char literal
     ///     This case always uses the subclass CharLiteralExpr.
     ///     Note, a string is stored to keep any escape sequence, since this simplifies printing of the character
@@ -9318,7 +9315,7 @@ namespace Microsoft.Armada {
       this.Value = n;
     }
 
-    public LiteralExpr(IToken tok, Basetypes.BigDec n)
+    public LiteralExpr(IToken tok, BaseTypes.BigDec n)
       : base(tok) {
       Contract.Requires(0 <= n.Mantissa.Sign);
       Contract.Requires(tok != null);

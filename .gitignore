@@ -10,25 +10,18 @@
 
 .idea/
 
-Binaries/*.dll
-Binaries/*.mdb
-Binaries/*.pdb
-Binaries/*.xml
-Binaries/z3*
-Binaries/Armada.exe
-Binaries/Dafny.vshost.exe
-Binaries/DafnyServer.exe
-Binaries/export/
-Binaries/mono_crash*
+Binaries/*
 
 Package/
 
 Source/*/bin/
 Source/*/obj/
+Source/Armada/Parser.cs
+Source/Armada/Scanner.cs
+Source/Armada/Parser.cs.old
+Source/Armada/Scanner.cs.old
 Source/packages
 
-Source/Dafny/Parser.cs.old
-Source/Dafny/Scanner.cs.old
 Source/DafnyExtension/DafnyPrelude.bpl
 Source/DafnyExtension/DafnyRuntime.cs
 Source/DafnyExtension/Z3-LICENSE.txt

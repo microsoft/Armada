@@ -2045,7 +2045,7 @@ namespace Microsoft.Armada {
           }
           break;
         case LiteralExpr literal:
-          if (! (literal.Value == null || literal.Value is BigInteger || literal.Value is Basetypes.BigDec ||
+          if (! (literal.Value == null || literal.Value is BigInteger || literal.Value is BaseTypes.BigDec ||
                  literal.Value is bool)) {
             AH.PrintWarning(prog, expr.tok, $"Literal {literal.Value} is not compilation-compatible");
             compatible = false;

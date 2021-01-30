@@ -399,7 +399,6 @@ namespace Microsoft.Armada
 
             if (PrintIncludesMode == IncludesModes.Immediate || PrintIncludesMode == IncludesModes.Transitive) {
               Compile = false;
-              DontShowLogo = true;
               DafnyVerify = false;
             }
           }
@@ -418,13 +417,9 @@ namespace Microsoft.Armada
       // expand macros in filenames, now that LogPrefix is fully determined
       ExpandFilename(ref DafnyPrelude, LogPrefix, FileTimestamp);
       ExpandFilename(ref DafnyPrintFile, LogPrefix, FileTimestamp);
-      if (DisableNLarith || 3 <= ArithMode) {
-        this.AddZ3Option("smt.arith.nl=false");
-      }
     }
 
-    public override void AttributeUsage() {
-            Console.WriteLine(
+    public override string AttributeHelp =>
 @"Dafny: The following attributes are supported by this implementation.
 
     {:extern}
@@ -508,44 +503,14 @@ namespace Microsoft.Armada
 
 	{:trigger}
       TODO
-");
-    }
+";
+
+    public override string Help =>
+      base.Help +
+@"
 
 
-    /// <summary>
-    /// Dafny comes with it's own copy of z3, to save new users the trouble of having to install extra dependency.
-    /// For this to work, Dafny makes the Z3ExecutablePath point to the path were Z3 is put by our release script.
-    /// For developers though (and people getting this from source), it's convenient to be able to run right away,
-    /// so we vendor a Windows version.
-    /// </summary>
-    private void SetZ3ExecutableName() {
-      var platform = (int)System.Environment.OSVersion.Platform;
-
-      // http://www.mono-project.com/docs/faq/technical/
-      var isUnix = platform == 4 || platform == 128;
-
-      var z3binName = isUnix ? "z3" : "z3.exe";
-      var dafnyBinDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-      var z3BinDir = System.IO.Path.Combine(dafnyBinDir, "z3", "bin");
-      var z3BinPath = System.IO.Path.Combine(z3BinDir, z3binName);
-
-      if (!System.IO.File.Exists(z3BinPath) && !isUnix) {
-        // This is most likely a Windows user running from source without downloading z3
-        // separately; this is ok, since we vendor z3.exe.
-        z3BinPath = System.IO.Path.Combine(dafnyBinDir, z3binName);
-      }
-
-      if (!System.IO.File.Exists(z3BinPath) && errorReporter != null) {
-        var tok = new Bpl.Token(1, 1) { filename = "*** " };
-        errorReporter.Warning(MessageSource.Other, tok, "Could not find '{0}' in '{1}'.{2}Downloading and extracting a Z3 distribution to Dafny's 'Binaries' folder would solve this issue; for now, we'll rely on Boogie to find Z3.",
-          z3binName, z3BinDir, System.Environment.NewLine);
-      } else {
-        Z3ExecutablePath = z3BinPath;
-      }
-    }
-
-    public override void Usage() {
-      Console.WriteLine(@"  ---- Dafny options ---------------------------------------------------------
+  ---- Dafny options ---------------------------------------------------------
 
   Multiple .dfy files supplied on the command line are concatenated into one
   Dafny program.
@@ -751,8 +716,6 @@ namespace Microsoft.Armada
   /armadaOutputDir:<dir>
                 Write Armada output files into directory <dir> instead of into the current
                 directory.
-");
-      base.Usage();  // also print the Boogie options
-    }
+";
   }
 }
