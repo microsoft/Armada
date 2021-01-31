@@ -45,8 +45,8 @@ proof AB {
   
   include_file "bv.dfy" 
   import_module BitVectorTest1
-  extra lemma_LiftNext_Assert_main_Start "bv64_properties();"
-  extra lemma_LiftNext_Assert_main_6 "mask_equiv();"
+  extra lemma_LiftAtomicPath_From_main_Start_F_To_main_1 "bv64_properties();"
+  extra lemma_LiftAtomicPath_From_main_6_F_To_main_End "mask_equiv();"
 }
 
 

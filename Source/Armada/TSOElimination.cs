@@ -9,77 +9,159 @@ using System.Text.RegularExpressions;
 
 namespace Microsoft.Armada
 {
-  public class TSOField
+  public abstract class TSOField
   {
-    public readonly string fieldName;
-    public readonly int fieldNum;
-    public readonly Type ty;
-    public readonly bool isArray;
-    public readonly int whichArray;
-    public readonly ArmadaStruct outerStruct;
+    public readonly string enclosingFieldSpec;
 
-    public TSOField(string i_fieldName, int i_fieldNum, Type i_ty, bool i_isArray, int i_whichArray, ArmadaStruct i_outerStruct)
+    public TSOField(string i_enclosingFieldSpec)
     {
-      fieldName = i_fieldName;
-      fieldNum = i_fieldNum;
-      ty = i_ty;
-      isArray = i_isArray;
-      whichArray = i_whichArray;
-      outerStruct = i_outerStruct;
+      enclosingFieldSpec = i_enclosingFieldSpec;
     }
+
+    public string EnclosingFieldSpec { get { return enclosingFieldSpec; } }
+  }
+
+  public class StructTSOField : TSOField
+  {
+    private ArmadaStruct outerStruct;
+    private string fieldName;
+    private int fieldPos;
+
+    public StructTSOField(string i_enclosingFieldSpec, ArmadaStruct i_outerStruct, string i_fieldName, int i_fieldPos)
+      : base(i_enclosingFieldSpec)
+    {
+      outerStruct = i_outerStruct;
+      fieldName = i_fieldName;
+      fieldPos = i_fieldPos;
+    }
+
+    public ArmadaStruct OuterStruct { get { return outerStruct; } }
+    public string FieldName { get { return fieldName; } }
+    public int FieldPos { get { return fieldPos; } }
+  }
+
+  public class ArrayTSOField : TSOField
+  {
+    private int whichArray;
+
+    public ArrayTSOField(string i_enclosingFieldSpec, int i_whichArray) : base(i_enclosingFieldSpec)
+    {
+      whichArray = i_whichArray;
+    }
+
+    public int WhichArray { get { return whichArray; } }
   }
 
   public class TSOFieldList
   {
+    private bool valid;
+    private string varName;
+    private Type varType;
     private List<TSOField> fields;
     private int numArrays;
     private string fieldSpec;
     private string indexList;
     private string indexParamList;
-    private string validIndices;
+    private List<string> indexConstraints;
 
-    public TSOFieldList()
+    public TSOFieldList(ProofGenerationParams pgp, TSOEliminationStrategyDecl strategy)
     {
+      valid = false;
+
+      if (!strategy.Fields.Any()) {
+        AH.PrintError(pgp.prog, "No field list found in TSO elimination strategy description");
+        return;
+      }
+
+      varName = strategy.Fields[0];
+      ArmadaVariable v = pgp.symbolsLow.Globals.Lookup(varName);
+      if (v == null) {
+        AH.PrintError(pgp.prog, strategy.tok, $"No global variable named {varName}");
+        return;
+      }
+
+      varType = v.ty;
+      fieldSpec = $".{varName}";
       fields = new List<TSOField>();
       numArrays = 0;
-      fieldSpec = "";
       indexList = "";
       indexParamList = "";
-      validIndices = "";
+      indexConstraints = new List<string>();
+
+      Type currentType = varType;
+      int strategyFieldsUsed = 1;
+      while (true) {
+        currentType = AddArrayFields(pgp, currentType);
+        if (strategyFieldsUsed < strategy.Fields.Count) {
+          currentType = AddStructField(pgp, strategy.tok, currentType, strategy.Fields[strategyFieldsUsed]);
+          if (currentType == null) {
+            return;
+          }
+          ++strategyFieldsUsed;
+        }
+        else {
+          break;
+        }
+      }
+
+      if (!AH.IsPrimitiveType(currentType)) {
+        AH.PrintError(pgp.prog, "The field list given for the TSO-elimination strategy ends in the middle of a struct.  It has to go all the way to a primitive field.");
+        return;
+      }
+
+      valid = true;
     }
 
-    public ArmadaStruct AddField(ArmadaSymbolTable symbols, ArmadaStruct outerStruct, string fieldName, Type ty)
+    private Type AddArrayFields(ProofGenerationParams pgp, Type currentType)
     {
-      ArmadaStruct innerStruct = null;
-      string structName;
-
-      if (ty is SizedArrayType) {
-        var subtype = ((SizedArrayType)ty).Range;
-        if (!AH.IsPrimitiveType(subtype) && subtype is UserDefinedType) {
-          structName = ((UserDefinedType)subtype).Name;
-          innerStruct = symbols.LookupStruct(structName);
-        }
-        fields.Add(new TSOField(fieldName, fields.Count(), ty, true, numArrays, outerStruct));
-        fields.Add(new TSOField(null, fields.Count(), subtype, false, -1, null));
-        validIndices += $" && 0 <= idx{numArrays} < |g{fieldSpec}.{fieldName}|";
-        fieldSpec += $".{fieldName}[idx{numArrays}]";
-        indexList += $", idx{numArrays}";
-        indexParamList += $", idx{numArrays}:int";
-        ++numArrays;
-      }
-      else {
-        if (!AH.IsPrimitiveType(ty) && ty is UserDefinedType) {
-          structName = ((UserDefinedType)ty).Name;
-          innerStruct = symbols.LookupStruct(structName);
-        }
-        fields.Add(new TSOField(fieldName, fields.Count(), ty, false, -1, outerStruct));
-        fieldSpec += $".{fieldName}";
+      if (!(currentType is SizedArrayType)) {
+        return currentType;
       }
 
-      return innerStruct;
+      var subtype = ((SizedArrayType)currentType).Range;
+      var innerType = AddArrayFields(pgp, subtype);
+      fields.Add(new ArrayTSOField(fieldSpec, numArrays));
+
+      indexConstraints.Add($"0 <= idx{numArrays} < |g{fieldSpec}|");
+      fieldSpec += $"[idx{numArrays}]";
+      indexList += $", idx{numArrays}";
+      indexParamList += $", idx{numArrays}:int";
+
+      ++numArrays;
+
+      return innerType;
     }
 
-    public TSOField GetVar() { return fields[0]; }
+    private Type AddStructField(ProofGenerationParams pgp, Microsoft.Boogie.IToken strategyTok, Type currentType, string fieldName)
+    {
+      if (!(currentType is UserDefinedType)) {
+        AH.PrintError(pgp.prog, strategyTok, $"Can't find field named {fieldName} in non-struct {currentType}");
+        return null;
+      }
+
+      var structName = ((UserDefinedType)currentType).Name;
+      ArmadaStruct s = pgp.symbolsLow.LookupStruct(structName);
+
+      if (s == null) {
+        AH.PrintError(pgp.prog, strategyTok, $"Can't find field named {fieldName} within non-struct {structName}");
+        return null;
+      }
+
+      currentType = s.LookupFieldType(fieldName);
+      if (currentType == null) {
+        AH.PrintError(pgp.prog, strategyTok, $"No field named {fieldName} exists in struct {s.Name}");
+        return null;
+      }
+      var fieldPos = s.GetFieldPos(fieldName);
+
+      fields.Add(new StructTSOField(fieldSpec, s, fieldName, fieldPos));
+      fieldSpec += $".{fieldName}";
+      return currentType;
+    }
+
+    public bool Valid { get { return valid; } }
+    public string GetVar() { return varName; }
+    public Type GetVarType() { return varType; }
     public int NumFields { get { return fields.Count(); } }
     public TSOField GetField(int i) { return fields[i]; }
     public int NumArrays { get { return numArrays; } }
@@ -88,7 +170,7 @@ namespace Microsoft.Armada
     public string IndexParamList { get { return indexParamList; } }
     public string IndexListWithoutLeadingComma { get { return indexList.Length > 2 ? indexList.Substring(2) : ""; } }
     public string IndexParamListWithoutLeadingComma { get { return indexParamList.Length > 2 ? indexParamList.Substring(2) : ""; } }
-    public string ValidIndices { get { return validIndices.Length > 0 ? validIndices : "true"; } }
+    public List<string> IndexConstraints { get { return indexConstraints; } }
   }
 
   public class TSOEliminationNoConflictingOwnershipInvariantInfo : InvariantInfo
@@ -103,19 +185,23 @@ namespace Microsoft.Armada
       ownershipPredicate = i_ownershipPredicate;
     }
 
-    public override string GenerateSpecificNextLemma(ProofGenerationParams pgp, NextRoutine nextRoutine, IEnumerable<InvariantInfo> allInvariants)
+    public override string GenerateSpecificNextLemma(ProofGenerationParams pgp, AtomicPath atomicPath,
+                                                     IEnumerable<InvariantInfo> allInvariants, AtomicSpec atomicSpec,
+                                                     bool onlyNonstoppingPaths)
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
+      string name = atomicPath.Name;
+      string specificPathLemmaName = $"lemma_NoConflictingOwnershipPreservedByPath_{name}";
 
-      string nextLemmaName = $"lemma_NoConflictingOwnershipPreservedByNext_{nextRoutineName}";
-
+      var pr = new PathPrinter(atomicSpec);
       string str = $@"
-        lemma {nextLemmaName}(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
+        lemma {specificPathLemmaName}(s: LPlusState, s': LPlusState, path: LAtomic_Path, tid: Armada_ThreadHandle)
           requires InductiveInv(s)
-          requires LPlus_NextOneStep(s, s', step)
-          requires step.Armada_TraceEntry_{nextRoutineName}?
+          requires LAtomic_NextPath(s, s', path, tid)
+          requires path.LAtomic_Path_{name}?
           ensures  NoConflictingOwnership(s')
         {{
+          { pr.GetOpenValidPathInvocation(atomicPath) }
+          ProofCustomizationGoesHere();
           if s'.s.stop_reason.Armada_NotStopped? {{
             assert s.s.stop_reason.Armada_NotStopped?;
             forall tid1, tid2{fields.IndexList} |
@@ -132,7 +218,7 @@ namespace Microsoft.Armada
       ";
       pgp.AddLemma(str, "invariants");
 
-      return nextLemmaName;
+      return specificPathLemmaName;
     }
   }
 
@@ -148,20 +234,24 @@ namespace Microsoft.Armada
       ownershipPredicate = i_ownershipPredicate;
     }
 
-    public override string GenerateSpecificNextLemma(ProofGenerationParams pgp, NextRoutine nextRoutine, IEnumerable<InvariantInfo> allInvariants)
+    public override string GenerateSpecificNextLemma(ProofGenerationParams pgp, AtomicPath atomicPath,
+                                                     IEnumerable<InvariantInfo> allInvariants, AtomicSpec atomicSpec,
+                                                     bool onlyNonstoppingPaths)
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
+      string name = atomicPath.Name;
+      string specificPathLemmaName = $"lemma_NonOwnersLackStoreBufferEntriesPreservedByPath_{name}";
 
-      string nextLemmaName = $"lemma_NonOwnersLackStoreBufferEntriesPreservedByNext_{nextRoutineName}";
+      var pr = new PathPrinter(atomicSpec);
 
       string str = $@"
-        lemma {nextLemmaName}(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
+        lemma {specificPathLemmaName}(s: LPlusState, s': LPlusState, path: LAtomic_Path, tid: Armada_ThreadHandle)
           requires InductiveInv(s)
-          requires LPlus_NextOneStep(s, s', step)
-          requires step.Armada_TraceEntry_{nextRoutineName}?
+          requires LAtomic_NextPath(s, s', path, tid)
+          requires path.LAtomic_Path_{name}?
           ensures  NonOwnersLackStoreBufferEntries(s')
         {{
-          var tid := step.tid;
+          { pr.GetOpenValidPathInvocation(atomicPath) }
+          ProofCustomizationGoesHere();
           forall any_tid, entry{fields.IndexList} |
             && any_tid in s'.s.threads
             && !{ownershipPredicate}(s', any_tid{fields.IndexList})
@@ -185,7 +275,7 @@ namespace Microsoft.Armada
       ";
       pgp.AddLemma(str, "invariants");
 
-      return nextLemmaName;
+      return specificPathLemmaName;
     }
   }
 
@@ -209,7 +299,8 @@ namespace Microsoft.Armada
         return;
       }
 
-      if (!CheckFields()) {
+      fields = new TSOFieldList(pgp, strategy);
+      if (!fields.Valid) {
         return;
       }
 
@@ -217,49 +308,6 @@ namespace Microsoft.Armada
       MakeTrivialPCMap();
       GenerateNextRoutineMap();
       GenerateProofGivenMap();
-    }
-
-    public bool CheckFields()
-    {
-      int numFieldNames = strategy.Fields.Count();
-
-      if (numFieldNames < 1) {
-        AH.PrintError(pgp.prog, "No field list found in TSO elimination strategy description");
-        return false;
-      }
-
-      string varName = strategy.Fields[0];
-      ArmadaVariable v = pgp.symbolsLow.Globals.Lookup(varName);
-      if (v == null) {
-        AH.PrintError(pgp.prog, strategy.tok, $"No global variable named {varName}");
-        return false;
-      }
-
-      fields = new TSOFieldList();
-      ArmadaStruct s = fields.AddField(pgp.symbolsLow, null, varName, v.ty);
-
-      for (int i = 1; i < numFieldNames; ++i) {
-        string fieldName = strategy.Fields[i];
-
-        if (s == null) {
-          AH.PrintError(pgp.prog, strategy.tok, $"Can't find field named {fieldName} within non-struct");
-          return false;
-        }
-
-        Type ty = s.LookupFieldType(fieldName);
-        if (ty == null) {
-          AH.PrintError(pgp.prog, strategy.tok, $"No field named {fieldName} exists in struct {s.Name}");
-          return false;
-        }
-
-        s = fields.AddField(pgp.symbolsLow, s, fieldName, ty);
-      }
-
-      if (s != null) {
-        AH.PrintError(pgp.prog, "The field list given for the TSO-elimination strategy ends in the middle of a struct.  It has to go all the way to a primitive field.");
-        return false;
-      }
-      return true;
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -270,7 +318,6 @@ namespace Microsoft.Armada
     {
       base.AddIncludesAndImports();
 
-      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/tsoelimination/TSOElimination.i.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy");
@@ -278,52 +325,38 @@ namespace Microsoft.Armada
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy");
 
       pgp.MainProof.AddImport("InvariantsModule");
-      pgp.MainProof.AddImport("TSOEliminationSpecModule");
-      pgp.MainProof.AddImport("TSOEliminationModule");
       pgp.MainProof.AddImport("util_option_s");
       pgp.MainProof.AddImport("util_collections_seqs_s");
       pgp.MainProof.AddImport("util_collections_seqs_i");
       pgp.MainProof.AddImport("util_collections_sets_i");
       pgp.MainProof.AddImport("util_collections_maps_i");
-
-      pgp.proofFiles.IncludeAndImportGeneratedFile("convert", "invariants");
     }
 
     private void InitializeAuxiliaryProofFiles()
     {
-      var defsFile = pgp.proofFiles.CreateAuxiliaryProofFile("defs");
-      defsFile.IncludeAndImportGeneratedFile("specs");
-      defsFile.IncludeAndImportGeneratedFile("convert");
-      defsFile.IncludeAndImportGeneratedFile("invariants");
-      defsFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/tsoelimination/TSOElimination.i.dfy");
-      defsFile.AddImport("TSOEliminationSpecModule");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
-      defsFile.AddImport("util_collections_seqs_s");
-      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("defs");
-
       var tsoutilFile = pgp.proofFiles.CreateAuxiliaryProofFile("tsoutil");
       tsoutilFile.IncludeAndImportGeneratedFile("specs");
       tsoutilFile.IncludeAndImportGeneratedFile("convert");
+      tsoutilFile.IncludeAndImportGeneratedFile("defs");
       tsoutilFile.IncludeAndImportGeneratedFile("invariants");
-      tsoutilFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/tsoelimination/TSOElimination.i.dfy");
-      tsoutilFile.AddImport("TSOEliminationSpecModule");
       tsoutilFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
       tsoutilFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
       tsoutilFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
       tsoutilFile.AddImport("util_collections_seqs_s");
       pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("tsoutil");
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var nextFileName = "next_" + nextRoutine.NameSuffix;
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var nextFileName = "next_" + atomicPath.Name;
         var nextFile = pgp.proofFiles.CreateAuxiliaryProofFile(nextFileName);
         nextFile.IncludeAndImportGeneratedFile("specs");
+        nextFile.IncludeAndImportGeneratedFile("revelations");
         nextFile.IncludeAndImportGeneratedFile("convert");
         nextFile.IncludeAndImportGeneratedFile("invariants");
         nextFile.IncludeAndImportGeneratedFile("defs");
         nextFile.IncludeAndImportGeneratedFile("tsoutil");
         nextFile.IncludeAndImportGeneratedFile("utility");
+        nextFile.IncludeAndImportGeneratedFile("latomic");
+        nextFile.IncludeAndImportGeneratedFile("hatomic");
         nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
         nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
         nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
@@ -335,15 +368,16 @@ namespace Microsoft.Armada
     private void GenerateProofGivenMap()
     {
       GenerateProofHeader();
+      GenerateAtomicSpecs();
       GeneratePCFunctions_L();
+      lAtomic.GeneratePCEffectLemmas();
       InitializeAuxiliaryProofFiles();
       AddStackMatchesMethodInvariant();
       GenerateOwnershipPredicate();
       GenerateStateAbstractionFunctions_LH();
-      GenerateConvertTraceEntry_LH();
-      GenerateConvertAndSuppressSteps();
+      GenerateConvertStep_LH();
+      GenerateConvertAtomicPath_LH();
       GenerateLocalViewCommutativityLemmas();
-      GenerateNextState_H();
       GenerateStrategyInvariants();
       GenerateInvariantProof(pgp);
       GenerateGenericStoreBufferLemmas_L();
@@ -352,77 +386,22 @@ namespace Microsoft.Armada
       GenerateUnchangedLemmas();
       GenerateStoreBufferMatchesLemmas();
       GenerateStatesMatchExceptPredicates();
-      GenerateIntermediateRelation();
-      GenerateIsSkippedTauStep();
-      GenerateTSOEliminationRequest();
-      GenerateInitialConditionsHoldLemma();
-      GenerateIntermediateRelationImpliesRelationLemma();
-      GenerateRegularStepsLiftableLemma();
-      GenerateRegularStepMaintainsTotalStateMatchesExceptVar();
-      GenerateRegularStepMaintainsGlobalsNoThreadOwnsMatch();
-      GenerateRegularStepMaintainsHighLevelStoreBuffersLackVar();
-      GenerateRegularStepMaintainsOwnersLocalViewsMatch();
-      GenerateRegularStepMaintainsIntermediateRelation();
-      GenerateSkippedTauStepMaintainsRelation();
-      GenerateStepMaintainsRelation();
-      GenerateValidRequestLemma();
+      GenerateLiftingRelation();
+      GenerateIsSkippedTauPath();
+      GenerateRegularPathsLiftableLemma();
+      GenerateRegularPathMaintainsTotalStateMatchesExceptVar();
+      GenerateRegularPathMaintainsGlobalsNoThreadOwnsMatch();
+      GenerateRegularPathMaintainsHighLevelStoreBuffersLackVar();
+      GenerateRegularPathMaintainsOwnersLocalViewsMatch();
+      GenerateRegularPathMaintainsLiftingRelation();
+      GenerateSkippedTauPathMaintainsRelation();
+      GenerateEstablishInitRequirementsLemma();
+      GenerateEstablishStateOKRequirementLemma();
+      GenerateEstablishRelationRequirementLemma();
+      GenerateEstablishAtomicPathLiftableLemma();
+      GenerateEstablishAtomicPathsLiftableLemma(true, false);
+      GenerateLiftLAtomicToHAtomicLemma(true, false);
       GenerateFinalProof();
-    }
-
-    private void GenerateConvertAndSuppressSteps()
-    {
-      string str;
-
-      str = @"
-        function ConvertAndSuppressSteps(ls: LState, hs: HState, steps: seq<L.Armada_TraceEntry>) : seq<H.Armada_TraceEntry>
-          decreases |steps|
-        {
-          if |steps| == 0 then
-            []
-          else
-            var ls' := L.Armada_GetNextStateAlways(ls, steps[0]);
-            if IsSkippedTauStep(ls, hs, steps[0]) then
-              ConvertAndSuppressSteps(ls', hs, steps[1..])
-            else
-              var hstep := ConvertTraceEntry_LH(steps[0]);
-              var hs' := H.Armada_GetNextStateAlways(hs, hstep);
-              [ConvertTraceEntry_LH(steps[0])] + ConvertAndSuppressSteps(ls', hs', steps[1..])
-        }
-      ";
-      pgp.AddFunction(str, "defs");
-
-      str = @"
-        function ConvertAndSuppressStepSequence(ls: LPlusState, hs: HState, entry: LStep) : HStep
-        {
-          Armada_Multistep(ConvertAndSuppressSteps(ls.s, hs, entry.steps), entry.tid, entry.tau)
-        }
-      ";
-      pgp.AddFunction(str, "defs");
-
-      str = @"
-        lemma lemma_ConvertAndSuppressStepsMaintainsMatching(ls: LState, hs: HState, tau:bool, tid:Armada_ThreadHandle,
-                                                             steps: seq<L.Armada_TraceEntry>)
-          requires forall step :: step in steps ==> step.tid == tid
-          requires forall step :: step in steps ==> step.Armada_TraceEntry_Tau? == tau
-          ensures  forall step :: step in ConvertAndSuppressSteps(ls, hs, steps) ==> step.tid == tid
-          ensures  forall step :: step in ConvertAndSuppressSteps(ls, hs, steps) ==> step.Armada_TraceEntry_Tau? == tau
-          ensures  |ConvertAndSuppressSteps(ls, hs, steps)| <= |steps|
-          decreases |steps|
-        {
-          if |steps| > 0 {
-            var ls' := L.Armada_GetNextStateAlways(ls, steps[0]);
-            if IsSkippedTauStep(ls, hs, steps[0]) {
-              lemma_ConvertAndSuppressStepsMaintainsMatching(ls', hs, tau, tid, steps[1..]);
-            }
-            else {
-              var hstep := ConvertTraceEntry_LH(steps[0]);
-              var hs' := H.Armada_GetNextStateAlways(hs, hstep);
-              lemma_ConvertAndSuppressStepsMaintainsMatching(ls', hs', tau, tid, steps[1..]);
-            }
-          }
-        }
-      ";
-      pgp.AddLemma(str, "defs");
     }
 
     protected void GenerateStrategyInvariants()
@@ -441,7 +420,7 @@ namespace Microsoft.Armada
             ==> tid1 == tid2
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
       AddInvariant(new TSOEliminationNoConflictingOwnershipInvariantInfo(fields, ownershipPredicate));
 
       str = @"
@@ -453,7 +432,7 @@ namespace Microsoft.Armada
       str += $"    && !{ownershipPredicate}(s, tid{fields.IndexList})\n";
       str += $"    ==> StoreBufferLacksIndices_L(s.s.threads[tid].storeBuffer{fields.IndexList})\n";
       str += "}\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
       AddInvariant(new TSOEliminationNonOwnersLackStoreBufferEntriesInvariantInfo(fields, ownershipPredicate));
     }
 
@@ -462,10 +441,14 @@ namespace Microsoft.Armada
       var str = $@"
         predicate OwnershipPredicate(s:LPlusState, tid:Armada_ThreadHandle{fields.IndexParamList})
         {{
+          var threads := s.s.threads;
+          var globals := s.s.mem.globals;
+          var ghosts := s.s.ghosts;
+          var tid_init := s.config.tid_init;
           { strategy.OwnershipPredicate }
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
       ownershipPredicate = "OwnershipPredicate";
     }
 
@@ -479,40 +462,32 @@ namespace Microsoft.Armada
         {
           && loc.Armada_StoreBufferLocation_Unaddressable?
       ";
-      str += $"  && loc.v.Armada_GlobalStaticVar_{fields.GetVar().fieldName}?\n";
-      str += $"  && |loc.fields| == {fields.NumFields-1}\n";
-      for (int i = 1; i < fields.NumFields; ++i) {
+      str += $"  && loc.v.Armada_GlobalStaticVar_{fields.GetVar()}?\n";
+      str += $"  && |loc.fields| == {fields.NumFields}\n";
+      for (int i = 0; i < fields.NumFields; ++i) {
         f = fields.GetField(i);
-        if (f.fieldName != null) {
-          str += $"  && loc.fields[{i-1}].Armada_FieldStruct?\n";
-          str += $"  && loc.fields[{i-1}].f.Armada_FieldType_{f.outerStruct.Name}'{f.fieldName}?\n";
-        }
-        else {
-          str += $"  && loc.fields[{i-1}].Armada_FieldArrayIndex?\n";
+        if (f is StructTSOField sf) {
+          str += $"  && loc.fields[{i}] == {sf.FieldPos}\n";
         }
       }
       str += "  }\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate StoreBufferLocationConcernsVar_H(loc:H.Armada_StoreBufferLocation)
         {
           && loc.Armada_StoreBufferLocation_Unaddressable?
       ";
-      str += $"  && loc.v.Armada_GlobalStaticVar_{fields.GetVar().fieldName}?\n";
-      str += $"  && |loc.fields| == {fields.NumFields-1}\n";
-      for (int i = 1; i < fields.NumFields; ++i) {
+      str += $"  && loc.v.Armada_GlobalStaticVar_{fields.GetVar()}?\n";
+      str += $"  && |loc.fields| == {fields.NumFields}\n";
+      for (int i = 0; i < fields.NumFields; ++i) {
         f = fields.GetField(i);
-        if (f.fieldName != null) {
-          str += $"  && loc.fields[{i-1}].Armada_FieldStruct?\n";
-          str += $"  && loc.fields[{i-1}].f.Armada_FieldType_{f.outerStruct.Name}'{f.fieldName}?\n";
-        }
-        else {
-          str += $"  && loc.fields[{i-1}].Armada_FieldArrayIndex?\n";
+        if (f is StructTSOField sf) {
+          str += $"  && loc.fields[{i}] == {sf.FieldPos}\n";
         }
       }
       str += "  }\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate StoreBufferMatchesExceptVar(lbuf:seq<L.Armada_StoreBufferEntry>, hbuf:seq<H.Armada_StoreBufferEntry>)
@@ -527,60 +502,60 @@ namespace Microsoft.Armada
             && StoreBufferMatchesExceptVar(lbuf[1..], hbuf[1..])
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
-      str = @"
-        predicate GlobalsMatchesExceptVar(lglobals:L.Armada_Globals, hglobals:H.Armada_Globals)
-        {
-          true
-      ";
+      var preds = new List<string>();
       foreach (var varName in pgp.symbolsLow.Globals.VariableNames) {
         var v = pgp.symbolsLow.Globals.Lookup(varName);
-        if (v is GlobalUnaddressableArmadaVariable && varName != fields.GetVar().fieldName) {
-          str += $"  && hglobals.{varName} == lglobals.{varName}\n";
+        if (v is GlobalUnaddressableArmadaVariable && varName != fields.GetVar()) {
+          preds.Add($"hglobals.{varName} == lglobals.{varName}");
         }
       }
 
-      var fieldSpec = $"globals";
       var indices = new List<string>();
       var indexConstraints = new List<string>();
       for (int i = 0; i < fields.NumFields; ++i) {
         f = fields.GetField(i);
 
-        if (f.fieldName != null) {
-          if (i > 0) {
-            foreach (var otherFieldName in f.outerStruct.FieldNames) {
-              if (otherFieldName != f.fieldName) {
-                if (indices.Any()) {
-                  var commaSeparatedIndices = string.Join(", ", indices);
-                  var combinedIndexConstraints = string.Join(" && ", indexConstraints);
-                  str += $"  && (forall {commaSeparatedIndices} :: {combinedIndexConstraints} ==> h{fieldSpec}.{otherFieldName} == l{fieldSpec}.{otherFieldName})\n";
-                }
-                else {
-                  str += $"  && h{fieldSpec}.{otherFieldName} == l{fieldSpec}.{otherFieldName}\n";
-                }
+        if (f is StructTSOField sf) {
+          foreach (var otherFieldName in sf.OuterStruct.FieldNames) {
+            if (otherFieldName != sf.FieldName) {
+              if (indices.Any()) {
+                preds.Add($@"
+                  forall {AH.CombineStringsWithCommas(indices)} ::
+                    {AH.CombineStringsWithAnd(indexConstraints)} ==>
+                    hglobals{f.EnclosingFieldSpec}.{otherFieldName} == lglobals{f.EnclosingFieldSpec}.{otherFieldName}
+                ");
+              }
+              else {
+                preds.Add($"hglobals{f.EnclosingFieldSpec}.{otherFieldName} == lglobals{f.EnclosingFieldSpec}.{otherFieldName}");
               }
             }
           }
-
-          fieldSpec += $".{f.fieldName}";
-          if (f.isArray) {
-            if (indices.Any()) {
-              var commaSeparatedIndices = string.Join(", ", indices);
-              var combinedIndexConstraints = string.Join(" && ", indexConstraints);
-              str += $"  && (forall {commaSeparatedIndices} :: {combinedIndexConstraints} ==> |h{fieldSpec}| == |l{fieldSpec}|)\n";
-            }
-            else {
-              str += $"  && |h{fieldSpec}| == |l{fieldSpec}|\n";
-            }
-            indices.Add($"idx{f.whichArray}");
-            indexConstraints.Add($"0 <= idx{f.whichArray} < |l{fieldSpec}|");
-            fieldSpec += $"[idx{f.whichArray}]";
+        }
+        else if (f is ArrayTSOField af) {
+          if (indices.Any()) {
+            preds.Add($@"
+              forall {AH.CombineStringsWithCommas(indices)} ::
+                {AH.CombineStringsWithAnd(indexConstraints)} ==>
+                |hglobals{f.EnclosingFieldSpec}| == |lglobals{f.EnclosingFieldSpec}|
+            ");
           }
+          else {
+            preds.Add($"|hglobals{f.EnclosingFieldSpec}| == |lglobals{f.EnclosingFieldSpec}|");
+          }
+          indices.Add($"idx{af.WhichArray}");
+          indexConstraints.Add($"0 <= idx{af.WhichArray} < |lglobals{f.EnclosingFieldSpec}|");
         }
       }
-      str += "  }\n";
-      pgp.AddPredicate(str, "invariants");
+
+      str = $@"
+        predicate GlobalsMatchesExceptVar(lglobals: L.Armada_Globals, hglobals: H.Armada_Globals)
+        {{
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate SharedMemoryMatchesExceptVar(lmem: L.Armada_SharedMemory, hmem: H.Armada_SharedMemory)
@@ -589,7 +564,7 @@ namespace Microsoft.Armada
           && hmem.heap == lmem.heap
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         lemma lemma_GlobalsMatchExceptVarPreservedByApplyingStoreBufferEntryThatDoesntConcernVar_L(
@@ -685,7 +660,7 @@ namespace Microsoft.Armada
           && hframe.new_ptrs == lframe.new_ptrs
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate StackMatchesExceptVar(lstack:seq<L.Armada_ExtendedFrame>, hstack:seq<H.Armada_ExtendedFrame>)
@@ -694,7 +669,7 @@ namespace Microsoft.Armada
           && (forall i :: 0 <= i < |lstack| ==> ExtendedFrameMatchesExceptVar(lstack[i], hstack[i]))
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate ThreadMatchesExceptVar(lthread:L.Armada_Thread, hthread:H.Armada_Thread)
@@ -706,7 +681,7 @@ namespace Microsoft.Armada
           && StoreBufferMatchesExceptVar(lthread.storeBuffer, hthread.storeBuffer)
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate ThreadsMatchesExceptVar(lthreads:map<Armada_ThreadHandle, L.Armada_Thread>,
@@ -716,7 +691,7 @@ namespace Microsoft.Armada
           && (forall tid :: tid in lthreads ==> ThreadMatchesExceptVar(lthreads[tid], hthreads[tid]))
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate TotalStateMatchesExceptVar(ls:LState, hs:HState)
@@ -726,9 +701,10 @@ namespace Microsoft.Armada
           && SharedMemoryMatchesExceptVar(ls.mem, hs.mem)
           && hs.addrs == ConvertAddrs_LH(ls.addrs)
           && hs.ghosts == ConvertGhosts_LH(ls.ghosts)
+          && hs.joinable_tids == ls.joinable_tids
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate LocalViewsMatchExceptVar(ls:LState, hs:HState)
@@ -737,29 +713,28 @@ namespace Microsoft.Armada
             SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls, any_tid), H.Armada_GetThreadLocalView(hs, any_tid))
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
     }
 
-    private void GenerateIsSkippedTauStep()
+    private void GenerateIsSkippedTauPath()
     {
       string str = @"
-        predicate IsSkippedTauStep(ls:LState, hs:HState, step:L.Armada_TraceEntry)
+        predicate IsSkippedTauPath(ls: LPlusState, hs: HState, path: LAtomic_Path, tid: Armada_ThreadHandle)
         {
-          && step.Armada_TraceEntry_Tau?
-          && var tid := step.tid;
-          && tid in ls.threads
-          && |ls.threads[tid].storeBuffer| > 0
-          && StoreBufferLocationConcernsVar_L(ls.threads[tid].storeBuffer[0].loc)
+          && path.LAtomic_Path_Tau?
+          && tid in ls.s.threads
+          && |ls.s.threads[tid].storeBuffer| > 0
+          && StoreBufferLocationConcernsVar_L(ls.s.threads[tid].storeBuffer[0].loc)
           && !(&& tid in hs.threads
                && |hs.threads[tid].storeBuffer| > 0
-               && hs.threads[tid].storeBuffer[0] == ConvertStoreBufferEntry_LH(ls.threads[tid].storeBuffer[0])
-               && StoreBufferMatchesExceptVar(ls.threads[tid].storeBuffer[1..], hs.threads[tid].storeBuffer[1..]))
+               && hs.threads[tid].storeBuffer[0] == ConvertStoreBufferEntry_LH(ls.s.threads[tid].storeBuffer[0])
+               && StoreBufferMatchesExceptVar(ls.s.threads[tid].storeBuffer[1..], hs.threads[tid].storeBuffer[1..]))
         }
       ";
       pgp.AddPredicate(str, "defs");
     }
 
-    private void GenerateIntermediateRelation()
+    protected override void GenerateLiftingRelation()
     {
       string str;
 
@@ -769,41 +744,38 @@ namespace Microsoft.Armada
           forall tid :: tid in s.s.threads ==> !{ownershipPredicate}(s, tid{fields.IndexList})
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
-
-      var fieldIndices = new List<int>();
-      for (int i = 0; i < fields.NumFields; ++i) {
-        var f = fields.GetField(i);
-        if (f.isArray) {
-          fieldIndices.Add(i);
-        }
-      }
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate ValidIndices_L(g:L.Armada_Globals{fields.IndexParamList})
         {{
-          {fields.ValidIndices}
+          {AH.CombineStringsWithAnd(fields.IndexConstraints)}
         }}
       ";
       str += "{\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate ValidIndices_H(g:H.Armada_Globals{fields.IndexParamList})
         {{
-          {fields.ValidIndices}
+          {AH.CombineStringsWithAnd(fields.IndexConstraints)}
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
-      str = $"predicate StoreBufferLocationConcernsIndices_L(loc:L.Armada_StoreBufferLocation{fields.IndexParamList})\n";
-      str += "{\n";
-      str += "  && StoreBufferLocationConcernsVar_L(loc)\n";
-      for (int i = 0; i < fieldIndices.Count; ++i) {
-        str += $"  && loc.fields[{fieldIndices[i]}].i == idx{i}\n";
+      var preds = new List<string>() { "StoreBufferLocationConcernsVar_L(loc)" };
+      for (int i = 0; i < fields.NumFields; ++i) {
+        if (fields.GetField(i) is ArrayTSOField af) {
+          preds.Add($"loc.fields[{i}] == idx{af.WhichArray}");
+        }
       }
-      str += "}\n";
-      pgp.AddPredicate(str, "invariants");
+      str = $@"
+        predicate StoreBufferLocationConcernsIndices_L(loc:L.Armada_StoreBufferLocation{fields.IndexParamList})
+        {{
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate StoreBufferLacksIndices_L(buf: seq<L.Armada_StoreBufferEntry>{fields.IndexParamList})
@@ -811,7 +783,7 @@ namespace Microsoft.Armada
           forall entry :: entry in buf ==> !StoreBufferLocationConcernsIndices_L(entry.loc{fields.IndexList})
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate StoreBufferLacksVar_H(buf: seq<H.Armada_StoreBufferEntry>)
@@ -819,7 +791,7 @@ namespace Microsoft.Armada
           forall entry :: entry in buf ==> !StoreBufferLocationConcernsVar_H(entry.loc)
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate GlobalsNoThreadOwnsMatchSpecific(ls: LPlusState, hs: HState{fields.IndexParamList})
@@ -833,7 +805,7 @@ namespace Microsoft.Armada
       ";
       str += "}\n";
       
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate GlobalsNoThreadOwnsMatch(ls: LPlusState, hs: HState)
@@ -845,7 +817,7 @@ namespace Microsoft.Armada
       str += $"  GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList})";
       str += "}\n";
       
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate HighLevelStoreBuffersLackVar(hs: HState)
@@ -853,7 +825,7 @@ namespace Microsoft.Armada
           forall tid :: tid in hs.threads ==> StoreBufferLacksVar_H(hs.threads[tid].storeBuffer)
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate LocalViewsMatchSpecific(ls: LState, hs: HState, tid:Armada_ThreadHandle{fields.IndexParamList})
@@ -867,7 +839,7 @@ namespace Microsoft.Armada
           ==> lg{fields.FieldSpec} == hg{fields.FieldSpec}
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate OwnersLocalViewsMatch(ls: LPlusState, hs: HState)
@@ -876,10 +848,10 @@ namespace Microsoft.Armada
       str += $"  forall tid{fields.IndexList} ::\n";
       str += $"    tid in ls.s.threads && tid in hs.threads && {ownershipPredicate}(ls, tid{fields.IndexList}) ==> LocalViewsMatchSpecific(ls.s, hs, tid{fields.IndexList})\n";
       str += "}\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
-        predicate IntermediateRelation(ls: LPlusState, hs: HState)
+        predicate LiftingRelation(ls: LPlusState, hs: HState)
         {
           && TotalStateMatchesExceptVar(ls.s, hs)
           && (ls.s.stop_reason.Armada_NotStopped? ==>
@@ -889,40 +861,20 @@ namespace Microsoft.Armada
              )
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
     }
 
-    private void GenerateTSOEliminationRequest()
-    {
-      var lplusstate = AH.ReferToType("LPlusState");
-      var hstate = AH.ReferToType("HState");
-      var handle = AH.ReferToType("Armada_ThreadHandle");
-      var lstep = AH.ReferToType("LStep");
-      var hstep = AH.ReferToType("HStep");
-      var terequest = AH.MakeGenericTypeSpecific("TSOEliminationRequest", new List<Type> { lplusstate, hstate, handle, lstep, hstep });
-      pgp.AddTypeSynonymDecl("TERequest", terequest, "defs");
-
-      string str = @"
-        function GetTSOEliminationRequest() : TERequest
-        {
-          TSOEliminationRequest(GetLPlusSpec(), GetHSpec(), GetLPlusHRefinementRelation(), InductiveInv, ConvertTotalState_LPlusH,
-                                ConvertAndSuppressStepSequence, NextState_H, IntermediateRelation)
-        }
-      ";
-      pgp.AddFunction(str, "defs");
-    }
-
-    private void GenerateInitialConditionsHoldLemma()
+    protected override void GenerateEstablishInitRequirementsLemma()
     {
       GenerateLemmasHelpfulForProvingInitPreservation_LH();
 
       string str;
 
       str = $@"
-        lemma lemma_InitImpliesIntermediateRelation(ls: LPlusState, hs: HState)
+        lemma lemma_InitImpliesLiftingRelation(ls: LPlusState, hs: HState)
           requires LPlus_Init(ls)
           requires hs == ConvertTotalState_LPlusH(ls)
-          ensures  IntermediateRelation(ls, hs)
+          ensures  LiftingRelation(ls, hs)
         {{
           assert TotalStateMatchesExceptVar(ls.s, hs);
           forall tid{fields.IndexList} | tid in ls.s.threads
@@ -936,21 +888,29 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_InitialConditionsHold(ter:TERequest)
-          requires ter == GetTSOEliminationRequest()
-          ensures  InitialConditionsHold(ter)
+        lemma lemma_EstablishInitRequirements(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          inv:LPlusState->bool,
+          relation:(LPlusState, HState)->bool
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires inv == InductiveInv
+          requires relation == LiftingRelation
+          ensures  AtomicInitImpliesInv(lasf, inv)
+          ensures  forall ls :: lasf.init(ls) ==> exists hs :: hasf.init(hs) && relation(ls, hs)
         {
-          forall ls | ls in ter.lspec.init
-            ensures var hs := ter.initial_state_refiner(ls);
-                    && hs in ter.hspec.init
-                    && ter.intermediate_relation(ls, hs)
+          forall ls | lasf.init(ls)
+            ensures inv(ls)
+            ensures exists hs :: hasf.init(hs) && relation(ls, hs)
           {
-            var hs := ter.initial_state_refiner(ls);
+            lemma_InitImpliesInductiveInv(ls);
+            var hs := ConvertTotalState_LPlusH(ls);
             var hconfig := ConvertConfig_LH(ls.config);
-
-            lemma_ConvertTotalStatePreservesInit(ls.s, hs, ls.config, hconfig);
             assert H.Armada_InitConfig(hs, hconfig);
-            lemma_InitImpliesIntermediateRelation(ls, hs);
+            lemma_InitImpliesLiftingRelation(ls, hs);
+            assert hasf.init(hs) && relation(ls, hs);
           }
         }
       ";
@@ -1279,69 +1239,51 @@ namespace Microsoft.Armada
       pgp.AddLemma(str, "tsoutil");
     }
 
-    private void GenerateIntermediateRelationImpliesRelationLemma()
-    {
-      string str = @"
-        lemma lemma_IntermediateRelationImpliesRelation(ter:TERequest)
-          requires ter == GetTSOEliminationRequest()
-          ensures  IntermediateRelationImpliesRelation(ter)
-        {
-          forall ls, hs | ter.intermediate_relation(ls, hs)
-            ensures RefinementPair(ls, hs) in ter.relation
-          {
-            assert IntermediateRelation(ls, hs);
-            assert LPlusHStateRefinement(ls, hs);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateRegularStepsLiftableLemma()
+    private void GenerateRegularPathsLiftableLemma()
     {
       string str;
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var nextRoutineName = nextRoutine.NameSuffix;
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var name = atomicPath.Name;
 
         str = $@"
-          lemma lemma_RegularStepLiftable_{nextRoutineName}(ls:LPlusState, ls':LPlusState, lstep:L.Armada_TraceEntry, hs:HState)
+          lemma lemma_RegularPathLiftable_{name}(ls: LPlusState, ls': LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle, hs: HState)
             requires InductiveInv(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires OwnersLocalViewsMatch(ls, hs)
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            ensures  var hstep := ConvertTraceEntry_LH(lstep);
-                     var hs' := H.Armada_GetNextStateAlways(hs, hstep);
-                     H.Armada_NextOneStep(hs, hs', hstep)
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            ensures  HAtomic_ValidPath(hs, ConvertAtomicPath_LH(lpath), tid)
           {{
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
+            var hpath := ConvertAtomicPath_LH(lpath);
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
+            { hpr.GetOpenPathInvocation(pathMap[atomicPath]) }
+            ProofCustomizationGoesHere();
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"    case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RegularStepLiftable_{nextRoutineName}(ls, ls', lstep, hs);\n";
+        pgp.AddLemma(str, "next_" + name);
+        finalCases += $"    case LAtomic_Path_{name}(_) => lemma_RegularPathLiftable_{name}(ls, ls', lpath, tid, hs);\n";
       }
 
       str = $@"
-        lemma lemma_RegularStepLiftable(ls:LPlusState, ls':LPlusState, lstep:L.Armada_TraceEntry, hs:HState)
+        lemma lemma_RegularPathLiftable(ls: LPlusState, ls': LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle, hs: HState)
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          ensures  var hstep := ConvertTraceEntry_LH(lstep);
-                   var hs' := H.Armada_GetNextStateAlways(hs, hstep);
-                   H.Armada_NextOneStep(hs, hs', hstep)
+          requires LiftingRelation(ls, hs)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          ensures  HAtomic_ValidPath(hs, ConvertAtomicPath_LH(lpath), tid)
         {{
-          var tid := lstep.tid;
-          lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
-                                                                           hs.threads[tid].storeBuffer);
-          match lstep {{
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
+          match lpath {{
             { finalCases }
           }}
         }}
@@ -1349,70 +1291,73 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateRegularStepMaintainsTotalStateMatchesExceptVar()
+    private void GenerateRegularPathMaintainsTotalStateMatchesExceptVar()
     {
       string str;
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
-      {
-        var nextRoutineName = nextRoutine.NameSuffix;
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var name = atomicPath.Name;
+
         str = $@"
-          lemma lemma_RegularStepMaintainsTotalStateMatchesExceptVar_{nextRoutineName}(
+          lemma lemma_RegularPathMaintainsTotalStateMatchesExceptVar_{name}(
             ls: LPlusState,
             ls': LPlusState,
-            lstep: L.Armada_TraceEntry,
+            lpath: LAtomic_Path,
+            tid: Armada_ThreadHandle,
             hs: HState,
             hs': HState,
-            hstep: H.Armada_TraceEntry
+            hpath: HAtomic_Path
             )
             requires InductiveInv(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires OwnersLocalViewsMatch(ls, hs)
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            requires hstep == ConvertTraceEntry_LH(lstep)
-            requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-            requires H.Armada_NextOneStep(hs, hs', hstep)
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            requires hpath == ConvertAtomicPath_LH(lpath)
+            requires HAtomic_NextPath(hs, hs', hpath, tid)
             ensures  TotalStateMatchesExceptVar(ls'.s, hs')
           {{
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
             lemma_AppendVarToStoreBufferDoesntAffectMatchAlways();
             lemma_AppendCorrespondingStoreBufferEntriesMaintainsMatchAlways();
             lemma_IfMapKeysMatchThenCardinalitiesMatch(ls.s.threads, hs.threads);
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
+            { hpr.GetOpenValidPathInvocation(pathMap[atomicPath]) }
+            ProofCustomizationGoesHere();
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"    case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RegularStepMaintainsTotalStateMatchesExceptVar_{nextRoutineName}(ls, ls', lstep, hs, hs', hstep);\n";
+        pgp.AddLemma(str, "next_" + name);
+        finalCases += $"    case LAtomic_Path_{name}(_) => lemma_RegularPathMaintainsTotalStateMatchesExceptVar_{name}(ls, ls', lpath, tid, hs, hs', hpath);\n";
       }
 
       str = $@"
-        lemma lemma_RegularStepMaintainsTotalStateMatchesExceptVar(
+        lemma lemma_RegularPathMaintainsTotalStateMatchesExceptVar(
           ls: LPlusState,
           ls': LPlusState,
-          lstep: L.Armada_TraceEntry,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
           hs: HState,
           hs': HState,
-          hstep: H.Armada_TraceEntry
+          hpath: HAtomic_Path
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          requires hstep == ConvertTraceEntry_LH(lstep)
-          requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
+          requires LiftingRelation(ls, hs)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          requires hpath == ConvertAtomicPath_LH(lpath)
+          requires HAtomic_NextPath(hs, hs', hpath, tid)
           ensures  TotalStateMatchesExceptVar(ls'.s, hs')
         {{
-          var tid := lstep.tid;
-          lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
-                                                                           hs.threads[tid].storeBuffer);
-          match lstep {{
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
+          match lpath {{
             { finalCases }
           }}
         }}
@@ -1420,43 +1365,49 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateRegularStepMaintainsGlobalsNoThreadOwnsMatch()
+    private void GenerateRegularPathMaintainsGlobalsNoThreadOwnsMatch()
     {
       string str;
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+
+      foreach (var atomicPath in lAtomic.AtomicPaths)
       {
-        var nextRoutineName = nextRoutine.NameSuffix;
+        var name = atomicPath.Name;
+
         str = $@"
-          lemma lemma_RegularStepMaintainsGlobalsNoThreadOwnsMatchSpecific_{nextRoutineName}(
+          lemma lemma_RegularPathMaintainsGlobalsNoThreadOwnsMatchSpecific_{name}(
             ls: LPlusState,
             ls':LPlusState,
-            lstep: L.Armada_TraceEntry,
+            lpath: LAtomic_Path,
+            tid: Armada_ThreadHandle,
             hs: HState,
             hs': HState,
-            hstep: H.Armada_TraceEntry{fields.IndexParamList}
+            hpath: HAtomic_Path{fields.IndexParamList}
             )
             requires InductiveInv(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList})
             requires OwnersLocalViewsMatch(ls, hs)
             requires ls.s.stop_reason.Armada_NotStopped?
             requires ls'.s.stop_reason.Armada_NotStopped?
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            requires hstep == ConvertTraceEntry_LH(lstep)
-            requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-            requires H.Armada_NextOneStep(hs, hs', hstep)
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires hpath == ConvertAtomicPath_LH(lpath)
+            requires HAtomic_NextPath(hs, hs', hpath, tid)
             ensures  GlobalsNoThreadOwnsMatchSpecific(ls', hs'{fields.IndexList})
           {{
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
+            { hpr.GetOpenValidPathInvocation(pathMap[atomicPath]) }
             var lg', hg' := ls'.s.mem.globals, hs'.mem.globals;
-            var tid := lstep.tid;
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
+            ProofCustomizationGoesHere();
             if NoThreadOwns(ls'{fields.IndexList}) && ValidIndices_L(lg'{fields.IndexList}) && ValidIndices_H(hg'{fields.IndexList}) {{
               assert !{ownershipPredicate}(ls', tid{fields.IndexList});
               if !{ownershipPredicate}(ls, tid{fields.IndexList}) {{
@@ -1474,35 +1425,32 @@ namespace Microsoft.Armada
             }}
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"    case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RegularStepMaintainsGlobalsNoThreadOwnsMatchSpecific_{nextRoutineName}(ls, ls', lstep, hs, hs', hstep{fields.IndexList});\n";
+        pgp.AddLemma(str, "next_" + name);
+        finalCases += $"    case LAtomic_Path_{name}(_) => lemma_RegularPathMaintainsGlobalsNoThreadOwnsMatchSpecific_{name}(ls, ls', lpath, tid, hs, hs', hpath{fields.IndexList});\n";
       }
 
       str = @"
-        lemma lemma_RegularStepMaintainsGlobalsNoThreadOwnsMatch(
+        lemma lemma_RegularPathMaintainsGlobalsNoThreadOwnsMatch(
           ls: LPlusState,
           ls':LPlusState,
-          lstep: L.Armada_TraceEntry,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
           hs: HState,
           hs': HState,
-          hstep: H.Armada_TraceEntry
+          hpath: HAtomic_Path
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
+          requires LiftingRelation(ls, hs)
           requires ls.s.stop_reason.Armada_NotStopped?
           requires ls'.s.stop_reason.Armada_NotStopped?
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          requires hstep == ConvertTraceEntry_LH(lstep)
-          requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          requires hpath == ConvertAtomicPath_LH(lpath)
+          requires HAtomic_NextPath(hs, hs', hpath, tid)
           ensures  GlobalsNoThreadOwnsMatch(ls', hs')
         {
-          var tid := lstep.tid;
-          lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
-                                                                           hs.threads[tid].storeBuffer);
           var lg', hg' := ls'.s.mem.globals, hs'.mem.globals;
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
       ";
       if (fields.NumArrays > 0) {
         str += $@"
@@ -1510,7 +1458,7 @@ namespace Microsoft.Armada
             ensures GlobalsNoThreadOwnsMatchSpecific(ls', hs'{fields.IndexList})
           {{
             assert GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList});
-            match lstep {{
+            match lpath {{
               { finalCases }
             }}
           }}
@@ -1519,7 +1467,7 @@ namespace Microsoft.Armada
       else {
         str += $@"
           assert GlobalsNoThreadOwnsMatchSpecific(ls, hs);
-          match lstep {{
+          match lpath {{
             { finalCases }
           }}
         ";
@@ -1528,74 +1476,76 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
     
-    private void GenerateRegularStepMaintainsHighLevelStoreBuffersLackVar()
+    private void GenerateRegularPathMaintainsHighLevelStoreBuffersLackVar()
     {
       string str;
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
-      {
-        var nextRoutineName = nextRoutine.NameSuffix;
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var name = atomicPath.Name;
+
         str = $@"
-          lemma lemma_RegularStepMaintainsHighLevelStoreBuffersLackVar_{nextRoutineName}(
+          lemma lemma_RegularPathMaintainsHighLevelStoreBuffersLackVar_{name}(
             ls: LPlusState,
             ls':LPlusState,
-            lstep: L.Armada_TraceEntry,
+            lpath: LAtomic_Path,
+            tid: Armada_ThreadHandle,
             hs: HState,
             hs': HState,
-            hstep: H.Armada_TraceEntry
+            hpath: HAtomic_Path
             )
             requires InductiveInv(ls)
             requires NonOwnersLackStoreBufferEntries(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires OwnersLocalViewsMatch(ls, hs)
             requires HighLevelStoreBuffersLackVar(hs)
             requires ls.s.stop_reason.Armada_NotStopped?
             requires ls'.s.stop_reason.Armada_NotStopped?
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            requires hstep == ConvertTraceEntry_LH(lstep)
-            requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-            requires H.Armada_NextOneStep(hs, hs', hstep)
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            requires hpath == ConvertAtomicPath_LH(lpath)
+            requires HAtomic_NextPath(hs, hs', hpath, tid)
             ensures  HighLevelStoreBuffersLackVar(hs')
           {{
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
+            { hpr.GetOpenValidPathInvocation(pathMap[atomicPath]) }
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
+            ProofCustomizationGoesHere();
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
-
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"  case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RegularStepMaintainsHighLevelStoreBuffersLackVar_{nextRoutineName}(ls, ls', lstep, hs, hs', hstep);\n";
+        pgp.AddLemma(str, "next_" + name);
+        finalCases += $"  case LAtomic_Path_{name}(_) => lemma_RegularPathMaintainsHighLevelStoreBuffersLackVar_{name}(ls, ls', lpath, tid, hs, hs', hpath);\n";
       }
 
       str = $@"
-        lemma lemma_RegularStepMaintainsHighLevelStoreBuffersLackVar(
+        lemma lemma_RegularPathMaintainsHighLevelStoreBuffersLackVar(
           ls: LPlusState,
           ls':LPlusState,
-          lstep: L.Armada_TraceEntry,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
           hs: HState,
           hs': HState,
-          hstep: H.Armada_TraceEntry
+          hpath: HAtomic_Path
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
+          requires LiftingRelation(ls, hs)
           requires ls.s.stop_reason.Armada_NotStopped?
           requires ls'.s.stop_reason.Armada_NotStopped?
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          requires hstep == ConvertTraceEntry_LH(lstep)
-          requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          requires hpath == ConvertAtomicPath_LH(lpath)
+          requires HAtomic_NextPath(hs, hs', hpath, tid)
           ensures  HighLevelStoreBuffersLackVar(hs')
         {{
-          var tid := lstep.tid;
-          lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
-                                                                           hs.threads[tid].storeBuffer);
-          match lstep {{
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
+          match lpath {{
             { finalCases }
           }}
         }}
@@ -1603,109 +1553,131 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateRegularStepMaintainsOwnersLocalViewsMatch()
+    private void GenerateRegularPathMaintainsOwnersLocalViewsMatch()
     {
       string str;
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
-      {
-        var nextRoutineName = nextRoutine.NameSuffix;
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var name = atomicPath.Name;
+
         str = $@"
-          lemma {{:timeLimitMultiplier 2}} lemma_RegularStepMaintainsActingOwnersLocalViewsMatchSpecific_{nextRoutineName}(
+          lemma {{:timeLimitMultiplier {2 * atomicPath.NumNextRoutines + 2}}} lemma_RegularPathMaintainsActingOwnersLocalViewsMatchSpecific_{name}(
             ls: LPlusState,
             ls':LPlusState,
-            lstep: L.Armada_TraceEntry,
+            lpath: LAtomic_Path,
+            tid: Armada_ThreadHandle,
             hs: HState,
             hs': HState,
-            hstep: H.Armada_TraceEntry{fields.IndexParamList}
+            hpath: HAtomic_Path{fields.IndexParamList}
             )
+            requires InductiveInv(ls)
+            requires InductiveInv(ls')
             requires NonOwnersLackStoreBufferEntries(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList})
             requires OwnersLocalViewsMatch(ls, hs)
             requires HighLevelStoreBuffersLackVar(hs)
             requires ls.s.stop_reason.Armada_NotStopped?
             requires ls'.s.stop_reason.Armada_NotStopped?
             requires HighLevelStoreBuffersLackVar(hs')
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            requires hstep == ConvertTraceEntry_LH(lstep)
-            requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-            requires H.Armada_NextOneStep(hs, hs', hstep)
-            requires lstep.tid in ls'.s.threads
-            requires lstep.tid in hs'.threads
-            requires {ownershipPredicate}(ls', lstep.tid{fields.IndexList})
-            ensures  LocalViewsMatchSpecific(ls'.s, hs', lstep.tid{fields.IndexList})
-           {{
-            var lg := L.Armada_GetThreadLocalView(ls.s, lstep.tid).globals;
-            var hg := H.Armada_GetThreadLocalView(hs, lstep.tid).globals;
-            var lg' := L.Armada_GetThreadLocalView(ls'.s, lstep.tid).globals;
-            var hg' := H.Armada_GetThreadLocalView(hs', lstep.tid).globals;
-            assert {ownershipPredicate}(ls, lstep.tid{fields.IndexList}) ==>
-                   LocalViewsMatchSpecific(ls.s, hs, lstep.tid{fields.IndexList});
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            requires hpath == ConvertAtomicPath_LH(lpath)
+            requires HAtomic_NextPath(hs, hs', hpath, tid)
+            requires tid in ls'.s.threads
+            requires tid in hs'.threads
+            requires {ownershipPredicate}(ls', tid{fields.IndexList})
+            ensures  LocalViewsMatchSpecific(ls'.s, hs', tid{fields.IndexList})
+          {{
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
+            { hpr.GetOpenValidPathInvocation(pathMap[atomicPath]) }
+            var lg := L.Armada_GetThreadLocalView(ls.s, tid).globals;
+            var hg := H.Armada_GetThreadLocalView(hs, tid).globals;
+            var lg' := L.Armada_GetThreadLocalView(ls'.s, tid).globals;
+            var hg' := H.Armada_GetThreadLocalView(hs', tid).globals;
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
+            ProofCustomizationGoesHere();
+            assert {{:error ""The TSO elimination strategy doesn't allow going directly from a state where one thread has ownership to one where a different thread has ownership.  The owning thread must take a step that releases ownership.""}} !{ownershipPredicate}(ls, tid{fields.IndexList}) ==> NoThreadOwns(ls{fields.IndexList});
+            assert {ownershipPredicate}(ls, tid{fields.IndexList}) ==> LocalViewsMatchSpecific(ls.s, hs, tid{fields.IndexList});
             lemma_IfStoreBufferLacksIndicesThenViewMatchesAlways_L({fields.IndexListWithoutLeadingComma});
             lemma_IfStoreBufferLacksIndicesThenViewMatchesAlways_H({fields.IndexListWithoutLeadingComma});
             lemma_IfVarUnchangedAndStoreBufferUnchangedThenViewUnchangedAlways_L({fields.IndexListWithoutLeadingComma});
             lemma_ApplyStoreBufferCommutesWithAppendAlways_L();
             lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_L({fields.IndexListWithoutLeadingComma});
-            assert ls'.s.mem == ls.s.mem && lstep.tid in ls.s.threads && ls'.s.threads[lstep.tid].storeBuffer == ls.s.threads[lstep.tid].storeBuffer ==> lg' == lg;
-            assert hs'.mem == hs.mem && lstep.tid in hs.threads && hs'.threads[lstep.tid].storeBuffer == hs.threads[lstep.tid].storeBuffer ==> hg' == hg;
-            if ValidIndices_L(lg'{fields.IndexList}) && ValidIndices_H(hg'{fields.IndexList}) && ValidIndices_L(lg{fields.IndexList}) && ValidIndices_H(hg{fields.IndexList}) {{
-              if lg'{fields.FieldSpec} == lg{fields.FieldSpec} {{
-                assert hg'{fields.FieldSpec} == hg{fields.FieldSpec};
-                assert hg{fields.FieldSpec} == lg{fields.FieldSpec};
-                assert lg'{fields.FieldSpec} == hg'{fields.FieldSpec};
+            assert ls'.s.mem == ls.s.mem && tid in ls.s.threads && ls'.s.threads[tid].storeBuffer == ls.s.threads[tid].storeBuffer ==> lg' == lg;
+            assert hs'.mem == hs.mem && tid in hs.threads && hs'.threads[tid].storeBuffer == hs.threads[tid].storeBuffer ==> hg' == hg;
+            if ValidIndices_L(lg{fields.IndexList}) && ValidIndices_H(hg{fields.IndexList}) {{
+              assert NoThreadOwns(ls{fields.IndexList}) ==> LocalViewsMatchSpecific(ls.s, hs, tid{fields.IndexList});
+              assert hg{fields.FieldSpec} == lg{fields.FieldSpec};
+        ";
+        for (var i = 1; i <= atomicPath.NumNextRoutines; ++i) {
+          str += $@"
+              var lg{i} := L.Armada_GetThreadLocalView(lstates.s{i}.s, tid).globals;
+              var hg{i} := H.Armada_GetThreadLocalView(hstates.s{i}, tid).globals;
+              if ValidIndices_L(lg{i}{fields.IndexList}) && ValidIndices_H(hg{i}{fields.IndexList}) {{
+                if lg{i}{fields.FieldSpec} == lg{fields.FieldSpec} {{
+                  assert hg{i}{fields.FieldSpec} == hg{fields.FieldSpec};
+                  assert lg{i}{fields.FieldSpec} == hg{i}{fields.FieldSpec};
+                }}
+                  else {{
+                  assert lg{i}{fields.FieldSpec} == hg{i}{fields.FieldSpec};
+                }}
               }}
-              else {{
-                assert lg'{fields.FieldSpec} == hg'{fields.FieldSpec};
-              }}
+          ";
+        }
+        str += $@"
+              assert lg' == lg{atomicPath.NumNextRoutines};
+              assert hg' == hg{atomicPath.NumNextRoutines};
             }}
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
+        pgp.AddLemma(str, "next_" + name);
 
         str = $@"
-          lemma lemma_RegularStepMaintainsOtherOwnersLocalViewsMatchSpecific_{nextRoutineName}(
+          lemma lemma_RegularPathMaintainsOtherOwnersLocalViewsMatchSpecific_{name}(
             ls: LPlusState,
             ls':LPlusState,
-            lstep: L.Armada_TraceEntry,
+            lpath: LAtomic_Path,
+            tid: Armada_ThreadHandle,
             hs: HState,
             hs': HState,
-            hstep: H.Armada_TraceEntry,
+            hpath: HAtomic_Path,
             other_tid:Armada_ThreadHandle{fields.IndexParamList}
             )
             requires InductiveInv(ls)
             requires NonOwnersLackStoreBufferEntries(ls)
             requires TotalStateMatchesExceptVar(ls.s, hs)
-            requires lstep.tid in ls.s.threads
-            requires lstep.tid in hs.threads
-            requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+            requires tid in ls.s.threads
+            requires tid in hs.threads
             requires GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList})
             requires OwnersLocalViewsMatch(ls, hs)
             requires HighLevelStoreBuffersLackVar(hs)
             requires ls.s.stop_reason.Armada_NotStopped?
             requires ls'.s.stop_reason.Armada_NotStopped?
             requires HighLevelStoreBuffersLackVar(hs')
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires !IsSkippedTauStep(ls.s, hs, lstep)
-            requires hstep == ConvertTraceEntry_LH(lstep)
-            requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-            requires H.Armada_NextOneStep(hs, hs', hstep)
+            requires LAtomic_NextPath(ls, ls', lpath, tid)
+            requires lpath.LAtomic_Path_{name}?
+            requires !IsSkippedTauPath(ls, hs, lpath, tid)
+            requires hpath == ConvertAtomicPath_LH(lpath)
+            requires HAtomic_NextPath(hs, hs', hpath, tid)
             requires other_tid in ls'.s.threads
             requires other_tid in hs'.threads
-            requires other_tid != lstep.tid
+            requires other_tid != tid
             requires {ownershipPredicate}(ls', other_tid{fields.IndexList})
-            requires !{ownershipPredicate}(ls', lstep.tid{fields.IndexList})
+            requires !{ownershipPredicate}(ls', tid{fields.IndexList})
             ensures  LocalViewsMatchSpecific(ls'.s, hs', other_tid{fields.IndexList})
           {{
-            assert {ownershipPredicate}(ls, other_tid{fields.IndexList});
+            { lpr.GetOpenValidPathInvocation(atomicPath) }
+            { hpr.GetOpenValidPathInvocation(pathMap[atomicPath]) }
+            lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVarAlways();
             var lg' := L.Armada_GetThreadLocalView(ls'.s, other_tid).globals;
             var hg' := H.Armada_GetThreadLocalView(hs', other_tid).globals;
             lemma_IfStoreBufferLacksIndicesThenViewMatchesAlways_L({fields.IndexListWithoutLeadingComma});
@@ -1713,55 +1685,54 @@ namespace Microsoft.Armada
             lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_L({fields.IndexListWithoutLeadingComma});
             lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_H({fields.IndexListWithoutLeadingComma});
             lemma_IfVarUnchangedAndStoreBufferUnchangedThenViewUnchangedAlways_L({fields.IndexListWithoutLeadingComma});
+            ProofCustomizationGoesHere();
             if ValidIndices_L(lg'{fields.IndexList}) && ValidIndices_H(hg'{fields.IndexList}) {{
               assert lg'{fields.FieldSpec} == hg'{fields.FieldSpec};
             }}
           }}
         ";
-        pgp.AddLemma(str, "next_" + nextRoutineName);
+        pgp.AddLemma(str, "next_" + name);
 
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
         finalCases += $@"
-          case Armada_TraceEntry_{nextRoutineName}(_{step_params}) =>
-            if any_tid == lstep.tid {{
-              lemma_RegularStepMaintainsActingOwnersLocalViewsMatchSpecific_{nextRoutineName}(ls, ls', lstep, hs, hs', hstep{fields.IndexList});
+          case LAtomic_Path_{name}(_) =>
+            if any_tid == tid {{
+              lemma_RegularPathMaintainsActingOwnersLocalViewsMatchSpecific_{name}(ls, ls', lpath, tid, hs, hs', hpath{fields.IndexList});
             }}
             else {{
-              lemma_RegularStepMaintainsOtherOwnersLocalViewsMatchSpecific_{nextRoutineName}(ls, ls', lstep, hs, hs', hstep, any_tid{fields.IndexList});
+              lemma_RegularPathMaintainsOtherOwnersLocalViewsMatchSpecific_{name}(ls, ls', lpath, tid, hs, hs', hpath, any_tid{fields.IndexList});
             }}
         ";
       }
 
       str = $@"
-        lemma lemma_RegularStepMaintainsOwnersLocalViewsMatch(
+        lemma lemma_RegularPathMaintainsOwnersLocalViewsMatch(
           ls: LPlusState,
           ls':LPlusState,
-          lstep: L.Armada_TraceEntry,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
           hs: HState,
           hs': HState,
-          hstep: H.Armada_TraceEntry
+          hpath: HAtomic_Path
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
+          requires InductiveInv(ls')
+          requires LiftingRelation(ls, hs)
           requires ls.s.stop_reason.Armada_NotStopped?
           requires ls'.s.stop_reason.Armada_NotStopped?
           requires HighLevelStoreBuffersLackVar(hs')
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          requires hstep == ConvertTraceEntry_LH(lstep)
-          requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          requires hpath == ConvertAtomicPath_LH(lpath)
+          requires HAtomic_NextPath(hs, hs', hpath, tid)
           ensures  OwnersLocalViewsMatch(ls', hs')
         {{
-          var tid := lstep.tid;
-          lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
-                                                                           hs.threads[tid].storeBuffer);
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
           forall any_tid{fields.IndexList}
-            | any_tid in ls'.s.threads && {ownershipPredicate}(ls', any_tid{fields.IndexList})
+            | any_tid in ls'.s.threads && any_tid in hs'.threads && {ownershipPredicate}(ls', any_tid{fields.IndexList})
             ensures LocalViewsMatchSpecific(ls'.s, hs', any_tid{fields.IndexList})
           {{
-            assert any_tid != lstep.tid ==> !{ownershipPredicate}(ls', lstep.tid{fields.IndexList});
-            match lstep {{
+            assert any_tid != tid ==> !{ownershipPredicate}(ls', tid{fields.IndexList});
+            match lpath {{
               { finalCases }
             }}
           }}
@@ -1770,95 +1741,103 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateRegularStepMaintainsIntermediateRelation()
+    private void GenerateRegularPathMaintainsLiftingRelation()
     {
       string str;
 
       str = @"
-        lemma lemma_RegularStepMaintainsIntermediateRelation(
+        lemma lemma_RegularPathMaintainsLiftingRelation(
           ls: LPlusState,
           ls':LPlusState,
-          lstep: L.Armada_TraceEntry,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
           hs: HState,
           hs': HState,
-          hstep: H.Armada_TraceEntry
+          hpath: HAtomic_Path
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires !IsSkippedTauStep(ls.s, hs, lstep)
-          requires hstep == ConvertTraceEntry_LH(lstep)
-          requires hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
-          ensures  IntermediateRelation(ls', hs')
+          requires InductiveInv(ls')
+          requires LiftingRelation(ls, hs)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires !IsSkippedTauPath(ls, hs, lpath, tid)
+          requires hpath == ConvertAtomicPath_LH(lpath)
+          requires HAtomic_NextPath(hs, hs', hpath, tid)
+          ensures  LiftingRelation(ls', hs')
         {
-          assert ls.s.stop_reason.Armada_NotStopped?;
-          lemma_RegularStepMaintainsTotalStateMatchesExceptVar(ls, ls', lstep, hs, hs', hstep);
+          lemma_LAtomic_PathImpliesThreadRunning(ls, lpath, tid);
+          lemma_RegularPathMaintainsTotalStateMatchesExceptVar(ls, ls', lpath, tid, hs, hs', hpath);
           if ls'.s.stop_reason.Armada_NotStopped? {
-            lemma_RegularStepMaintainsGlobalsNoThreadOwnsMatch(ls, ls', lstep, hs, hs', hstep);
-            lemma_RegularStepMaintainsHighLevelStoreBuffersLackVar(ls, ls', lstep, hs, hs', hstep);
-            lemma_RegularStepMaintainsOwnersLocalViewsMatch(ls, ls', lstep, hs, hs', hstep);
+            lemma_RegularPathMaintainsGlobalsNoThreadOwnsMatch(ls, ls', lpath, tid, hs, hs', hpath);
+            lemma_RegularPathMaintainsHighLevelStoreBuffersLackVar(ls, ls', lpath, tid, hs, hs', hpath);
+            lemma_RegularPathMaintainsOwnersLocalViewsMatch(ls, ls', lpath, tid, hs, hs', hpath);
           }
         }
       ";
       pgp.AddLemma(str);
     }
 
-    private void GenerateSkippedTauStepMaintainsRelation()
+    private void GenerateSkippedTauPathMaintainsRelation()
     {
       string str;
 
-      str = @"
-        lemma lemma_SkippedTauStepMaintainsTotalStateMatchesExceptVar(
-          ls:LPlusState,
-          ls':LPlusState,
-          lstep:L.Armada_TraceEntry,
-          hs:HState
+      var pr = new PrefixedVarsPathPrinter(lAtomic);
+
+      str = $@"
+        lemma lemma_SkippedTauPathMaintainsTotalStateMatchesExceptVar(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          hs: HState
           )
           requires InductiveInv(ls)
           requires TotalStateMatchesExceptVar(ls.s, hs)
-          requires lstep.tid in ls.s.threads
-          requires lstep.tid in hs.threads
-          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires IsSkippedTauStep(ls.s, hs, lstep)
+          requires tid in ls.s.threads
+          requires tid in hs.threads
+          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, tid), H.Armada_GetThreadLocalView(hs, tid))
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires IsSkippedTauPath(ls, hs, lpath, tid)
           ensures  TotalStateMatchesExceptVar(ls'.s, hs)
-        {
-        }
+        {{
+          { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+          ProofCustomizationGoesHere();
+        }}
       ";
       pgp.AddLemma(str);
 
-      str = @"
-        lemma lemma_SkippedTauStepMaintainsGlobalsNoThreadOwnsMatch(
-          ls:LPlusState,
-          ls':LPlusState,
-          lstep:L.Armada_TraceEntry,
-          hs:HState
+      str = $@"
+        lemma lemma_SkippedTauPathMaintainsGlobalsNoThreadOwnsMatch(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          hs: HState
           )
           requires InductiveInv(ls)
           requires TotalStateMatchesExceptVar(ls.s, hs)
-          requires lstep.tid in ls.s.threads
-          requires lstep.tid in hs.threads
-          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
+          requires tid in ls.s.threads
+          requires tid in hs.threads
+          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, tid), H.Armada_GetThreadLocalView(hs, tid))
           requires GlobalsNoThreadOwnsMatch(ls, hs)
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires IsSkippedTauStep(ls.s, hs, lstep)
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires IsSkippedTauPath(ls, hs, lpath, tid)
           ensures  GlobalsNoThreadOwnsMatch(ls', hs)
-        {
+        {{
+          { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+          ProofCustomizationGoesHere();
       ";
       if (fields.NumArrays > 0) {
         str += $"forall {fields.IndexListWithoutLeadingComma} ensures GlobalsNoThreadOwnsMatchSpecific(ls', hs{fields.IndexList}) {{\n";
       }
       str += $@"
-            var tid := lstep.tid;
             assert L.Armada_ApplyStoreBuffer(ls.s.mem, ls.s.threads[tid].storeBuffer) ==
                    L.Armada_ApplyStoreBuffer(ls'.s.mem, ls'.s.threads[tid].storeBuffer);
       
             if NoThreadOwns(ls'{fields.IndexList}) {{
-              forall tid | tid in ls.s.threads
-                ensures !{ownershipPredicate}(ls, tid{fields.IndexList})
+              forall any_tid | any_tid in ls.s.threads
+                ensures !{ownershipPredicate}(ls, any_tid{fields.IndexList})
               {{
-                assert !{ownershipPredicate}(ls', tid{fields.IndexList});
+                assert !{ownershipPredicate}(ls', any_tid{fields.IndexList});
               }}
               assert NoThreadOwns(ls{fields.IndexList});
       
@@ -1878,235 +1857,117 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = $@"
-        lemma lemma_SkippedTauStepMaintainsOwnersLocalViewsMatch(
-          ls:LPlusState,
-          ls':LPlusState,
-          lstep:L.Armada_TraceEntry,
-          hs:HState
+        lemma lemma_SkippedTauPathMaintainsOwnersLocalViewsMatch(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          hs: HState
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires lstep.tid in ls.s.threads
-          requires lstep.tid in hs.threads
-          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, lstep.tid), H.Armada_GetThreadLocalView(hs, lstep.tid))
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires IsSkippedTauStep(ls.s, hs, lstep)
+          requires LiftingRelation(ls, hs)
+          requires tid in ls.s.threads
+          requires tid in hs.threads
+          requires SharedMemoryMatchesExceptVar(L.Armada_GetThreadLocalView(ls.s, tid), H.Armada_GetThreadLocalView(hs, tid))
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires IsSkippedTauPath(ls, hs, lpath, tid)
           ensures  OwnersLocalViewsMatch(ls', hs);
         {{
-          var tid := lstep.tid;
+          { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+          ProofCustomizationGoesHere();
           assert L.Armada_ApplyStoreBuffer(ls.s.mem, ls.s.threads[tid].storeBuffer) ==
                  L.Armada_ApplyStoreBuffer(ls'.s.mem, ls'.s.threads[tid].storeBuffer);
       
           forall any_tid{fields.IndexList} | any_tid in ls'.s.threads && {ownershipPredicate}(ls', any_tid{fields.IndexList})
             ensures LocalViewsMatchSpecific(ls'.s, hs, any_tid{fields.IndexList})
           {{
-            if {ownershipPredicate}(ls', any_tid{fields.IndexList}) {{
-              assert {ownershipPredicate}(ls, any_tid{fields.IndexList});
-              assert LocalViewsMatchSpecific(ls.s, hs, any_tid{fields.IndexList});
-              lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_L({fields.IndexListWithoutLeadingComma});
-              lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_H({fields.IndexListWithoutLeadingComma});
-              lemma_IfVarUnchangedAndStoreBufferUnchangedThenViewUnchangedAlways_L({fields.IndexListWithoutLeadingComma});
+            assert {ownershipPredicate}(ls, any_tid{fields.IndexList});
+            assert LocalViewsMatchSpecific(ls.s, hs, any_tid{fields.IndexList});
+            lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_L({fields.IndexListWithoutLeadingComma});
+            lemma_ValidIndicesUnaffectedByApplyStoreBufferAlways_H({fields.IndexListWithoutLeadingComma});
+            lemma_IfVarUnchangedAndStoreBufferUnchangedThenViewUnchangedAlways_L({fields.IndexListWithoutLeadingComma});
+            var loc := ls.s.threads[tid].storeBuffer[0].loc;
+            if StoreBufferLocationConcernsIndices_L(loc{fields.IndexList}) {{
+              assert LocalViewsMatchSpecific(ls'.s, hs, any_tid{fields.IndexList});
+            }}
+            else {{
+              assert LocalViewsMatchSpecific(ls'.s, hs, any_tid{fields.IndexList});
             }}
           }}
         }}
       ";
       pgp.AddLemma(str);
 
-      str = @"
-        lemma lemma_SkippedTauStepMaintainsRelation(
-          ls:LPlusState,
-          ls':LPlusState,
-          lstep:L.Armada_TraceEntry,
-          hs:HState
+      str = $@"
+        lemma lemma_SkippedTauPathMaintainsRelation(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          hs: HState
           )
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires lstep.tid in ls.s.threads
-          requires lstep.tid in hs.threads
-          requires LPlus_NextOneStep(ls, ls', lstep)
-          requires IsSkippedTauStep(ls.s, hs, lstep)
-          ensures  IntermediateRelation(ls', hs)
-        {
-          var tid := lstep.tid;
+          requires LiftingRelation(ls, hs)
+          requires tid in ls.s.threads
+          requires tid in hs.threads
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires IsSkippedTauPath(ls, hs, lpath, tid)
+          ensures  LiftingRelation(ls', hs)
+        {{
+          { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
           lemma_GlobalsMatchExceptVarImpliesLocalViewGlobalsMatchExceptVar(ls.s.mem, hs.mem, ls.s.threads[tid].storeBuffer,
                                                                            hs.threads[tid].storeBuffer);
-          lemma_SkippedTauStepMaintainsTotalStateMatchesExceptVar(ls, ls', lstep, hs);
-          if ls'.s.stop_reason.Armada_NotStopped? {
-            lemma_SkippedTauStepMaintainsGlobalsNoThreadOwnsMatch(ls, ls', lstep, hs);
-            lemma_SkippedTauStepMaintainsOwnersLocalViewsMatch(ls, ls', lstep, hs);
-          }
-        }
+          lemma_SkippedTauPathMaintainsTotalStateMatchesExceptVar(ls, ls', lpath, tid, hs);
+          ProofCustomizationGoesHere();
+          if ls'.s.stop_reason.Armada_NotStopped? {{
+            lemma_SkippedTauPathMaintainsGlobalsNoThreadOwnsMatch(ls, ls', lpath, tid, hs);
+            lemma_SkippedTauPathMaintainsOwnersLocalViewsMatch(ls, ls', lpath, tid, hs);
+          }}
+        }}
       ";
       pgp.AddLemma(str);
     }
 
-    private void GenerateStepMaintainsRelation()
+    protected override void GenerateEstablishAtomicPathLiftableLemma()
     {
-      string str;
-
-      str = @"
-        lemma lemma_StepSequenceLiftable(ls:LPlusState, ls':LPlusState, lsteps:seq<L.Armada_TraceEntry>, hs:HState)
-          requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), ls, ls', lsteps)
-          ensures  var hsteps := ConvertAndSuppressSteps(ls.s, hs, lsteps);
-                   var hs' := ApplySteps_H(hs, hsteps);
-                   Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), hs, hs', hsteps)
-          decreases |lsteps|
-        {
-          if |lsteps| > 0 {
-            var ls_next := LPlus_GetNextStateAlways(ls, lsteps[0]);
-            lemma_NextOneStepMaintainsInductiveInv(ls, ls_next, lsteps[0]);
-            if IsSkippedTauStep(ls.s, hs, lsteps[0]) {
-              lemma_SkippedTauStepMaintainsRelation(ls, ls_next, lsteps[0], hs);
-              lemma_StepSequenceLiftable(ls_next, ls', lsteps[1..], hs);
-            }
-            else {
-              var hstep := ConvertTraceEntry_LH(lsteps[0]);
-              var hs_next := H.Armada_GetNextStateAlways(hs, hstep);
-              lemma_RegularStepLiftable(ls, ls_next, lsteps[0], hs);
-              lemma_RegularStepMaintainsIntermediateRelation(ls, ls_next, lsteps[0], hs, hs_next, hstep);
-              lemma_StepSequenceLiftable(ls_next, ls', lsteps[1..], hs_next);
-            }
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_StepSequenceMaintainsIntermediateRelation(
+      string str = @"
+        lemma lemma_EstablishAtomicPathLiftable(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
           ls: LPlusState,
-          ls':LPlusState,
-          lsteps: seq<L.Armada_TraceEntry>,
-          hs: HState,
-          hs': HState,
-          hsteps: seq<H.Armada_TraceEntry>,
+          lpath: LAtomic_Path,
           tid: Armada_ThreadHandle,
-          lpstates: seq<LPlusState>,
-          hstates: seq<HState>
+          hs: HState
+          ) returns (
+          hpath: HAtomic_Path
           )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
           requires InductiveInv(ls)
-          requires IntermediateRelation(ls, hs)
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), ls, ls', lsteps)
-          requires hsteps == ConvertAndSuppressSteps(ls.s, hs, lsteps)
-          requires hs' == ApplySteps_H(hs, hsteps)
-          requires Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), hs, hs', hsteps)
-          requires forall step :: step in lsteps ==> step.tid == tid
-          requires lpstates == Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls, lsteps)
-          requires forall i :: 0 < i < |lsteps| ==> !Armada_ThreadYielding(LPlus_GetSpecFunctions(), lpstates[i], tid)
-          requires hstates == Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps);
-          ensures  IntermediateRelation(ls', hs')
-          ensures  forall i :: 0 < i < |hsteps| ==> !Armada_ThreadYielding(H.Armada_GetSpecFunctions(), hstates[i], tid)
-          decreases |lsteps|
+          requires LiftingRelation(ls, hs)
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          requires !AtomicPathSkippable(lasf, InductiveInv, LiftingRelation, ls, lpath, tid, hs)
+          ensures  LiftAtomicPathSuccessful(lasf, hasf, InductiveInv, LiftingRelation, ls, lpath, tid, hs, hpath)
         {
-          if |lsteps| > 0 {
-            var ls_next := LPlus_GetNextStateAlways(ls, lsteps[0]);
-            lemma_NextOneStepMaintainsInductiveInv(ls, ls_next, lsteps[0]);
-
-            // Help prove the inductive requirement
-            var lpstates' := Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls_next, lsteps[1..]); 
-            forall i | 0 < i < |lsteps[1..]| 
-              ensures !Armada_ThreadYielding(LPlus_GetSpecFunctions(), lpstates'[i], tid)
-            {
-              var j := i+1;
-              assert 0 < j < |lsteps|;
-              assert !Armada_ThreadYielding(LPlus_GetSpecFunctions(), lpstates[j], tid);
-              assert lpstates'[i] == lpstates[i+1]; // OBSERVE: Help with sequence reasoning
-            }
-
-            if IsSkippedTauStep(ls.s, hs, lsteps[0]) {
-              lemma_SkippedTauStepMaintainsRelation(ls, ls_next, lsteps[0], hs);
-              lemma_StepSequenceMaintainsIntermediateRelation(ls_next, ls', lsteps[1..], hs, hs', hsteps, tid,
-                                                              Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls_next, lsteps[1..]), hstates);
-            }
-            else {
-              var hstep := ConvertTraceEntry_LH(lsteps[0]);
-              var hs_next := H.Armada_GetNextStateAlways(hs, hstep);
-              assert hstep == hsteps[0];
-              lemma_RegularStepMaintainsIntermediateRelation(ls, ls_next, lsteps[0], hs, hs_next, hstep);
-              lemma_StepSequenceMaintainsIntermediateRelation(ls_next, ls', lsteps[1..], hs_next, hs', hsteps[1..], tid,
-                                                              Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls_next, lsteps[1..]),
-                                                              Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs_next, hsteps[1..]));
-              var lstates := Armada_GetStateSequence(L.Armada_GetSpecFunctions(), ls.s, lsteps);
-              forall i | 0 < i < |hsteps|
-                ensures !Armada_ThreadYielding(H.Armada_GetSpecFunctions(), hstates[i], tid)
-              {
-                var hstates' := Armada_GetStateSequence(H.Armada_GetSpecFunctions(), H.Armada_GetNextStateAlways(hs, hsteps[0]), hsteps[1..]);
-                if i == 1 { 
-                  assert lstates[i] == Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls, lsteps)[i].s;  // OBSERVE: Trigger a postcondition of LPlusSpec_GetStateSequence
-                } else {
-                  assert hstates[i] == hstates'[i-1];   // OBSERVE: Help with sequence reasoning
-                } 
-              }
-            }
+          var inv := InductiveInv;
+          var relation := LiftingRelation;
+          var ls' := lasf.path_next(ls, lpath, tid);
+          if IsSkippedTauPath(ls, hs, lpath, tid) {
+            lemma_SkippedTauPathMaintainsRelation(ls, ls', lpath, tid, hs);
+            lemma_AtomicPathMaintainsInductiveInv(ls, ls', lpath, tid);
+            lemma_LAtomic_PathHasPCEffect_Tau(ls, lpath, tid);
+            assert AtomicPathSkippable(lasf, inv, relation, ls, lpath, tid, hs);
+            assert false;
           }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_StepMaintainsRelation(ter:TERequest)
-          requires ter == GetTSOEliminationRequest()
-          ensures  StepMaintainsRelation(ter)
-        {
-          forall ls, ls', lstep, hs |
-            && ter.inv(ls)
-            && ter.intermediate_relation(ls, hs)
-            && ActionTuple(ls, ls', lstep) in ter.lspec.next
-            ensures var hstep := ter.step_refiner(ls, hs, lstep);
-                    var hs' := ter.next_state(hs, hstep);
-                    && ActionTuple(hs, hs', hstep) in ter.hspec.next
-                    && ter.intermediate_relation(ls', hs')
-          {
-            var hstep := ter.step_refiner(ls, hs, lstep);
-            var hs' := ter.next_state(hs, hstep);
-            lemma_StepSequenceLiftable(ls, ls', lstep.steps, hs);
-            lemma_StepSequenceMaintainsIntermediateRelation(ls, ls', lstep.steps, hs, hs', hstep.steps, lstep.tid,
-                                                            Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls, lstep.steps),
-                                                            Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hstep.steps));
-            lemma_ConvertAndSuppressStepsMaintainsMatching(ls.s, hs, lstep.tau, lstep.tid, lstep.steps);
-            assert H.Armada_Next(hs, hs', hstep); // OBSERVE
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateValidRequestLemma()
-    {
-      string str = @"
-        lemma lemma_ValidTSOEliminationRequest(ter:TERequest)
-          requires ter == GetTSOEliminationRequest()
-          ensures  ValidTSOEliminationRequest(ter);
-        {
-          lemma_InitialConditionsHold(ter);
-          lemma_InductiveInvIsInvariant();
-          lemma_IntermediateRelationImpliesRelation(ter);
-          lemma_StepMaintainsRelation(ter);
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateFinalProof()
-    {
-      string str = @"
-        lemma lemma_ProveRefinementViaTSOElimination()
-          ensures SpecRefinesSpec(L.Armada_Spec(), H.Armada_Spec(), GetLHRefinementRelation())
-        {
-          var lspec := L.Armada_Spec();
-          var hspec := H.Armada_Spec();
-          var ter := GetTSOEliminationRequest();
-    
-          forall lb | BehaviorSatisfiesSpec(lb, lspec)
-            ensures BehaviorRefinesSpec(lb, hspec, GetLHRefinementRelation())
-          {
-            var alb := lemma_GetLPlusAnnotatedBehavior(lb);
-            lemma_ValidTSOEliminationRequest(ter);
-            var ahb := lemma_PerformTSOElimination(ter, alb);
-            assert BehaviorRefinesBehavior(alb.states, ahb.states, ter.relation);
-            lemma_IfLPlusBehaviorRefinesBehaviorThenLBehaviorDoes(lb, alb.states, ahb.states);
-            lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes(ahb);
+          else {
+            var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
+            lemma_AtomicPathMaintainsInductiveInv(ls, ls', lpath,  tid);
+            assert inv(ls');
+            hpath := ConvertAtomicPath_LH(lpath);
+            lemma_RegularPathLiftable(ls, ls', lpath, tid, hs);
+            var hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+            lemma_RegularPathMaintainsLiftingRelation(ls, ls', lpath, tid, hs, hs', hpath);
+            assert LiftAtomicPathSuccessful(lasf, hasf, inv, relation, ls, lpath, tid, hs, hpath);
           }
         }
       ";

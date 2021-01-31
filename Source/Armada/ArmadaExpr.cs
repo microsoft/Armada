@@ -28,39 +28,37 @@ namespace Microsoft.Armada {
     public virtual bool NoTSO() { return false; }
 
     public abstract UndefinedBehaviorAvoidanceConstraint GetUndefinedBehaviorAvoidanceConstraint();
-    public abstract Expression GetAddress();
+    public abstract string GetAddress();
 
-    public virtual Expression GetValueInLValueState(ResolutionContext context)
+    public virtual string GetValueInLValueState(ResolutionContext context)
     {
       context.Fail("Internal error:  GetValueInLValueState not supported");
       return null;
     }
 
-    public abstract Expression GetStoreBufferLocation();
+    public abstract string GetStoreBufferLocation();
 
-    public Expression GetStoreBufferEntry(Expression val_new)
+    public string GetStoreBufferEntry(string val_new, ArmadaPC pc)
     {
       var loc = GetStoreBufferLocation();
       if (loc == null) {
         return null;
       }
-      var primitive_value_constructor = AH.MakeNameSegment(AH.GetPrimitiveValueConstructorName(val_new.Type), "Armada_PrimitiveValue");
-      var boxed_val_new = AH.MakeApply1(primitive_value_constructor, val_new, "Armada_PrimitiveValue");
-      return AH.MakeApply2("Armada_StoreBufferEntry", loc, boxed_val_new, "Armada_StoreBufferEntry");
+      return $"Armada_StoreBufferEntry({loc}, {AH.GetPrimitiveValueConstructorName(type)}({val_new}), {pc.ToString()})";
     }
 
-    public abstract Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new);
+    public abstract string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new);
 
-    public Expression UpdateTotalStateBypassingStoreBuffer(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                           Expression val_new)
+    public string UpdateTotalStateBypassingStoreBuffer(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                       string val_new)
     {
       var s_current = UpdateTotalStateLocationDirectly(context, constraintCollector, val_new);
       return s_current;
     }
 
-    public Expression UpdateTotalStateWithStoreBufferEntry(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                           Expression val_new)
+    public string UpdateTotalStateWithStoreBufferEntry(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                       string val_new, ArmadaPC pc)
     {
       if (NoTSO()) {
         return UpdateTotalStateLocationDirectly(context, constraintCollector, val_new);
@@ -71,17 +69,17 @@ namespace Microsoft.Armada {
         return null;
       }
 
-      var entry = GetStoreBufferEntry(val_new);
+      var entry = GetStoreBufferEntry(val_new, pc);
       if (entry == null) {
         context.Fail(tok, "Can't do a TSO write to that location; try using ::= instead of :=");
         return null;
       }
 
-      return AH.MakeApply3("Armada_AppendToThreadStoreBuffer", context.GetLValueState(), context.tid, entry, "Armada_TotalState");
+      return $"Armada_AppendToThreadStoreBuffer({context.GetLValueState()}, {context.tid}, {entry})";
     }
 
     public abstract ArmadaLValue ApplyExprDotName(IToken i_tok, ResolutionContext context, string fieldName, Type ty);
-    public abstract ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type ty);
+    public abstract ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type indexType, Type exprType);
   }
 
   public class AddressableArmadaLValue : ArmadaLValue
@@ -98,23 +96,22 @@ namespace Microsoft.Armada {
     public override bool NoTSO() { return false; }
 
     public override UndefinedBehaviorAvoidanceConstraint GetUndefinedBehaviorAvoidanceConstraint() { return address.UndefinedBehaviorAvoidance; }
-    public override Expression GetAddress() { return address.Val; }
+    public override string GetAddress() { return address.Val; }
 
-    public override Expression GetStoreBufferLocation()
+    public override string GetStoreBufferLocation()
     {
       if (!AH.IsPrimitiveType(type)) {
         return null;
       }
 
-      return AH.MakeApply1("Armada_StoreBufferLocation_Addressable", address.Val, "Armada_StoreBufferLocation");
+      return $"Armada_StoreBufferLocation_Addressable({address.Val})";
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
       var s = context.GetLValueState();
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
+      var h = $"({s}).mem.heap";
       var valid = AH.GetInvocationOfValidPointer(h, address.Val, type);
       if (valid == null) {
         constraintCollector.Fail(tok, $"Type {type} is currently not supported in the heap");
@@ -123,16 +120,15 @@ namespace Microsoft.Armada {
         constraintCollector.AddUndefinedBehaviorAvoidanceConstraint(valid);
       }
 
-      var h_new = AH.GetInvocationOfUpdatePointer(h, address.Val, val_new);
+      var h_new = AH.GetInvocationOfUpdatePointer(h, address.Val, val_new, type);
       if (h_new == null) {
         constraintCollector.Fail(tok, $"Type {type} is currently not supported in the heap");
       }
 
-      var mem_new = AH.MakeDatatypeUpdateExpr(mem, "heap", h_new);
-      return AH.MakeDatatypeUpdateExpr(s, "mem", mem_new);
+      return $"{s}.(mem := {s}.mem.(heap := {h_new}))";
     }
 
-    public override ArmadaLValue ApplyExprDotName(IToken i_tok, ResolutionContext context, string fieldName, Type ty)
+    public override ArmadaLValue ApplyExprDotName(IToken i_tok, ResolutionContext context, string fieldName, Type targetType)
     {
       if (!(type is UserDefinedType)) {
         context.Fail(i_tok, $"Attempt to take a field ({fieldName}) of non-struct type {type}");
@@ -148,57 +144,44 @@ namespace Microsoft.Armada {
         context.Fail(i_tok, $"Attempt to take non-existent field ({fieldName}) in struct type {ut.Name}");
         return null;
       }
-      if (!AH.TypesMatch(fieldType, ty)) {
-        context.Fail(i_tok, $"Field {fieldName} of type {fieldType} used as type {ty}");
+      if (!AH.TypesMatch(fieldType, targetType)) {
+        context.Fail(i_tok, $"Field {fieldName} of type {fieldType} used as type {targetType}");
         return null;
       }
 
       var crashAvoidance = address.UndefinedBehaviorAvoidance;
 
       var s = context.GetLValueState();
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      crashAvoidance.Add(AH.MakeInExpr(address.Val, tree));
+      var h = $"({s}).mem.heap";
+      int fieldPos = context.symbols.GetStructFieldPos(ut.Name, fieldName);
+      crashAvoidance.Add($"{address.Val} in {h}.tree");
+      crashAvoidance.Add($"0 <= {fieldPos} < |{h}.tree[{address.Val}].children|");
 
-      var node = AH.MakeSeqSelectExpr(tree, address.Val, "Armada_Node");
-      var children = AH.MakeExprDotName(node, "children", AH.MakeChildrenType());
-      var field = AH.MakeApply1("Armada_FieldStruct",
-                                AH.MakeNameSegment($"Armada_FieldType_{ut.Name}'{fieldName}", "Armada_FieldType"),
-                                "Armada_Field");
-      var child = AH.MakeSeqSelectExpr(children, field, new PointerType(fieldType));
-      crashAvoidance.Add(AH.MakeInExpr(field, children));
-
+      var child = $"{h}.tree[{address.Val}].children[{fieldPos}]";
       return new AddressableArmadaLValue(i_tok, fieldType, new ArmadaRValue(crashAvoidance, child));
     }
 
-    public override ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type ty)
+    public override ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type indexType, Type exprType)
     {
       if (!(type is SizedArrayType)) {
         context.Fail(i_tok, "Attempt to obtain element of non-array type");
         return null;
       }
       SizedArrayType st = (SizedArrayType)type;
-      if (!AH.TypesMatch(st.Range, ty)) {
-        context.Fail(i_tok, $"Element of type {st.Range} used as type {ty}");
+      if (!AH.TypesMatch(st.Range, exprType)) {
+        context.Fail(i_tok, $"Element of type {st.Range} used as type {exprType}");
         return null;
       }
 
       var crashAvoidance = address.UndefinedBehaviorAvoidance + idx1.UndefinedBehaviorAvoidance;
 
       var s = context.GetLValueState();
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      crashAvoidance.Add(AH.MakeInExpr(address.Val, tree));
+      var h = $"({s}).mem.heap";
+      var idx1_as_int = AH.ConvertToIntIfNotInt(idx1.Val, indexType);
+      crashAvoidance.Add($"{address.Val} in {h}.tree");
+      crashAvoidance.Add($"0 <= {idx1_as_int} < |{h}.tree[{address.Val}].children|");
 
-      var node = AH.MakeSeqSelectExpr(tree, address.Val, "Armada_Node");
-      var children = AH.MakeExprDotName(node, "children", AH.MakeChildrenType());
-      var idx1_as_int = AH.ConvertToIntIfNotInt(idx1.Val);
-      var field = AH.MakeApply1("Armada_FieldArrayIndex", idx1_as_int, "Armada_Field");
-      var child = AH.MakeSeqSelectExpr(children, field, new PointerType(st.Range));
-      crashAvoidance.Add(AH.MakeInExpr(field, children));
-
+      var child = $"{h}.tree[{address.Val}].children[{idx1_as_int}]";
       return new AddressableArmadaLValue(i_tok, st.Range, new ArmadaRValue(crashAvoidance, child));
     }
   }
@@ -217,24 +200,24 @@ namespace Microsoft.Armada {
       return crashAvoidance;
     }
 
-    public override Expression GetAddress() { return null; }
+    public override string GetAddress() { return null; }
 
-    public abstract Expression GetStoreBufferLocationInfo(ref List<Expression> fields);
+    public abstract string GetStoreBufferLocationInfo(ref List<string> fields);
 
-    public override Expression GetStoreBufferLocation()
+    public override string GetStoreBufferLocation()
     {
       if (!AH.IsPrimitiveType(type)) {
         return null;
       }
 
-      var fields = new List<Expression>();
+      var fields = new List<string>();
       var v = GetStoreBufferLocationInfo(ref fields);
       if (v == null) {
         return null;
       }
 
-      var fields_seq = new SeqDisplayExpr(Token.NoToken, fields);
-      return AH.MakeApply2("Armada_StoreBufferLocation_Unaddressable", v, fields_seq, "Armada_StoreBufferLocation");
+      var fields_seq = String.Join(", ", fields);
+      return $"Armada_StoreBufferLocation_Unaddressable({v}, [{fields_seq}])";
     }
 
     public override ArmadaLValue ApplyExprDotName(IToken i_tok, ResolutionContext context, string fieldName, Type ty)
@@ -245,6 +228,7 @@ namespace Microsoft.Armada {
       }
 
       UserDefinedType ut = (UserDefinedType)type;
+      int fieldPos = 0;
       if (context.symbols.DoesStructExist(ut.Name)) {
         Type fieldType = context.symbols.GetStructFieldType(ut.Name, fieldName);
         if (fieldType == null) {
@@ -255,68 +239,75 @@ namespace Microsoft.Armada {
           context.Fail(i_tok, $"Field {fieldName} of type {fieldType} used as type {ty}");
           return null;
         }
+        fieldPos = context.symbols.GetStructFieldPos(ut.Name, fieldName);
       }
 
-      return new UnaddressableFieldArmadaLValue(i_tok, ty, this, crashAvoidance, fieldName, false);
+      return new UnaddressableFieldArmadaLValue(i_tok, ty, this, crashAvoidance, fieldName, fieldPos, false);
     }
 
-    public override ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type ty)
+    public override ArmadaLValue ApplySeqSelect(IToken i_tok, ResolutionContext context, ArmadaRValue idx1, Type indexType, Type exprType)
     {
       var me = GetValueInLValueState(context);
-      var sz = AH.MakeCardinalityExpr(me);
+      var sz = $"|{me}|";
 
       var newUndefinedBehaviorAvoidance = GetUndefinedBehaviorAvoidanceConstraint() + idx1.UndefinedBehaviorAvoidance;
 
-      var idx1val = AH.ConvertToIntIfNotInt(idx1.Val);
+      var idx1val = AH.ConvertToIntIfNotInt(idx1.Val, indexType);
 
       if (type is SizedArrayType) {
         SizedArrayType st = (SizedArrayType)type;
-        if (!AH.TypesMatch(st.Range, ty)) {
-          context.Fail(i_tok, $"Element of type {st.Range} used as type {ty}");
+        if (!AH.TypesMatch(st.Range, exprType)) {
+          context.Fail(i_tok, $"Element of type {st.Range} used as type {exprType}");
           return null;
         }
 
-        newUndefinedBehaviorAvoidance.Add(AH.MakeLeExpr(AH.MakeZero(), idx1val));
-        newUndefinedBehaviorAvoidance.Add(AH.MakeLtExpr(idx1val, sz));
+        newUndefinedBehaviorAvoidance.Add($"0 <= {idx1val} < {sz}");
       }
       else if (type is SeqType) {
-        newUndefinedBehaviorAvoidance.Add(AH.MakeLeExpr(AH.MakeZero(), idx1val));
-        newUndefinedBehaviorAvoidance.Add(AH.MakeLtExpr(idx1val, sz));
+        newUndefinedBehaviorAvoidance.Add($"0 <= {idx1val} < {sz}");
       }
       else if (type is MapType) {
-        newUndefinedBehaviorAvoidance.Add(AH.MakeInExpr(idx1val, me));
+        // There's no need to consider it undefined behavior if idx1.Val isn't in this map, since we're just
+        // using it as an lvalue.  It's fine to update an element of a map that isn't yet in its domain.
+        // So we don't need to do:
+        //   newUndefinedBehaviorAvoidance.Add($"({idx1.Val}) in ({me})");
+        return new UnaddressableIndexArmadaLValue(i_tok, exprType, this, newUndefinedBehaviorAvoidance, idx1.Val);
       }
       else {
         context.Fail(i_tok, $"Attempt to index into something that isn't an array, seq, or map");
         return null;
       }
 
-      return new UnaddressableIndexArmadaLValue(i_tok, ty, this, newUndefinedBehaviorAvoidance, idx1val);
+      return new UnaddressableIndexArmadaLValue(i_tok, exprType, this, newUndefinedBehaviorAvoidance, idx1val);
     }
   }
 
-  public class TopStackFrameArmadaLValue : UnaddressableArmadaLValue
+  public class TopStackVarsArmadaLValue : UnaddressableArmadaLValue
   {
-    public TopStackFrameArmadaLValue(UndefinedBehaviorAvoidanceConstraint i_crashAvoidance) : base(Token.NoToken, AH.ReferToType("Armada_StackFrame"), i_crashAvoidance)
+    private string methodName;
+
+    public TopStackVarsArmadaLValue(UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, string i_methodName)
+      : base(Token.NoToken, AH.ReferToType($"Armada_StackVars_{i_methodName}"), i_crashAvoidance)
     {
+      methodName = i_methodName;
     }
 
     public override bool NoTSO() { return true; }
 
-    public override Expression GetValueInLValueState(ResolutionContext context)
+    public override string GetValueInLValueState(ResolutionContext context)
     {
-      return context.GetLValueTopStackFrame();
+      return $"({context.GetLValueTopStackFrame()}).{methodName}";
     }
 
-    public override Expression GetStoreBufferLocationInfo(ref List<Expression> fields)
+    public override string GetStoreBufferLocationInfo(ref List<string> fields)
     {
       return null;
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
-      return AH.MakeApply3("Armada_UpdateTSFrame", context.GetLValueState(), context.tid, val_new, "Armada_TotalState");
+      return $"Armada_UpdateTSFrame({context.GetLValueState()}, {context.tid}, Armada_StackFrame_{methodName}({val_new}))";
     }
   }
 
@@ -326,25 +317,21 @@ namespace Microsoft.Armada {
 
     public override bool NoTSO() { return false; }
 
-    public override Expression GetValueInLValueState(ResolutionContext context)
+    public override string GetValueInLValueState(ResolutionContext context)
     {
-      var s = context.GetLValueState();
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      return AH.MakeExprDotName(mem, "globals", "Armada_Globals");
+      return $"({context.GetLValueState()}).mem.globals";
     }
 
-    public override Expression GetStoreBufferLocationInfo(ref List<Expression> fields)
+    public override string GetStoreBufferLocationInfo(ref List<string> fields)
     {
       return null;
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
       var s = context.GetLValueState();
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      var mem_new = AH.MakeDatatypeUpdateExpr(mem, "globals", val_new);
-      return AH.MakeDatatypeUpdateExpr(s, "mem", mem_new);
+      return $"({s}).(mem := ({s}).mem.(globals := {val_new}))";
     }
   }
 
@@ -354,22 +341,20 @@ namespace Microsoft.Armada {
 
     public override bool NoTSO() { return true; }
 
-    public override Expression GetValueInLValueState(ResolutionContext context)
+    public override string GetValueInLValueState(ResolutionContext context)
     {
-      var s = context.GetLValueState();
-      return AH.MakeExprDotName(s, "ghosts", "Armada_Ghosts");
+      return $"({context.GetLValueState()}).ghosts";
     }
 
-    public override Expression GetStoreBufferLocationInfo(ref List<Expression> fields)
+    public override string GetStoreBufferLocationInfo(ref List<string> fields)
     {
       return null;
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
-      var s = context.GetLValueState();
-      return AH.MakeDatatypeUpdateExpr(s, "ghosts", val_new);
+      return $"({context.GetLValueState()}).(ghosts := {val_new})";
     }
   }
 
@@ -377,33 +362,37 @@ namespace Microsoft.Armada {
   {
     private readonly UnaddressableArmadaLValue parent;
     private readonly string fieldName;
+    private readonly int fieldPos;
     public readonly bool noTSO;
 
     public UnaddressableFieldArmadaLValue(IToken i_tok, Type i_type, UnaddressableArmadaLValue i_parent,
-                                          UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, string i_fieldName, bool i_noTSO)
+                                          UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, string i_fieldName,
+                                          int i_fieldPos, bool i_noTSO)
       : base(i_tok, i_type, i_crashAvoidance)
     {
       parent = i_parent;
       fieldName = i_fieldName;
+      fieldPos = i_fieldPos;
       noTSO = i_noTSO;
     }
 
     public UnaddressableArmadaLValue GetParent() { return parent; }
     public string GetFieldName() { return fieldName; }
+    public int GetFieldPos() { return fieldPos; }
 
     public override bool NoTSO() { return noTSO || parent.NoTSO(); }
 
-    public override Expression GetValueInLValueState(ResolutionContext context)
+    public override string GetValueInLValueState(ResolutionContext context)
     {
-      return AH.SetExprType(new ExprDotName(tok, parent.GetValueInLValueState(context), fieldName, null), type);
+      return $"({parent.GetValueInLValueState(context)}).{fieldName}";
     }
 
-    public override Expression GetStoreBufferLocationInfo(ref List<Expression> fields) {
+    public override string GetStoreBufferLocationInfo(ref List<string> fields) {
       if (parent.NoTSO()) {
         return null;
       }
       if (parent is GlobalsArmadaLValue) {
-        return AH.MakeNameSegment($"Armada_GlobalStaticVar_{fieldName}", "Armada_GlobalStaticVar");
+        return $"Armada_GlobalStaticVar_{fieldName}";
       }
       else if (!(parent.Type is UserDefinedType)) {
         return null;
@@ -414,18 +403,16 @@ namespace Microsoft.Armada {
         if (ret == null) {
           return null;
         }
-        var struct_field_type = AH.MakeNameSegment($"Armada_FieldType_{ut.Name}'{fieldName}", "Armada_FieldType");
-        var field = AH.MakeApply1("Armada_FieldStruct", struct_field_type, "Armada_Field");
-        fields.Add(field);
+        fields.Add($"{fieldPos}");
         return ret;
       }
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
-      Expression parent_val_old = parent.GetValueInLValueState(context);
-      Expression parent_val_new = AH.MakeDatatypeUpdateExpr(tok, parent_val_old, fieldName, val_new);
+      string parent_val_old = parent.GetValueInLValueState(context);
+      string parent_val_new = $"({parent_val_old}).({fieldName} := {val_new})";
       return parent.UpdateTotalStateLocationDirectly(context, constraintCollector, parent_val_new);
     }
   }
@@ -433,10 +420,10 @@ namespace Microsoft.Armada {
   public class UnaddressableIndexArmadaLValue : UnaddressableArmadaLValue
   {
     private UnaddressableArmadaLValue parent;
-    private Expression index;
+    private string index;
 
     public UnaddressableIndexArmadaLValue(IToken i_tok, Type i_type, UnaddressableArmadaLValue i_parent,
-                                          UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, Expression i_index)
+                                          UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, string i_index)
       : base(i_tok, i_type, i_crashAvoidance)
     {
       parent = i_parent;
@@ -444,16 +431,16 @@ namespace Microsoft.Armada {
     }
 
     public UnaddressableArmadaLValue GetParent() { return parent; }
-    public Expression GetIndex() { return index; }
+    public string GetIndex() { return index; }
 
     public override bool NoTSO() { return parent.NoTSO(); }
 
-    public override Expression GetValueInLValueState(ResolutionContext context)
+    public override string GetValueInLValueState(ResolutionContext context)
     {
-      return AH.MakeSeqSelectExpr(parent.GetValueInLValueState(context), index, type);
+      return $"({parent.GetValueInLValueState(context)})[{index}]";
     }
 
-    public override Expression GetStoreBufferLocationInfo(ref List<Expression> fields) {
+    public override string GetStoreBufferLocationInfo(ref List<string> fields) {
       if (parent.NoTSO()) {
         return null;
       }
@@ -463,16 +450,15 @@ namespace Microsoft.Armada {
         return null;
       }
 
-      var field = AH.MakeApply1("Armada_FieldArrayIndex", index, "Armada_Field");
-      fields.Add(field);
+      fields.Add(index);
       return ret;
     }
 
-    public override Expression UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
-                                                                Expression val_new)
+    public override string UpdateTotalStateLocationDirectly(ResolutionContext context, IConstraintCollector constraintCollector,
+                                                            string val_new)
     {
-      Expression parent_val_old = parent.GetValueInLValueState(context);
-      Expression parent_val_new = AH.MakeSeqUpdateExpr(tok, parent_val_old, index, val_new);
+      string parent_val_old = parent.GetValueInLValueState(context);
+      string parent_val_new = $"({parent_val_old})[{index} := {val_new}]";
       return parent.UpdateTotalStateLocationDirectly(context, constraintCollector, parent_val_new);
     }
   }

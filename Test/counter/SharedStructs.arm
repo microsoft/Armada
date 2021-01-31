@@ -1,0 +1,6 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs
+{
+    datatype OptionalThread = OptionalSome(tid:uint64) | OptionalNone()
+}

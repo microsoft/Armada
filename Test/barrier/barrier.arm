@@ -14,11 +14,6 @@ level {:concrete} Impl using SharedStructs
 {
   noaddr var barrier:uint32[10];
 
-  method {:extern} fence()
-  {
-    somehow awaits $sb_empty;
-  }
-
   method {:extern} print_uint32(i:uint32)
   {
     log := log + [i];
@@ -28,7 +23,7 @@ level {:concrete} Impl using SharedStructs
   {
     noaddr var waiting_for_barrier:int8 := 1;
     noaddr var i:uint32;
-     
+
     print_uint32(id);
 
     barrier[id] := 1;
@@ -61,7 +56,7 @@ level {:concrete} Impl using SharedStructs
       i := i + 1;
     }
 
-    fence();
+    fence;
 
     i := 0;
     while i < 10
@@ -87,11 +82,6 @@ level L1 using SharedStructs
   ghost var all_initialized:bool := false;
   ghost var threads_past_barrier:seq<bool> := [];
 
-  method {:extern} fence()
-  {
-    somehow awaits $sb_empty;
-  }
-
   method {:extern} print_uint32(i:uint32)
   {
     log := log + [i];
@@ -101,7 +91,7 @@ level L1 using SharedStructs
   {
     noaddr var waiting_for_barrier:int8 := 1;
     noaddr var i:uint32;
-     
+
     print_uint32(id);
 
     threads_past_barrier := if 0 <= id as int < |threads_past_barrier| then threads_past_barrier[id as int := true] else threads_past_barrier;
@@ -138,7 +128,7 @@ level L1 using SharedStructs
       i := i + 1;
     }
 
-    fence();
+    fence;
 
   label post_fence:
     threads_past_barrier := [false, false, false, false, false, false, false, false, false, false];
@@ -159,7 +149,7 @@ level L1 using SharedStructs
     }
   }
 }
-    
+
 proof ImplRefinesL1
 {
   refinement Impl L1
@@ -173,24 +163,8 @@ level L2 using SharedStructs
   ghost var all_initialized:bool := false;
   ghost var threads_past_barrier:seq<bool> := [];
 
-  method {:extern} fence()
-    ensures old(all_initialized) == all_initialized
-    ensures old(|barrier_initialized|) == |barrier_initialized|
-    ensures forall j :: 0 <= j < old(|barrier_initialized|) && old(barrier_initialized)[j] ==> j < |barrier_initialized| && barrier_initialized[j]
-    ensures |old(threads_past_barrier)| == 10 ==> |threads_past_barrier| == 10
-    ensures old(all_initialized) ==> (forall j :: 0 <= j < old(|threads_past_barrier|) && old(threads_past_barrier)[j] ==> j < |threads_past_barrier| && threads_past_barrier[j])
-    ensures $sb_empty
-  {
-    somehow awaits $sb_empty;
-  }
-
   method {:extern} print_uint32(i:uint32)
-    ensures old(all_initialized) == all_initialized
     ensures old(|barrier_initialized|) == |barrier_initialized|
-    ensures |old(threads_past_barrier)| == 10 ==> |threads_past_barrier| == 10
-    ensures forall j :: 0 <= j < old(|barrier_initialized|) && old(barrier_initialized)[j] ==> j < |barrier_initialized| && barrier_initialized[j]
-    ensures |old(threads_past_barrier)| == 10 ==> |threads_past_barrier| == 10
-    ensures old(all_initialized) ==> (forall j :: 0 <= j < old(|threads_past_barrier|) && old(threads_past_barrier)[j] ==> j < |threads_past_barrier| && threads_past_barrier[j])
   {
     log := log + [i];
   }
@@ -202,7 +176,7 @@ level L2 using SharedStructs
   {
     noaddr var waiting_for_barrier:int8 := 1;
     noaddr var i:uint32;
-     
+
     print_uint32(id);
 
     assume 0 <= id as int < |threads_past_barrier|;
@@ -210,7 +184,6 @@ level L2 using SharedStructs
     barrier[id] := 1;
     while waiting_for_barrier != 0
       invariant all_initialized
-      invariant |threads_past_barrier| == 10
       invariant waiting_for_barrier == 0 ==> forall j :: 0 <= j < |threads_past_barrier| ==> threads_past_barrier[j]
     {
       waiting_for_barrier := 0;
@@ -218,7 +191,6 @@ level L2 using SharedStructs
       while i < 10
         invariant 0 <= i <= 10
         invariant all_initialized
-        invariant |threads_past_barrier| == 10
         invariant waiting_for_barrier == 0 ==> forall j :: 0 <= j < i as int && j < |threads_past_barrier| ==> threads_past_barrier[j]
       {
         if barrier[i] == 0
@@ -252,7 +224,7 @@ level L2 using SharedStructs
       i := i + 1;
     }
 
-    fence();
+    fence;
 
   label post_fence:
     threads_past_barrier := [false, false, false, false, false, false, false, false, false, false];
@@ -263,9 +235,7 @@ level L2 using SharedStructs
       invariant $sb_empty
       invariant 0 <= i <= 10
       invariant all_initialized
-      invariant |barrier_initialized| == 10
       invariant forall j :: 0 <= j < |barrier_initialized| ==> barrier_initialized[j]
-      invariant |threads_past_barrier| == 10
     {
       tids[i] := create_thread worker(i);
       i := i + 1;
@@ -288,102 +258,102 @@ proof L1RefinesL2
 
   include_file "extra.dfy"
   import_module L1RefinesL2Helpers
-  extra lemma_LoopModifiesClausesOnJumpBackPathLemma_worker_TTF_6
-        "L1RefinesL2Helpers.lemma_BarrierNonzeroInLocalViewImpliesStoreBuffer1OrBarrier1(ss8.state.s);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_worker_YYN_YieldedRevisited_6_Then_From_worker_6_T_To_worker_7
+        "L1RefinesL2Helpers.lemma_BarrierNonzeroInLocalViewImpliesStoreBuffer1OrBarrier1(s19.s);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_worker_YYN_YieldedRevisited_6_Then_From_worker_6_F_To_worker_JumpBack_11
+        "L1RefinesL2Helpers.lemma_BarrierNonzeroInLocalViewImpliesStoreBuffer1OrBarrier1(s19.s);"
 
-  inductive_invariant BarrierSize10 "|s.s.ghosts.barrier_initialized| == 10 && |s.s.mem.globals.barrier| == 10"
+  inductive_invariant BarrierSize10 "|ghosts.barrier_initialized| == 10 && |globals.barrier| == 10"
 
-  chl_yield_pred BarrierYieldPred @"
-    && (forall j :: 0 <= j < |s.s.ghosts.barrier_initialized| && s.s.ghosts.barrier_initialized[j]
-               ==> j < |s'.s.ghosts.barrier_initialized| && s'.s.ghosts.barrier_initialized[j])
-    && (s.s.ghosts.all_initialized ==> s'.s.ghosts.all_initialized &&
-          (forall j :: 0 <= j < |s.s.ghosts.threads_past_barrier| && s.s.ghosts.threads_past_barrier[j]
-                  ==> j < |s'.s.ghosts.threads_past_barrier| && s'.s.ghosts.threads_past_barrier[j]))
-    && (|s.s.ghosts.threads_past_barrier| == 10 ==> |s'.s.ghosts.threads_past_barrier| == 10)
-    && (tid in s.s.threads ==> tid in s'.s.threads && |s'.s.threads[tid].storeBuffer| <= |s.s.threads[tid].storeBuffer|)
-    && (!s.s.ghosts.all_initialized ==> s'.s.ghosts == s.s.ghosts)
+  chl_yield_pred BarrierYieldPredUniversal @"
+    && (forall j :: 0 <= j < |ghosts.barrier_initialized| && ghosts.barrier_initialized[j]
+               ==> j < |ghosts'.barrier_initialized| && ghosts'.barrier_initialized[j])
+    && (ghosts.all_initialized ==> ghosts'.all_initialized &&
+          (forall j :: 0 <= j < |ghosts.threads_past_barrier| && ghosts.threads_past_barrier[j]
+                  ==> j < |ghosts'.threads_past_barrier| && ghosts'.threads_past_barrier[j]))
+    && (|ghosts.threads_past_barrier| == 10 ==> |ghosts'.threads_past_barrier| == 10)
+  "
+
+  chl_yield_pred {:excludeAll} BarrierYieldPred @"
+    && (tid in threads ==> tid in threads' && |threads'[tid].storeBuffer| <= |threads[tid].storeBuffer|)
+    && (!ghosts.all_initialized ==> ghosts' == ghosts)
   "
 
   chl_invariant InitializationInvariant @"
-    if s.s.ghosts.all_initialized then
-      && |s.s.ghosts.threads_past_barrier| == 10
-      && |s.s.ghosts.barrier_initialized| == 10
-      && (forall j :: 0 <= j < 10 ==> s.s.ghosts.barrier_initialized[j])
+    if ghosts.all_initialized then
+      && |ghosts.threads_past_barrier| == 10
+      && |ghosts.barrier_initialized| == 10
+      && (forall j :: 0 <= j < 10 ==> ghosts.barrier_initialized[j])
     else
-      (forall tid :: tid in s.s.threads ==> tid == s.config.tid_init)
+      (forall tid :: tid in threads ==> tid == tid_init)
   "
   chl_invariant WaitingForBarrierStoreBufferAlways0Or1 @"
-    forall tid, entry :: && tid in s.s.threads
-                    && entry in s.s.threads[tid].storeBuffer
+    forall tid, entry :: && tid in threads
+                    && entry in threads[tid].storeBuffer
                     && entry.loc.Armada_StoreBufferLocation_Unaddressable?
                     && entry.loc.v.Armada_GlobalStaticVar_barrier?
                     && |entry.loc.fields| == 1
-                    && entry.loc.fields[0].Armada_FieldArrayIndex?
                     && entry.value.Armada_PrimitiveValue_uint32?
                     ==> entry.value.n_uint32 == 0 || entry.value.n_uint32 == 1"
   chl_invariant NotAllInitializedImpliesOnly0InStoreBuffer @"
-    !s.s.ghosts.all_initialized ==>
-    (forall entry :: && s.config.tid_init in s.s.threads
-                && entry in s.s.threads[s.config.tid_init].storeBuffer
+    !ghosts.all_initialized ==>
+    (forall entry :: && tid_init in threads
+                && entry in threads[tid_init].storeBuffer
                 && entry.loc.Armada_StoreBufferLocation_Unaddressable?
                 && entry.loc.v.Armada_GlobalStaticVar_barrier?
                 ==>
                 (&& |entry.loc.fields| == 1
-                 && entry.loc.fields[0].Armada_FieldArrayIndex?
                  && entry.value.Armada_PrimitiveValue_uint32?
                  && entry.value.n_uint32 == 0))"
   chl_invariant BarrierInitializedAndNotAllInitializedImplies0Pending @"
-    && !s.s.ghosts.all_initialized
-    && |s.s.ghosts.barrier_initialized| == 10
-    && |s.s.mem.globals.barrier| == 10
+    && !ghosts.all_initialized
+    && |ghosts.barrier_initialized| == 10
+    && |globals.barrier| == 10
     ==>
     (forall j :: && 0 <= j < 10
-            && s.s.ghosts.barrier_initialized[j]
-            && s.s.mem.globals.barrier[j] != 0
-            ==> && s.config.tid_init in s.s.threads
+            && ghosts.barrier_initialized[j]
+            && globals.barrier[j] != 0
+            ==> && tid_init in threads
                 && (exists entry ::
-                      && entry in s.s.threads[s.config.tid_init].storeBuffer
+                      && entry in threads[tid_init].storeBuffer
                       && entry.loc.Armada_StoreBufferLocation_Unaddressable?
                       && entry.loc.v.Armada_GlobalStaticVar_barrier?
                       && |entry.loc.fields| == 1
-                      && entry.loc.fields[0].Armada_FieldArrayIndex?
-                      && entry.loc.fields[0].i == j
+                      && entry.loc.fields[0] == j
                       && entry.value.Armada_PrimitiveValue_uint32?
                       && entry.value.n_uint32 == 0))"
   chl_invariant WaitingForBarrierStoreBufferAlways1AfterAllInitialized @"
-    forall tid, entry :: && s.s.ghosts.all_initialized
-                    && tid in s.s.threads
-                    && entry in s.s.threads[tid].storeBuffer
+    forall tid, entry :: && ghosts.all_initialized
+                    && tid in threads
+                    && entry in threads[tid].storeBuffer
                     && entry.loc.Armada_StoreBufferLocation_Unaddressable?
                     && entry.loc.v.Armada_GlobalStaticVar_barrier?
                     && |entry.loc.fields| == 1
-                    && entry.loc.fields[0].Armada_FieldArrayIndex?
                     && entry.value.Armada_PrimitiveValue_uint32?
                     ==> entry.value.n_uint32 == 1"
   chl_invariant StoreBuffer1ImpliesThreadPastBarrier @"
-    forall tid, entry :: && s.s.ghosts.all_initialized
-                    && |s.s.ghosts.threads_past_barrier| == 10
-                    && tid in s.s.threads
-                    && entry in s.s.threads[tid].storeBuffer
+    forall tid, entry :: && ghosts.all_initialized
+                    && |ghosts.threads_past_barrier| == 10
+                    && tid in threads
+                    && entry in threads[tid].storeBuffer
                     && entry.loc.Armada_StoreBufferLocation_Unaddressable?
                     && entry.loc.v.Armada_GlobalStaticVar_barrier?
                     && |entry.loc.fields| == 1
-                    && entry.loc.fields[0].Armada_FieldArrayIndex?
                     && entry.value.Armada_PrimitiveValue_uint32?
                     && entry.value.n_uint32 == 1
-                    ==> var which_thread := entry.loc.fields[0].i;
+                    ==> var which_thread := entry.loc.fields[0];
                         && 0 <= which_thread < 10
-                        && s.s.ghosts.threads_past_barrier[which_thread]"
+                        && ghosts.threads_past_barrier[which_thread]"
   chl_invariant BarrierAlways0Or1 @"
-    forall which_thread :: && s.s.ghosts.all_initialized
-                      && |s.s.mem.globals.barrier| == 10
+    forall which_thread :: && ghosts.all_initialized
+                      && |globals.barrier| == 10
                       && 0 <= which_thread < 10
-                      ==> var b := s.s.mem.globals.barrier[which_thread]; b == 0 || b == 1"
+                      ==> var b := globals.barrier[which_thread]; b == 0 || b == 1"
   chl_invariant Barrier1ImpliesThreadPastBarrier @"
-    forall which_thread :: && s.s.ghosts.all_initialized
-                      && |s.s.mem.globals.barrier| == 10
-                      && |s.s.ghosts.threads_past_barrier| == 10
+    forall which_thread :: && ghosts.all_initialized
+                      && |globals.barrier| == 10
+                      && |ghosts.threads_past_barrier| == 10
                       && 0 <= which_thread < 10
-                      && s.s.mem.globals.barrier[which_thread] != 0
-                      ==> s.s.ghosts.threads_past_barrier[which_thread]"
+                      && globals.barrier[which_thread] != 0
+                      ==> ghosts.threads_past_barrier[which_thread]"
 }

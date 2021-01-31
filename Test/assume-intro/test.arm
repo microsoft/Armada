@@ -21,6 +21,7 @@ level A using SharedStructs {
 
         i ::= 1;
         x ::= 0;
+        label loop:
         while i < 10
         {
             x ::= i;
@@ -32,7 +33,10 @@ level A using SharedStructs {
     {
         x ::= 3;
         y ::= 4;
+label before_z:
+        goto after_z;
         z ::= 5;
+label after_z:
         x ::= 6;
         Test();
     }
@@ -69,12 +73,13 @@ level B using SharedStructs {
 
         i ::= 1;
         x ::= 0;
+        label loop:
         while i < 10
             invariant 1 <= i
             invariant i <= 10
             invariant x == i - 1
-            invariant y == old(y)
-            invariant z == old(z)
+            ensures   y == old(y)
+            ensures   z == old(z)
         {
             x ::= i;
             i ::= i + 1;
@@ -87,11 +92,18 @@ level B using SharedStructs {
     {
         x ::= 3;
         y ::= 4;
-        assume x == 3;
+label before_z:
+        goto after_z;
         z ::= 5;
+label after_z:
         assume x == 3 && y == 4;
         x ::= 6;
         Test();
+    }
+
+    universal_step_constraint ZPositiveImpliesYFour
+    {
+        z > 0 ==> y == 4
     }
 }
 
@@ -100,16 +112,17 @@ proof AB {
     assume_intro
 
     chl_invariant MyGlobalInvariant @"
-      && (forall tid :: tid in s.s.threads ==> tid == s.config.tid_init)
-      && (forall tid :: tid in s.s.threads ==> s.s.threads[tid].storeBuffer == [])
+      && (forall tid :: tid in threads ==> tid == tid_init)
+      && (forall tid :: tid in threads ==> threads[tid].storeBuffer == [])
     "
 
     chl_invariant Inv1
-    chl_yield_pred YP1
+    chl_local_invariant main_before_z XIs3 "globals.x == 3"
+    chl_yield_pred {:excludeAll} YP1
 
-    chl_yield_pred MyYieldPredicate @"
-      && s'.s.mem.globals.x == s.s.mem.globals.x
-      && s'.s.mem.globals.y == s.s.mem.globals.y
-      && s'.s.mem.globals.z == s.s.mem.globals.z
+    chl_yield_pred {:excludeAll} MyYieldPredicate @"
+      && globals'.x == globals.x
+      && globals'.y == globals.y
+      && globals'.z == globals.z
     "
 }

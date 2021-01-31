@@ -5,8 +5,7 @@ import numpy as np
 from math import sqrt
 
 import matplotlib
-#matplotlib.use('PS')
-matplotlib.use('agg')
+matplotlib.use('PS')
 import matplotlib.pyplot as plt
 
 queue_capacity = 512
@@ -46,9 +45,9 @@ def get_benchmark_statistics(bench_name):
     return s
 
 def plot(values):
-    #plt.rc('text', usetex='True')
+    plt.rc('text', usetex='True')
     plt.rc('font', family='Serif', size=11)
-    matplotlib.rcParams['font.sans-serif'] = "Libertine"
+
 
     w = 6
     h = 4
@@ -56,14 +55,13 @@ def plot(values):
     plt.figure(figsize=(w, h), dpi=d)
 
     means = [values[0][0], values[1][0], values[2][0], values[3][0]]
-    xticks = ["liblfds (GCC)", "liblfds-modulo (GCC)", "Anon (GCC)",
-          "Anon (CompCertTSO)"]
+    xs = ["liblfds (GCC)", "liblfds-modulo (GCC)", "Anon (GCC)",
+          "Anon (CompCert)"]
     std = [values[0][1], values[1][1], values[2][1], values[3][1]]
 
     plt.ylabel("Throughput (ops/sec)")
+    plt.xticks(rotation=10)
     plt.grid(True, "major", axis="y")
-    xs = range(len(xticks))
-    plt.xticks(xs, xticks, rotation=10)
     plt.bar(xs, means, color="#FF8000", edgecolor="000000", yerr=std,
             capsize=5, width=0.3)
     plt.tight_layout()
@@ -75,14 +73,13 @@ def main():
     print("\n\nFinished building\nRunning benchmarks now")
     values = [get_benchmark_statistics("benchmark_lfds"),
               get_benchmark_statistics("benchmark_lfds_modulo"),
-              get_benchmark_statistics("benchmark_gcc"),
-              get_benchmark_statistics("benchmark_ccomp"),
+              get_benchmark_statistics("benchmark"),
+              (0, 0)
               ]
-
-    #values = [(1e7, 1e5), (1.5e7, 0.5e5),
-    #     (1.2e7, 1e5), (1.3e7, 1.4e5)
-    #     ]
     plot(values)
 
+#values = [(1e7, 1e5), (1.5e7, 0.5e5),
+#        (1.2e7, 1e5), (1.3e7, 1.4e5)
+#        ]
 if __name__ == '__main__':
     main()

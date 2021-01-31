@@ -26,9 +26,10 @@ To build Armada, please follow the detailed instructions documented in [BUILD.md
 
 To use Armada, you'll need the following tools:
 
+  * .NET 5.0 (runtime for both Armada and Dafny)
   * pip (needed for installing scons)
   * scons (installable by running `pip install scons`)
-  * Dafny (available at https://github.com/dafny-lang/dafny)
+  * Dafny v3.0.0 (available at https://github.com/dafny-lang/dafny)
 
 
 # Generating and testing proofs
@@ -38,8 +39,8 @@ run, from the Armada top-level directory, `scons -j <n> -f SConstruct1` where `<
 threads you want scons to use.
 
 To verify all the generated proofs, run, from the same directory, `scons -j <n> -f SConstruct2
---DAFNYPATH=<dafny-path>` where `<dafny-path>` is the directory containing the `Dafny.exe` binary you
-installed.
+--DAFNYPATH=<dafny-path>` where `<dafny-path>` is the directory containing the `Dafny.exe`/`Dafny.dll`
+binary you installed.
 
 If this second scons finishes without printing an error message, this means that everything worked.
 If it reports an error, this is likely due to running on a machine without enough memory, so try
@@ -51,15 +52,6 @@ again with fewer threads.
 To build the queue benchmarks, run them, and generate the performance graphs, run `python3
 run_benchmarks.py` in the `Test/qbss_benchmark/` directory. This will produce a file
 `qbss_performance_graph.pdf` with the performance graph.
-
-
-# Updating the language
-
-If you make changes to the Armada language definition (in `Source/Armada/Armada.atg`), you'll need
-to generate new scanner and parser files `Scanner.cs` and `Parser.cs` before rebuilding Armada.  For
-that, you'll need the third-party Coco tool, which you can obtain by copying the `third_party`
-directory from Dafny's sources into the Armada top-level directory.  Once you have that, run `make`
-to generate new scanner and parser files.
 
 
 # Contributing

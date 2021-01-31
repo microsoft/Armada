@@ -42,10 +42,9 @@ namespace Microsoft.Armada {
   }
 
   public interface IConstraintCollector : IFailureReporter {
-    Expression ReserveVariableName(string varName, Type ty);
-    Expression ReserveVariableName(string varName, string typeName);
-    Expression AddVariableDeclaration(string varName, Expression value);
-    void AddUndefinedBehaviorAvoidanceConstraint(Expression constraint);
+    string ReserveVariableName(string varName);
+    string AddVariableDeclaration(string varName, string value);
+    void AddUndefinedBehaviorAvoidanceConstraint(string constraint);
     void AddUndefinedBehaviorAvoidanceConstraint(UndefinedBehaviorAvoidanceConstraint constraint);
   }
 
@@ -56,49 +55,44 @@ namespace Microsoft.Armada {
     private bool valid;
     private bool empty;
 
-    public readonly Expression s;
-    public readonly Expression tid;
-    public readonly Expression t;
-    public readonly Expression locv;
-    public readonly Expression top;
-    public readonly Expression ghosts;
+    public readonly string s;
+    public readonly string tid;
+    public readonly string t;
+    public readonly string locv;
+    public readonly string top;
+    public readonly string ghosts;
 
     public EnablingConstraintCollector(Program i_prog)
     {
       prog = i_prog;
-      builder = new PredicateBuilder(i_prog);
+      builder = new PredicateBuilder(i_prog, true);
       valid = true;
       empty = true;
 
-      s = ReserveVariableName("s", "Armada_TotalState");
-      tid = ReserveVariableName("tid", "Armada_ThreadHandle");
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      t = AddVariableDeclaration("t", AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread"));
-      locv = AddVariableDeclaration("locv", AH.MakeApply2("Armada_GetThreadLocalView", s, tid, "Armada_SharedMemory"));
-      top = AH.MakeExprDotName(t, "top", "Armada_StackFrame");
-      ghosts = AH.MakeExprDotName(s, "ghosts", "Armada_Ghosts");
+      s = ReserveVariableName("s");
+      tid = ReserveVariableName("tid");
+      var threads = $"{s}.threads";
+      t = AddVariableDeclaration("t", $"{threads}[{tid}]");
+      locv = AddVariableDeclaration("locv", $"Armada_GetThreadLocalView({s}, {tid})");
+      top = $"{t}.top";
+      ghosts = $"{s}.ghosts";
     }
 
     public bool Valid { get { return valid; } }
 
     public bool Empty { get { return empty; } }
 
-    public Expression ReserveVariableName(string varName, Type ty)
+    public string ReserveVariableName(string varName)
     {
-      return builder.ReserveVariableName(varName, ty);
+      return builder.ReserveVariableName(varName);
     }
 
-    public Expression ReserveVariableName(string varName, string typeName)
-    {
-      return builder.ReserveVariableName(varName, typeName);
-    }
-
-    public Expression AddVariableDeclaration(string varName, Expression value)
+    public string AddVariableDeclaration(string varName, string value)
     {
       return builder.AddVariableDeclaration(varName, value);
     }
 
-    public void AddUndefinedBehaviorAvoidanceConstraint(Expression constraint)
+    public void AddUndefinedBehaviorAvoidanceConstraint(string constraint)
     {
       empty = false;
       builder.AddConjunct(constraint);
@@ -111,7 +105,7 @@ namespace Microsoft.Armada {
       }
     }
     
-    public void AddConjunct(Expression conjunct)
+    public void AddConjunct(string conjunct)
     {
       empty = false;
       builder.AddConjunct(conjunct);
@@ -136,7 +130,7 @@ namespace Microsoft.Armada {
       Fail(Token.NoToken, reason);
     }
 
-    public Expression Extract()
+    public string Extract()
     {
       if (!valid) {
         return null;

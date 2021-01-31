@@ -1,6 +1,6 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs test1structs
+structs SharedStructs
 {
     struct C1 {
         var x:int32[4];
@@ -31,7 +31,7 @@ structs test1structs
     "
 }
 
-level test1 using test1structs
+level A using SharedStructs
 {
     datatype DT1 = DT1(a:int, b:set<int>)
 
@@ -48,7 +48,7 @@ level test1 using test1structs
 
     method {:extern} ExternalMethod(a:uint32, p:ptr<int32>) returns (b:uint32)
         reads    x, g2.a
-        requires allocated(p)
+        undefined_unless allocated(p)
         modifies y, g1[4], log
         ensures  y == old(y + *p) + 3
         ensures  b == a * 2
@@ -59,7 +59,7 @@ level test1 using test1structs
         if (0 < x < 10) then x + 1 else 0
     }
 
-    method C1Test(ths:ptr<C1>)
+    method {:atomic} C1Test(ths:ptr<C1>)
     {
         var w:int32;
         noaddr var z:int32;
@@ -124,7 +124,7 @@ level test1 using test1structs
         }
     }
 
-    method {:atomic} Bar(a:int16, b:uint32) returns (c:uint32, d:uint32)
+    method Bar(a:int16, b:uint32) returns (c:uint32, d:uint32)
     {
         var z:int16 ::= a + 33;
         var w:C2[10];
@@ -161,4 +161,18 @@ level test1 using test1structs
         rc, rd := Bar(a, b);
     }
 
+    universal_step_constraint WAlwaysNonnegative
+    {
+        w >= 0
+    }
+
+    universal_step_constraint AlwaysNotJoinable
+    {
+        $me !in $state.joinable_tids
+    }
+
+    universal_step_constraint ZNotInStoreBuffer @"
+       forall entry :: entry in s.threads[tid].storeBuffer && entry.loc.Armada_StoreBufferLocation_Unaddressable? ==>
+                  !entry.loc.v.Armada_GlobalStaticVar_z?
+    "
 }

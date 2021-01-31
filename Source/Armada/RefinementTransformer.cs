@@ -443,6 +443,7 @@ namespace Microsoft.Armada
       var mod = refinementCloner.CloneSpecFrameExpr(m.Mod);
       var reads = refinementCloner.CloneSpecExpr(m.Reads);
       var awaits = m.Awaits.ConvertAll(refinementCloner.CloneExpr);
+      var undefinedUnless = m.UndefinedUnless.ConvertAll(refinementCloner.CloneExpr);
 
       List<MaybeFreeExpression> ens;
       if (checkPreviousPostconditions)
@@ -474,7 +475,7 @@ namespace Microsoft.Armada
           req, mod, ens, decreases, body, refinementCloner.MergeAttributes(m.Attributes, moreAttributes), null);
       } else {
         return new Method(new RefinementToken(m.tok, moduleUnderConstruction), m.Name, m.HasStaticKeyword, m.IsGhost, tps, ins, m.Outs.ConvertAll(refinementCloner.CloneFormal),
-                          req, mod, ens, decreases, reads, awaits, body, refinementCloner.MergeAttributes(m.Attributes, moreAttributes), null);
+                          req, mod, ens, decreases, reads, awaits, undefinedUnless, body, refinementCloner.MergeAttributes(m.Attributes, moreAttributes), null);
       }
     }
 

@@ -2,17 +2,17 @@ include "sets.i.dfy"
 
 module util_collections_maps_i
 {
-  import opened util_collections_sets_i
+    import opened util_collections_sets_i
 
-    function AddSetToMap<K,V>(m:map<K,V>, ks:set<K>, v:V) : map<K,V>
+    function AddSetToMap<K,V>(m: map<K,V>, ks: set<K>, v: V) : (m': map<K,V>)
       // requires forall k :: k in ks ==> !(k in m)
-      ensures forall k :: k in m ==> k in AddSetToMap(m,ks,v) && AddSetToMap(m,ks,v)[k] == m[k]
-      ensures forall k :: k in ks && k !in m ==> k in AddSetToMap(m,ks,v) && AddSetToMap(m,ks,v)[k] == v
+      ensures forall k :: k in m ==> k in m' && m'[k] == m[k]
+      ensures forall k :: k in ks && k !in m ==> k in m' && m'[k] == v
     {
       map k | k in ks + m.Keys :: if k in m then m[k] else v
     }
 
-    function MapMapToMap_internal<K, V1, V2>(m:map<K, V1>, f:V1->V2) : (m':map<K, V2>)
+    function MapMapToMap_internal<K, V1, V2>(m: map<K, V1>, f: V1->V2) : (m': map<K, V2>)
         ensures m'.Keys == m.Keys
         ensures forall k :: k in m' ==> m'[k] == f(m[k])
     {

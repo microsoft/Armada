@@ -4,8 +4,6 @@ include "../../Armada/option.s.dfy"
 
 
 level spec_level {
-    import opened ArmadaCommonDefinitions
-	import opened util_option_s
     type Tid = uint64
     // the data structure for disk schedule requests.
     struct Request {

@@ -1,6 +1,7 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
+include "test4defs.dfy"
 
-structs test4structs
+structs SharedStructs4
 {
     struct S1 {
         var i:int32
@@ -25,12 +26,16 @@ structs test4structs
     "
 }
 
-level test4 using test4structs
+level D using SharedStructs4
 {
     noaddr var g:S3
     var g_heap:S3
     var i_heap:int32
     noaddr var my_tid:uint64;
+    var h:int32;
+    ghost var z:int := 0;
+
+    import opened test4defs
 
     method {:extern} ExternalPrint(n:int32)
         awaits   g.x.i >= 0
@@ -51,13 +56,19 @@ level test4 using test4structs
 
     method Test(s:seq<int32>, t:seq<int>, u:map<int, seq<int32>>, p:ptr<int32>)
     {
-        noaddr var i:int32, j:int;
+        noaddr var i:int32, j:int, b:int32;
 
         i := s[3];
         j := t[2];
         i := u[7][8] / u[7][7];
         assert *p > 7;
         assert *(p+1) > 7;
+        goto lbl1;
+        compare_and_swap(h, i + 1, 12 as int32);
+        b := compare_and_swap(h, i, h + 1);
+label lbl1:
+        atomic_exchange(h, 12 as int32);
+        b := atomic_exchange(h, 12 as int32);
     }
 
     method main(a:S1) {
@@ -69,12 +80,14 @@ level test4 using test4structs
         while (*) {
             b ::= g_heap;
         }
+label lbl1:
         g_heap ::= b;
         b, g.x.i ::= g, *;
         p := &g_heap.x.i;
         if * {
             my_tid := $me;
         }
+        z := Successor(z);
         p := calloc(int32, *p);
         q ::= malloc(S3);
         dealloc q;
@@ -83,7 +96,9 @@ level test4 using test4structs
         join my_tid;
         assert g.x.i == 3;
         assume g_heap.x.i == 3;
-        somehow awaits i_heap == 3 requires g.x.i > 0 modifies g_heap, log ensures i_heap > 0 ensures log == old(log) + [3];
+        assume i_heap == 3;
+        somehow undefined_unless g.x.i > 0 modifies g_heap, log ensures i_heap > 0 ensures log == old(log) + [3];
+        assert |$state.threads[$me].stack| == 0;
         ExternalPrint(b.x.i);
         Test([], [], map [], p);
     }

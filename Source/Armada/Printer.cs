@@ -722,7 +722,7 @@ namespace Microsoft.Armada {
     }
 
     public void PrintDatatype(DatatypeDecl dt, int indent, string fileBeingPrinted) {
-      
+
       Contract.Requires(dt != null);
       Indent(indent);
       PrintClassMethodHelper(dt is IndDatatypeDecl ? "datatype" : "codatatype", dt.Attributes, dt.Name, dt.TypeArgs);
@@ -1193,12 +1193,8 @@ namespace Microsoft.Armada {
       } else if (stmt is SomehowStmt) {
         SomehowStmt s = (SomehowStmt)stmt;
         wr.Write("somehow ");
-        foreach (var e in s.Awaits) {
-            wr.Write("awaits ");
-            PrintExpression(e, true);
-        }
-        foreach (var e in s.Req) {
-            wr.Write("requires ");
+        foreach (var e in s.UndefinedUnless) {
+            wr.Write("undefined_unless ");
             PrintExpression(e, true);
         }
         foreach (var e in s.Mod.Expressions) {
@@ -1511,6 +1507,17 @@ namespace Microsoft.Armada {
         var s = (CommitStmt)stmt;
         wr.Write("commit ");
         PrintStatement(s.Body, indent);
+
+      } else if (stmt is JoinStmt) {
+        var s = (JoinStmt)stmt;
+        wr.Write("join ");
+        PrintExpression(s.WhichThread, true);
+        wr.Write(";");
+
+      } else if (stmt is GotoStmt) {
+        var s = (GotoStmt)stmt;
+        wr.Write($"goto {s.Target};");
+
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected statement
       }
@@ -1695,6 +1702,35 @@ namespace Microsoft.Armada {
           PrintExpressionList(t.Arguments, false);
           wr.Write(")");
         }
+      } else if (rhs is CreateThreadRhs) {
+        var ctr = (CreateThreadRhs)rhs;
+        wr.Write($"create_thread {ctr.MethodName}(");
+        PrintExpressionList(ctr.Args, false);
+        wr.Write(")");
+      } else if (rhs is CompareAndSwapRhs) {
+        var csr = (CompareAndSwapRhs)rhs;
+        wr.Write("compare_and_swap (");
+        PrintExpression(csr.Target, false);
+        wr.Write(", ");
+        PrintExpression(csr.OldVal, false);
+        wr.Write(", ");
+        PrintExpression(csr.NewVal, false);
+        wr.Write(")");
+      } else if (rhs is AtomicExchangeRhs) {
+        var aer = (AtomicExchangeRhs)rhs;
+        wr.Write("atomic_exchange (");
+        PrintExpression(aer.Target, false);
+        wr.Write(", ");
+        PrintExpression(aer.NewVal, false);
+        wr.Write(")");
+      } else if (rhs is MallocRhs) {
+        var mr = (MallocRhs)rhs;
+        wr.Write($"malloc({mr.AllocatedType})");
+      } else if (rhs is CallocRhs) {
+        var cr = (CallocRhs)rhs;
+        wr.Write($"calloc({cr.AllocatedType}, ");
+        PrintExpression(cr.Count, false);
+        wr.Write(")");
       } else {
         Contract.Assert(false); throw new cce.UnreachableException();  // unexpected RHS
       }
@@ -2550,6 +2586,15 @@ namespace Microsoft.Armada {
 
       } else if (expr is WildcardExpr) {
         wr.Write("*");
+
+      } else if (expr is MeExpr) {
+        wr.Write("$me");
+
+      } else if (expr is StoreBufferEmptyExpr) {
+        wr.Write("$sb_empty");
+
+      } else if (expr is TotalStateExpr) {
+        wr.Write("$state");
 
       } else if (expr is StmtExpr) {
         var e = (StmtExpr)expr;

@@ -23,32 +23,27 @@ structs SharedStructs2 {
 
 level C using SharedStructs2 {
 
-  ghost var lock_holder:OptionalThread
+  ghost var lock_holder:OptionalThread := OptionalThreadNone
+  ghost var save_lock_holder:OptionalThread;
   noaddr var x:int32 := 0;
   noaddr var y:int32 := 0;
   noaddr var z:S3[10];
 
-  import opened util_option_s
-
   method Worker()
   {
-    somehow awaits lock_holder.OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == OptionalThreadSome($me);
-
-    label lb1:
-    assume lock_holder == OptionalThreadSome($me);
+    label acq:
+    assume lock_holder.OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadSome($me);
     x := x + 1;
-
-    label lb2:
-    assume lock_holder == OptionalThreadSome($me);
+    atomic {
+      save_lock_holder := lock_holder;
+      lock_holder := OptionalThreadNone;
+      lock_holder := save_lock_holder;
+    }
     y := y + 1;
-
-    label lb3:
-    somehow awaits lock_holder == OptionalThreadSome($me)
-            ensures lock_holder == OptionalThreadNone() && $sb_empty;
-
-    assert true;
+    label rel:
+    assume lock_holder == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadNone();
   }
 
   method main()
@@ -62,29 +57,25 @@ level C using SharedStructs2 {
 
 level D using SharedStructs2 {
 
-  ghost var lock_holder:OptionalThread
+  ghost var lock_holder:OptionalThread := OptionalThreadNone
+  ghost var save_lock_holder:OptionalThread;
   noaddr var x:int32 := 0;
   noaddr var y:int32 := 0;
   noaddr var z:S3[10];
 
-  import opened util_option_s
-
   method Worker()
   {
-    somehow awaits lock_holder.OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == OptionalThreadSome($me);
-
-    assume lock_holder == OptionalThreadSome($me);
+    assume lock_holder.OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadSome($me);
     x ::= x + 1;
-
-    assume lock_holder == OptionalThreadSome($me);
+    atomic {
+      save_lock_holder := lock_holder;
+      lock_holder := OptionalThreadNone;
+      lock_holder := save_lock_holder;
+    }
     y := y + 1;
-
-    somehow awaits lock_holder == OptionalThreadSome($me)
-            ensures lock_holder == OptionalThreadNone() && $sb_empty;
-
-    assert true;
+    assume lock_holder == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadNone();
   }
 
   method main()
@@ -100,12 +91,16 @@ proof CD
 {
   refinement C D
 
-  tso_elim x @"
-    && tid in s.s.threads
-    && (var pc := s.s.threads[tid].pc;
-       || pc.Armada_PC_Worker_lb1?
-       || pc.Armada_PC_Worker_lb2?
-       || pc.Armada_PC_Worker_lb3?)
-    && s.s.ghosts.lock_holder == OptionalThreadSome(tid)
+  inductive_invariant LockHolderInv @"
+    forall tid :: 
+      ghosts.lock_holder == OptionalThreadSome(tid) <==>
+      (&& tid in threads
+       && var pc := threads[tid].pc;
+       && var ins := PCToInstructionCount_L(pc);
+       && PCToMethod_L(pc).LMethodName_Worker?
+       && ins > PCToInstructionCount_L(L.Armada_PC_Worker_acq)
+       && ins <= PCToInstructionCount_L(L.Armada_PC_Worker_rel))
   "
+
+  tso_elim x "ghosts.lock_holder == OptionalThreadSome(tid)"
 }

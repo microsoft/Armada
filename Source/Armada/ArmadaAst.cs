@@ -5161,7 +5161,7 @@ namespace Microsoft.Armada {
   {
     public readonly ClassDecl Class;
     /// <summary>
-    /// The public constructor is NonNullTypeDecl(ClassDecl cl). The rest is pretty crazy: There are stages of "this"-constructor calls
+    /// The public constructor is NonNullTypeDecl(ClassDecl cl). The rest is pretty bizarre: There are stages of "this"-constructor calls
     /// in order to build values that depend on previously computed parameters.
     /// </summary>
     public NonNullTypeDecl(ClassDecl cl)
@@ -5704,6 +5704,30 @@ namespace Microsoft.Armada {
     }
   }
 
+  public class UniversalStepConstraintDecl : MemberDecl
+  {
+    public override string WhatKind { get { return "universal step constraint"; } }
+    public override bool CanBeRevealed() { return false; }
+    public readonly Expression Body;
+    public readonly string Code;
+
+    public UniversalStepConstraintDecl(IToken tok, string name, Attributes attributes, Expression body) :
+        base(tok, name, false, false, attributes) {
+      Contract.Requires(tok != null);
+      Contract.Requires(name != null);
+      Body = body;
+      Code = null;
+    }
+
+    public UniversalStepConstraintDecl(IToken tok, string name, Attributes attributes, string code) :
+        base(tok, name, false, false, attributes) {
+      Contract.Requires(tok != null);
+      Contract.Requires(name != null);
+      Body = null;
+      Code = code;
+    }
+  }
+
   public class RefinementConstraintDecl : TopLevelDecl
   {
     public override string WhatKind { get { return "Armada refinement constraint"; } }
@@ -5839,18 +5863,88 @@ namespace Microsoft.Armada {
     public readonly string Code;
   }
 
+  public class CHLLocalInvariantArmadaProofDecl : ArmadaProofDecl
+  {
+    public override string WhatKind { get { return "Concurrent Hoare logic local invariant clause"; } }
+
+    public CHLLocalInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code) :
+      base(tok, module)
+    {
+      PCName = pcName.val;
+      ClauseName = clauseName.val;
+      Code = Util.RemoveParsedStringQuotesSimple(code);
+    }
+
+    public readonly string PCName;
+    public readonly string ClauseName;
+    public readonly string Code;
+  }
+
   public class CHLYieldPredicateArmadaProofDecl : ArmadaProofDecl
   {
+
     public override string WhatKind { get { return "Concurrent Hoare logic yield predicate"; } }
 
-    public CHLYieldPredicateArmadaProofDecl(IToken tok, ModuleDefinition module, IToken yieldPredicateName, string code) :
+    public CHLYieldPredicateArmadaProofDecl(IToken tok, ModuleDefinition module, IToken yieldPredicateName, string code, Attributes attrs) :
       base(tok, module)
     {
       YieldPredicateName = yieldPredicateName.val;
       Code = Util.RemoveParsedStringQuotesSimple(code);
+      Attributes = attrs;
     }
 
     public readonly string YieldPredicateName;
+    public readonly string Code;
+  }
+
+  public class CHLPreconditionArmadaProofDecl : ArmadaProofDecl
+  {
+    public override string WhatKind { get { return "Concurrent Hoare logic precondition"; } }
+
+    public CHLPreconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken preconditionName, string code) :
+      base(tok, module)
+    {
+      MethodName = methodName.val;
+      PreconditionName = preconditionName.val;
+      Code = Util.RemoveParsedStringQuotesSimple(code);
+    }
+
+    public readonly string MethodName;
+    public readonly string PreconditionName;
+    public readonly string Code;
+  }
+
+  public class CHLPostconditionArmadaProofDecl : ArmadaProofDecl
+  {
+    public override string WhatKind { get { return "Concurrent Hoare logic postcondition"; } }
+
+    public CHLPostconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken postconditionName, string code) :
+      base(tok, module)
+    {
+      MethodName = methodName.val;
+      PostconditionName = postconditionName.val;
+      Code = Util.RemoveParsedStringQuotesSimple(code);
+    }
+
+    public readonly string MethodName;
+    public readonly string PostconditionName;
+    public readonly string Code;
+  }
+
+  public class CHLLoopModifiesClauseArmadaProofDecl : ArmadaProofDecl
+  {
+    public override string WhatKind { get { return "Concurrent Hoare logic loop modifies clause"; } }
+
+    public CHLLoopModifiesClauseArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code) :
+      base(tok, module)
+    {
+      PCName = pcName.val;
+      ClauseName = clauseName.val;
+      Code = Util.RemoveParsedStringQuotesSimple(code);
+    }
+
+    public readonly string PCName;
+    public readonly string ClauseName;
     public readonly string Code;
   }
 
@@ -5913,11 +6007,11 @@ namespace Microsoft.Armada {
     public readonly List<string> GlobalVars;
   }
 
-  public class VariableHidingStrategyDecl : StrategyDecl
+  public class GlobalVariableHidingStrategyDecl : StrategyDecl
   {
-    public override string WhatKind { get { return "variable hiding strategy"; } }
+    public override string WhatKind { get { return "global variable hiding strategy"; } }
 
-    public VariableHidingStrategyDecl(IToken tok, ModuleDefinition module, List<IToken> variables) :
+    public GlobalVariableHidingStrategyDecl(IToken tok, ModuleDefinition module, List<IToken> variables) :
       base(tok, module)
     {
       Variables = variables.Select(v => v.val).ToList();
@@ -5926,24 +6020,26 @@ namespace Microsoft.Armada {
     public readonly List<string> Variables;
   }
 
-  public class StackVariableHidingStrategyDecl : VariableHidingStrategyDecl
+  public class StackVariableHidingStrategyDecl : StrategyDecl
   {
     public override string WhatKind { get { return "stack variable hiding strategy"; } }
 
     public StackVariableHidingStrategyDecl(IToken tok, ModuleDefinition module, IToken methodName, List<IToken> variables) :
-      base(tok, module, variables)
+      base(tok, module)
     {
       MethodName = methodName.val;
+      Variables = variables.Select(v => v.val).ToList();
     }
 
     public readonly string MethodName;
+    public readonly List<string> Variables;
   }
 
-  public class VariableIntroStrategyDecl : StrategyDecl
+  public class GlobalVariableIntroStrategyDecl : StrategyDecl
   {
-    public override string WhatKind { get { return "variable introduction strategy"; } }
+    public override string WhatKind { get { return "global variable introduction strategy"; } }
 
-    public VariableIntroStrategyDecl(IToken tok, ModuleDefinition module, List<IToken> variables) :
+    public GlobalVariableIntroStrategyDecl(IToken tok, ModuleDefinition module, List<IToken> variables) :
       base(tok, module)
     {
       Variables = variables;
@@ -5952,13 +6048,13 @@ namespace Microsoft.Armada {
     public readonly List<IToken> Variables;
   }
 
-  public class StackVariableIntroStrategyDecl : VariableIntroStrategyDecl
+  public class StackVariableIntroStrategyDecl : StrategyDecl
   {
     public override string WhatKind { get { return "stack variable introduction strategy"; } }
 
     public StackVariableIntroStrategyDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken variableName,
                                           string initializationExpression) :
-      base(tok, module, new List<IToken>{variableName})
+      base(tok, module)
     {
       MethodName = methodName.val;
       VariableName = variableName.val;
@@ -6247,16 +6343,17 @@ namespace Microsoft.Armada {
     public readonly Specification<Expression> Decreases;
     public readonly Specification<Expression> Reads;
     public readonly List<Expression> Awaits;
+    public readonly List<Expression> UndefinedUnless;
     private BlockStmt methodBody;  // Body is readonly after construction, except for any kind of rewrite that may take place around the time of resolution (note that "methodBody" is a "DividedBlockStmt" for any "Method" that is a "Constructor")
     public bool IsRecursive;  // filled in during resolution
     public bool IsTailRecursive;  // filled in during resolution
     public readonly ISet<IVariable> AssignedAssumptionVariables = new HashSet<IVariable>();
     public Method OverriddenMethod;
     private static BlockStmt emptyBody = new BlockStmt(Token.NoToken, Token.NoToken, new List<Statement>());
-    public NextRoutine externStartNextRoutine;
-    public NextRoutine externContinueNextRoutine;
-    public NextRoutine externEndNextRoutine;
-    public NextRoutine terminateNextRoutine;
+    public NextRoutineConstructor externStartNextRoutineConstructor;
+    public NextRoutineConstructor externContinueNextRoutineConstructor;
+    public NextRoutineConstructor externEndNextRoutineConstructor;
+    public NextRoutineConstructor terminateNextRoutineConstructor;
 
     public override IEnumerable<Expression> SubExpressions {
       get {
@@ -6299,6 +6396,7 @@ namespace Microsoft.Armada {
                   [Captured] Specification<Expression> decreases,
                   Specification<Expression> reads,
                   List<Expression> awaits,
+                  List<Expression> undefinedUnless,
                   [Captured] BlockStmt body,
                   Attributes attributes, IToken signatureEllipsis)
       : base(tok, name, hasStaticKeyword, isGhost, attributes) {
@@ -6320,6 +6418,7 @@ namespace Microsoft.Armada {
       this.Decreases = decreases;
       this.Reads = reads;
       this.Awaits = awaits;
+      this.UndefinedUnless = undefinedUnless;
       this.methodBody = body;
       this.SignatureEllipsis = signatureEllipsis;
       MustReverify = false;
@@ -6409,7 +6508,7 @@ namespace Microsoft.Armada {
                  [Captured] Specification<Expression> decreases,
                  [Captured] BlockStmt body,
                  Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis) {
+      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, signatureEllipsis) {
     }
   }
 
@@ -6426,7 +6525,7 @@ namespace Microsoft.Armada {
                  [Captured] Specification<Expression> decreases,
                  [Captured] BlockStmt body,
                  Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis) {
+      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, signatureEllipsis) {
       Contract.Requires(tok != null);
       Contract.Requires(name != null);
       Contract.Requires(typeArgs != null);
@@ -6472,7 +6571,7 @@ namespace Microsoft.Armada {
                   Specification<Expression> decreases,
                   DividedBlockStmt body,
                   Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, false, false, typeArgs, ins, new List<Formal>(), req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis) {
+      : base(tok, name, false, false, typeArgs, ins, new List<Formal>(), req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, signatureEllipsis) {
       Contract.Requires(tok != null);
       Contract.Requires(name != null);
       Contract.Requires(cce.NonNullElements(typeArgs));
@@ -6502,7 +6601,7 @@ namespace Microsoft.Armada {
                   Specification<Expression> decreases,
                   BlockStmt body,
                   Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, false, false, typeArgs, ins, new List<Formal>(), req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis) {
+      : base(tok, name, false, false, typeArgs, ins, new List<Formal>(), req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, signatureEllipsis) {
       Contract.Requires(tok != null);
       Contract.Requires(name != null);
       Contract.Requires(cce.NonNullElements(typeArgs));
@@ -6532,7 +6631,7 @@ namespace Microsoft.Armada {
                        List<TypeParameter> typeArgs, Formal k, List<Formal> ins, List<Formal> outs,
                        List<MaybeFreeExpression> req, Specification<FrameExpression> mod, List<MaybeFreeExpression> ens, Specification<Expression> decreases,
                        BlockStmt body, Attributes attributes, FixpointLemma fixpointLemma)
-      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, null) {
+      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, null) {
       Contract.Requires(k != null);
       Contract.Requires(ins != null && 1 <= ins.Count && ins[0] == k);
       Contract.Requires(fixpointLemma != null);
@@ -6560,7 +6659,7 @@ namespace Microsoft.Armada {
                          Specification<Expression> decreases,
                          BlockStmt body,
                          Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis) {
+      : base(tok, name, hasStaticKeyword, true, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), new List<Expression>(), body, attributes, signatureEllipsis) {
       Contract.Requires(tok != null);
       Contract.Requires(name != null);
       Contract.Requires(cce.NonNullElements(typeArgs));
@@ -6623,32 +6722,6 @@ namespace Microsoft.Armada {
       Contract.Requires(mod != null);
       Contract.Requires(cce.NonNullElements(ens));
       Contract.Requires(decreases != null);
-    }
-  }
-
-  public class ActionMethod : Method
-  {
-    // The sequence of low-level actions called by this method. Filled out during action rewriting.
-    internal List<string> Actions;
-
-    // The location of the non-mover in the sequence. Filled out during action rewriting.
-    internal int CommitIndex;
-
-    internal ISet<Expression> YieldPredicates;
-
-    public ActionMethod(IToken tok, string name,
-                 [Captured] List<TypeParameter> typeArgs,
-                 [Captured] List<Formal> ins, [Captured] List<Formal> outs,
-                 [Captured] List<MaybeFreeExpression> req, [Captured] Specification<FrameExpression> mod,
-                 [Captured] List<MaybeFreeExpression> ens,
-                 [Captured] Specification<Expression> decreases,
-                 [Captured] BlockStmt body,
-                 Attributes attributes, IToken signatureEllipsis)
-      : base(tok, name, false, false, typeArgs, ins, outs, req, mod, ens, decreases, new Specification<Expression>(new List<Expression>(), null), new List<Expression>(), body, attributes, signatureEllipsis)
-    {
-      Actions = new List<string>();
-      CommitIndex = -1;
-      YieldPredicates = new HashSet<Expression>();
     }
   }
 
@@ -6896,25 +6969,45 @@ namespace Microsoft.Armada {
 
   public class SomehowStmt : Statement
   {
-    public readonly List<Expression> Awaits;
-    public readonly List<Expression> Req;
+    public readonly List<Expression> UndefinedUnless;
     public readonly Specification<Expression> Mod;
     public readonly List<Expression> Ens;
 
-    public SomehowStmt(IToken tok, IToken endTok, List<Expression> awaits, List<Expression> req, Specification<Expression> mod,
+    public SomehowStmt(IToken tok, IToken endTok, List<Expression> undefinedUnless, Specification<Expression> mod,
                        List<Expression> ens) : base(tok, endTok)
     {
       Contract.Requires(tok != null);
       Contract.Requires(endTok != null);
-      Contract.Requires(awaits != null);
-      Contract.Requires(req != null);
+      Contract.Requires(undefinedUnless != null);
       Contract.Requires(mod != null);
       Contract.Requires(ens != null);
 
-      this.Awaits = awaits;
-      this.Req = req;
+      this.UndefinedUnless = undefinedUnless;
       this.Mod = mod;
       this.Ens = ens;
+    }
+  }
+
+  public class FenceStmt : Statement
+  {
+    public FenceStmt(IToken tok, IToken endTok) : base(tok, endTok)
+    {
+      Contract.Requires(tok != null);
+      Contract.Requires(endTok != null);
+    }
+  }
+
+  public class GotoStmt : Statement
+  {
+    public readonly string Target;
+    public Label TargetLabel;
+
+    public GotoStmt(IToken tok, IToken endTok, string target) : base(tok, endTok)
+    {
+      Contract.Requires(tok != null);
+      Contract.Requires(endTok != null);
+      Contract.Requires(target != null);
+      Target = target;
     }
   }
 
@@ -7275,6 +7368,51 @@ namespace Microsoft.Armada {
     public readonly Expression Count;
 
     public override bool CanAffectPreviouslyKnownExpressions { get { return false; } }
+  }
+
+  public class CompareAndSwapRhs : AssignmentRhs {
+    public CompareAndSwapRhs(IToken tok, Expression target, Expression oldval, Expression newval)
+      : base(tok)
+    {
+      Target = target;
+      OldVal = oldval;
+      NewVal = newval;
+    }
+
+    public readonly Expression Target;
+    public readonly Expression OldVal;
+    public readonly Expression NewVal;
+
+    public override bool CanAffectPreviouslyKnownExpressions { get { return false; } }
+
+    public override IEnumerable<Expression> SubExpressions {
+      get {
+        yield return Target;
+        yield return OldVal;
+        yield return NewVal;
+      }
+    }
+  }
+
+  public class AtomicExchangeRhs : AssignmentRhs {
+    public AtomicExchangeRhs(IToken tok, Expression target, Expression newval)
+      : base(tok)
+    {
+      Target = target;
+      NewVal = newval;
+    }
+
+    public readonly Expression Target;
+    public readonly Expression NewVal;
+
+    public override bool CanAffectPreviouslyKnownExpressions { get { return false; } }
+
+    public override IEnumerable<Expression> SubExpressions {
+      get {
+        yield return Target;
+        yield return NewVal;
+      }
+    }
   }
 
   public class VarDeclStmt : Statement
@@ -7937,15 +8075,17 @@ namespace Microsoft.Armada {
   {
     public readonly Expression Guard;
     public readonly BlockStmt Body;
+    public readonly List<Expression> Ens;
 
-    public WhileStmt(IToken tok, IToken endTok, Expression guard,
-                     List<MaybeFreeExpression> invariants, Specification<Expression> decreases, Specification<FrameExpression> mod,
+    public WhileStmt(IToken tok, IToken endTok, Expression guard, List<MaybeFreeExpression> invariants,
+                     List<Expression> ens, Specification<Expression> decreases, Specification<FrameExpression> mod,
                      BlockStmt body)
       : base(tok, endTok, invariants, decreases, mod) {
       Contract.Requires(tok != null);
       Contract.Requires(endTok != null);
       this.Guard = guard;
       this.Body = body;
+      this.Ens = ens;
     }
 
     public override IEnumerable<Statement> SubStatements {
@@ -7958,6 +8098,7 @@ namespace Microsoft.Armada {
     public override IEnumerable<Expression> SubExpressions {
       get {
         foreach (var e in base.SubExpressions) { yield return e; }
+        foreach (var e in Ens) { yield return e; }
         if (Guard != null) {
           yield return Guard;
         }
@@ -7974,7 +8115,7 @@ namespace Microsoft.Armada {
     public RefinedWhileStmt(IToken tok, IToken endTok, Expression guard,
                             List<MaybeFreeExpression> invariants, Specification<Expression> decreases, Specification<FrameExpression> mod,
                             BlockStmt body)
-      : base(tok, endTok, guard, invariants, decreases, mod, body) {
+      : base(tok, endTok, guard, invariants, new List<Expression>(), decreases, mod, body) {
       Contract.Requires(tok != null);
       Contract.Requires(endTok != null);
       Contract.Requires(body != null);
@@ -9417,6 +9558,22 @@ namespace Microsoft.Armada {
     }
   }
 
+  public class TotalStateExpr : Expression {
+    public TotalStateExpr(IToken tok) : base(tok) {
+      Contract.Requires(tok != null);
+    }
+  }
+
+  public class IfUndefinedExpr : Expression  {
+    public Expression PotentiallyUnsafe, SafeSubstitution;
+
+    public IfUndefinedExpr(IToken tok, Expression potentiallyUnsafe, Expression safeSubstitution) : base(tok) {
+      Contract.Requires(tok != null);
+      PotentiallyUnsafe = potentiallyUnsafe;
+      SafeSubstitution = safeSubstitution;
+    }
+  }
+
   public class ExpressionPair {
     public Expression A, B;
     public ExpressionPair(Expression a, Expression b) {
@@ -9494,7 +9651,7 @@ namespace Microsoft.Armada {
   }
 
   /// <summary>
-  /// This class is used only inside the resolver itself. It gets hung in the AST in uncompleted name segments.
+  /// This class is used only inside the resolver itself. It stops responding in the AST in uncompleted name segments.
   /// </summary>
   class Resolver_IdentifierExpr : Expression
   {
@@ -10064,7 +10221,8 @@ namespace Microsoft.Armada {
       Lit,  // there is no syntax for this operator, but it is sometimes introduced during translation
       AddressOf,
       Dereference,
-      AllocatedArray
+      AllocatedArray,
+      GlobalView
     }
     public readonly Opcode Op;
 

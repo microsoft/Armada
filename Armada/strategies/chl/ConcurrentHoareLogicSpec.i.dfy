@@ -6,587 +6,1023 @@ include "../../util/option.s.dfy"
 
 module ConcurrentHoareLogicSpecModule {
 
-    import opened util_collections_maps_s
-    import opened util_collections_seqs_s
-    import opened util_option_s
-    import opened AnnotatedBehaviorModule
-    import opened InvariantsModule
+  // Yields are dealt with as follows.
+  // * On a call, the callee has to deal with a yield happening after the requires clause is satisfied.
+  // * On reaching a loop head for the first time, the loop modifies clause must hold before the yield.
+  // * On reaching a loop a subsequent time, the loop modifies clause must hold between s1 and s2, where s1 is the
+  //   state on reaching the loop head before a yield, and s2 is the state on returning to the loop head before yielding.
+  // * After executing a loop-modifies clause, a yield can happen.
+  // * On a return, the callee/returner must deal with a yield happening after reaching the return site.  That is,
+  //   it must ensure the postcondition even after a yield.
+  // * After executing an ensures clause, one does not have to worry about a yield happening.
 
-    datatype PCType<!PC(==)> = ReturnSite | CallSite | ForkSite | LoopHead | NormalPC
+  // The result of calling cr.step_to_proc on a step indicates which procedure that step is part of.
+  // * A step that calls from method X into method Y is considered part of method X.
+  // * A step that returns from method Y to method X is considered part of method X.  That's not a typo:  it's considered
+  //   part of the caller, not the callee.
+  // * A step that returns from method Y to method X and then calls method Z is likewise considered part of method X.
 
-    datatype StraightlineState<State, PC> = StraightlineState(state:State, visited_loops:map<PC, State>, started:bool)
-    datatype StraightlineStep<State, Step>
-        = StraightlineStepStart()
-                // start execution of the procedure by yielding
-        | StraightlineStepNormal(post_stmt_state:State, step:Step)
-                // perform the associated real step, then yield
-        | StraightlineStepCall(post_call_state:State, pre_return_state:State, post_return_state:State, call_step:Step, return_step:Step)
-                // call, then havoc subject to the invariant and postcondition, then return, then yield
-        | StraightlineStepLoop(post_loops_state:State, post_guard_state:State, guard_step:Step)
-                // havoc the state subject to the invariant and loop modifies clause, then execute guard step, then yield
-    datatype PCStack<PC> = PCStack(pc:PC, stack:seq<PC>)
+  import opened util_collections_maps_s
+  import opened util_collections_seqs_s
+  import opened util_option_s
+  import opened AnnotatedBehaviorModule
+  import opened InvariantsModule
 
-    datatype StraightlineConfig<State> = StraightlineConfig(state:State)
+  /////////////////////////////////////////////////////
+  // Type definitions
+  /////////////////////////////////////////////////////
 
-    datatype ConcurrentHoareLogicRequest<!State(==), !Actor(==), !Step(==), !PC(==), !ProcName(==)> = ConcurrentHoareLogicRequest(
-        spec:AnnotatedBehaviorSpec<State, Step>,
-        idmap:Step->Option<Actor>,
-        actor_info:State->imap<Actor, PCStack<PC>>,
-        pc_to_proc:PC->ProcName,
-        is_entry_point:PC->bool,
-        pc_type:PC->PCType<PC>,
-        established_inv:State->bool,
-        global_inv:State->bool,
-        local_inv:(State, Actor)->bool,
-        enablement_condition:(State, Actor)->bool,
-        yield_pred:(State, State, Actor)->bool,
-        requires_clauses:(ProcName, State, Actor)->bool,
-        ensures_clauses:(ProcName, State, State, Actor)->bool,
-        loop_modifies_clauses:map<PC, (State, State, Actor)->bool>
-        )
+  datatype StraightlineStep<Step, PC, Proc> = StraightlineStepNormal(step:Step)
+                                            | StraightlineStepLoopModifies(pc:PC)
+                                            | StraightlineStepYield
+                                            | StraightlineStepCall(step:Step)
+                                            | StraightlineStepEnsures(callee:Proc)
+                                            | StraightlineStepReturn(step:Step)
+                                            | StraightlineStepReturnThenCall(step:Step)
 
-    predicate SpecSatisfiesProgramControlFlow<State(!new), Actor, Step(!new), PC, ProcName>(
-        spec:AnnotatedBehaviorSpec<State, Step>,
-        idmap:Step->Option<Actor>,
-        actor_info:State->imap<Actor, PCStack<PC>>,
-        pc_to_proc:PC->ProcName,
-        is_entry_point:PC->bool,
-        pc_type:PC->PCType<PC>
-        )
-    {
-        // At initialization, each thread is at a procedure entry point with an empty stack
-        && (forall s, actor ::
-               && s in spec.init
-               && actor in actor_info(s)
-               ==> var PCStack(pc, stack) := actor_info(s)[actor];
-                   && is_entry_point(pc)
-                   && |stack| == 0)
+  datatype StraightlinePhase = StraightlinePhaseNormal
+                             | StraightlinePhaseLooped
+                             | StraightlinePhaseYielded
+                             | StraightlinePhaseCalled
+                             | StraightlinePhaseEnsured
 
-        // When a thread starts (i.e., is forked), the forker is at a fork site and the forked thread
-        // is at a procedure entry point with an empty stack
-        && (forall s, s', step, forked_actor ::
-              && ActionTuple(s, s', step) in spec.next
-              && forked_actor !in actor_info(s)
-              && forked_actor in actor_info(s')
-              ==> && idmap(step).Some?
-                  && idmap(step).v in actor_info(s)
-                  && pc_type(actor_info(s)[idmap(step).v].pc).ForkSite?
-                  && var PCStack(pc', stack') := actor_info(s')[forked_actor];
-                  && is_entry_point(pc')
-                  && |stack'| == 0)
+  datatype StraightlineAux<State, PC> = StraightlineAux(phase:StraightlinePhase, visited_loops:map<PC, State>)
 
-        // One actor taking a step leaves each other actor's PC and stack unchanged
-        // (unless that other actor didn't have a PC before, i.e., this actor was forking that actor)
-        && (forall s, s', step, other_actor ::
-              && ActionTuple(s, s', step) in spec.next
-              && idmap(step) != Some(other_actor)
-              && other_actor in actor_info(s)
-              ==> && other_actor in actor_info(s')
-                  && actor_info(s')[other_actor] == actor_info(s)[other_actor])
+  datatype StraightlineState<State, PC> = StraightlineState(state:State, aux:StraightlineAux<State, PC>)
 
-        // Executing a call instruction sets the PC to the target procedure's entry point and pushes the return-to value on the stack
-        // Executing a return instruction sets the PC to what gets popped off the top of the stack
-        // Executing anything other than a call or return leaves the stack unchanged and has the PC stay in the same procedure
-        && (forall s, s', step ::
-               && idmap(step).Some?
-               && ActionTuple(s, s', step) in spec.next
-               ==> var actor := idmap(step).v;
-                   && actor in actor_info(s)
-                   && var PCStack(pc, stack) := actor_info(s)[actor];
-                   && (|| (&& pc_type(pc).CallSite?
-                         && actor in actor_info(s')
-                         && var PCStack(pc', stack') := actor_info(s')[actor];
-                         && is_entry_point(pc')
-                         && |stack'| > 0
-                         && stack == stack'[1..]
-                         && pc_to_proc(stack'[0]) == pc_to_proc(pc)
-                         )
-                      || (&& pc_type(pc).ReturnSite?
-                         && |stack| > 0
-                         && actor in actor_info(s')
-                         && var PCStack(pc', stack') := actor_info(s')[actor];
-                         && pc' == stack[0]
-                         && stack' == stack[1..]
-                         )
-                      || (&& pc_type(pc).ReturnSite?
-                         && |stack| == 0
-                         // If the stack is empty when we return, the thread exits, which we model as no longer being in actor_info
-                         && actor !in actor_info(s')
-                         )
-                      || (&& actor in actor_info(s')
-                         && var PCStack(pc', stack') := actor_info(s')[actor];
-                         && pc_to_proc(pc') == pc_to_proc(pc)
-                         && stack' == stack
-                         )
-                      )
-           )
-    }
+  datatype PCStack<PC, Proc> = PCStack(pc:PC, stack:seq<Proc>)
 
-    predicate StraightlineSpecInit<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName
-        )
-    {
-        // A straightline behavior begins with the actor at the beginning of a procedure, in the not-started state
-        && actor in cr.actor_info(s.state)
-        && var pc := cr.actor_info(s.state)[actor].pc;
-        && cr.pc_to_proc(pc) == proc
-        && cr.is_entry_point(pc)
-        && cr.established_inv(s.state)
-        && cr.global_inv(s.state)
-        && cr.requires_clauses(proc, s.state, actor)
-        && |s.visited_loops| == 0
-        && !s.started
-    }
+  datatype CHLStepEffect<Proc> = CHLStepEffectNormal
+                               | CHLStepEffectCall(callee:Proc)
+                               | CHLStepEffectReturn
+                               | CHLStepEffectExit
+                               | CHLStepEffectReturnThenCall(callee:Proc)
+                               | CHLStepEffectActorless
+                               | CHLStepEffectStop
 
-    predicate StraightlineSpecNextCommon<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName
-        )
-    {
-        && cr.established_inv(s.state)
-        && cr.global_inv(s.state)
-        && actor in cr.actor_info(s.state)
-        && actor in cr.actor_info(s'.state)
-        && cr.established_inv(s'.state)
-        && cr.global_inv(s'.state)
-        && var PCStack(pc, stack) := cr.actor_info(s.state)[actor];
-        && cr.pc_to_proc(pc) == proc
-        && s'.started
-        && pc !in s.visited_loops      // The program can't proceed once the PC jumps back to a loop head
-    }
+  datatype ConcurrentHoareLogicRequest<!State(==), !Actor(==), !Step(==), !PC(==), !Proc(==)> = ConcurrentHoareLogicRequest(
+    spec:AnnotatedBehaviorSpec<State, Step>,
+    step_to_actor:Step->Option<Actor>,
+    step_to_proc:Step->Proc,
+    get_actor_pc_stack:(State, Actor)->Option<PCStack<PC, Proc>>,
+    state_ok:State->bool,
+    pc_to_proc:PC->Proc,
+    is_entry_point:PC->bool,
+    is_loop_head:PC->bool,
+    is_return_site:PC->bool,
+    step_to_effect:Step->CHLStepEffect<Proc>,
+    established_inv:State->bool,
+    global_inv:State->bool,
+    local_inv:(State, Actor)->bool,
+    yield_pred:(State, State, Actor)->bool,
+    requires_clauses:(Proc, State, Actor)->bool,
+    ensures_clauses:(Proc, State, State, Actor)->bool,
+    loop_modifies_clauses:(PC, State, State, Actor)->bool
+    )
 
-    predicate StraightlineSpecNextStart<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName
-        )
-    {
-        && StraightlineSpecNextCommon(cr, s, s', actor, proc)
-        && !s.started
-        && cr.yield_pred(s.state, s'.state, actor)
-        && s'.visited_loops == s.visited_loops
-    }
+  /////////////////////////////////////////////////////
+  // Straightline behavior specification
+  /////////////////////////////////////////////////////
 
-    predicate StraightlineSpecNextNormal<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName,
-        post_stmt_state:State,
-        lstep:Step
-        )
-    {
-        && StraightlineSpecNextCommon(cr, s, s', actor, proc)
-        && cr.local_inv(s.state, actor)
-        && var pc := cr.actor_info(s.state)[actor].pc;
-        && s.started
-        && !cr.pc_type(pc).LoopHead?   // The PC can't be at a loop head, because from there we take loop steps
-        && actor in cr.actor_info(post_stmt_state)
-        && cr.actor_info(post_stmt_state)[actor].stack == cr.actor_info(s.state)[actor].stack
+  function StraightlineInitAux<State, PC>() : StraightlineAux<State, PC>
+  {
+    StraightlineAux(StraightlinePhaseNormal, map [])
+  }
 
-        // First, we take a normal step to go from s.state to post_stmt_state
+  predicate StraightlineSpecInit<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    actor:Actor,
+    proc:Proc
+    )
+  {
+    // A straightline behavior begins with the actor at the beginning of a procedure
+    var s := ss.state;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+    && cr.pc_to_proc(pc) == proc
+    && cr.is_entry_point(pc)
+    && cr.established_inv(s)
+    && cr.global_inv(s)
+    && cr.state_ok(s)
+    && cr.requires_clauses(proc, s, actor)
+    && ss.aux == StraightlineInitAux()
+  }
 
-        && cr.idmap(lstep).Some?
-        && cr.idmap(lstep).v == actor
-        && cr.enablement_condition(s.state, actor)
-        && ActionTuple(s.state, post_stmt_state, lstep) in cr.spec.next
-        && cr.established_inv(post_stmt_state)
-        && cr.global_inv(post_stmt_state)
+  function StraightlineUpdateAux<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    actor:Actor,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    s':State
+    ) : StraightlineAux<State, PC>
+  {
+    var phase' :=
+      match sstep
+        case StraightlineStepNormal(_) =>          StraightlinePhaseNormal
+        case StraightlineStepLoopModifies(_) =>    StraightlinePhaseLooped
+        case StraightlineStepYield() =>            StraightlinePhaseYielded
+        case StraightlineStepCall(_) =>            StraightlinePhaseCalled
+        case StraightlineStepEnsures(_) =>         StraightlinePhaseEnsured
+        case StraightlineStepReturn(_) =>          StraightlinePhaseNormal
+        case StraightlineStepReturnThenCall(_) =>  StraightlinePhaseCalled
+      ;
+    var StraightlineState(s, aux) := ss;
+    var visited_loops' := if sstep.StraightlineStepLoopModifies? && cr.get_actor_pc_stack(s, actor).Some? then
+                            aux.visited_loops[cr.get_actor_pc_stack(s, actor).v.pc := s]
+                          else
+                            aux.visited_loops;
+    StraightlineAux(phase', visited_loops')
+  }
 
-        // Then, we yield to other threads to go from post_stmt_state to s'.state
+  predicate StraightlineSpecNextCommon<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor
+    )
+  {
+    var StraightlineState(s, aux) := ss;
+    var StraightlineState(s', aux') := ss';
 
-        && cr.yield_pred(post_stmt_state, s'.state, actor)
-        && s'.visited_loops == s.visited_loops
-        && cr.established_inv(s'.state)
-        && cr.global_inv(s'.state)
-    }
+    // The actor must be present both before and after the step.
 
-    predicate StraightlineSpecNextCall<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName,
-        post_call_state:State,
-        pre_return_state:State,
-        post_return_state:State,
-        call_step:Step,
-        return_step:Step
-        )
-    {
-        && StraightlineSpecNextCommon(cr, s, s', actor, proc)
-        && cr.local_inv(s.state, actor)
-        && var PCStack(pc, stack) := cr.actor_info(s.state)[actor];
-        && s.started
-        && cr.pc_type(pc).CallSite?
-        && actor in cr.actor_info(post_call_state)
-        && actor in cr.actor_info(pre_return_state)
-        && actor in cr.actor_info(post_return_state)
-        && var PCStack(pc_post_call, stack_post_call) := cr.actor_info(post_call_state)[actor];
-        && var PCStack(pc_pre_return, stack_pre_return) := cr.actor_info(pre_return_state)[actor];
-        && var PCStack(pc_post_return, stack_post_return) := cr.actor_info(post_return_state)[actor];
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).Some?
 
-        // First, we call into the callee (pushing a stack frame, e.g.)
+    // The type of step the state machine can take is dictated by the current phase.  (The phase depends on the previous
+    // step, so this restriction restricts consecutive pairs of steps.)
 
-        && var callee := cr.pc_to_proc(pc_post_call);
-        && cr.is_entry_point(pc_post_call)
-        && |stack_post_call| > 0
-        && cr.enablement_condition(s.state, actor)
-        && ActionTuple(s.state, post_call_state, call_step) in cr.spec.next
-        && cr.idmap(call_step).Some?
-        && cr.idmap(call_step).v == actor
-        && cr.established_inv(post_call_state)
-        && cr.global_inv(post_call_state)
-        && cr.requires_clauses(callee, post_call_state, actor)
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+    && (match aux.phase
+         case StraightlinePhaseNormal => sstep.StraightlineStepYield?
+         case StraightlinePhaseLooped => sstep.StraightlineStepNormal? || sstep.StraightlineStepCall?
+         case StraightlinePhaseYielded => if cr.is_loop_head(pc) then sstep.StraightlineStepLoopModifies?
+                                          else sstep.StraightlineStepNormal? || sstep.StraightlineStepCall?
+         case StraightlinePhaseCalled => sstep.StraightlineStepEnsures?
+         case StraightlinePhaseEnsured => sstep.StraightlineStepReturn? || sstep.StraightlineStepReturnThenCall?)
 
-        // Second, we simulate execution of the callee
+    // The established and global invariants are always preserved, and the state is always OK.
 
-        && cr.pc_to_proc(pc_pre_return) == callee
-        && cr.pc_type(pc_pre_return).ReturnSite?
-        && stack_pre_return == stack_post_call
-        && cr.ensures_clauses(callee, post_call_state, pre_return_state, actor)
-        && cr.established_inv(pre_return_state)
-        && cr.global_inv(pre_return_state)
-        && cr.local_inv(pre_return_state, actor)
+    && cr.established_inv(s')
+    && cr.global_inv(s')
+    && cr.state_ok(s')
 
-        // Third, we return to the caller, with the PC becoming the return-to site of the call
+    // The auxiliary information is a deterministic function of the current state and the straightline step taken.
+    
+    && aux' == StraightlineUpdateAux(cr, ss, actor, sstep, s')
 
-        && cr.enablement_condition(pre_return_state, actor)
-        && ActionTuple(pre_return_state, post_return_state, return_step) in cr.spec.next
-        && cr.idmap(return_step).Some?
-        && cr.idmap(return_step).v == actor
-        && pc_post_return == stack_post_call[0]
-        && stack_post_return == stack
-        && cr.established_inv(post_return_state)
-        && cr.global_inv(post_return_state)
+    // If the state machine has reached an already-visited loop head and yielded, it can't execute further.
 
-        // Finally, we havoc the state subject to the yield predicate
+    && !(pc in aux.visited_loops && aux.phase.StraightlinePhaseYielded?)
 
-        && cr.yield_pred(post_return_state, s'.state, actor)
-        && s'.visited_loops == s.visited_loops
-        && cr.established_inv(s'.state)
-        && cr.global_inv(s'.state)
-    }
+    // The state machine can never return, except to return from a call that it made to another method.
 
-    predicate StraightlineSpecNextLoop<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        actor:Actor,
-        proc:ProcName,
-        post_loops_state:State,
-        post_guard_state:State,
-        guard_step:Step
-        )
-    {
-        && StraightlineSpecNextCommon(cr, s, s', actor, proc)
-        && cr.local_inv(s.state, actor)
-        && var PCStack(pc, stack) := cr.actor_info(s.state)[actor];
-        && s.started
-        && cr.pc_type(pc).LoopHead?
-        && actor in cr.actor_info(post_loops_state)
-        && actor in cr.actor_info(post_guard_state)
-        && var PCStack(pc_post_loops, stack_post_loops) := cr.actor_info(post_loops_state)[actor];
-        && var PCStack(pc_post_guard, stack_post_guard) := cr.actor_info(post_guard_state)[actor];
+    && (sstep.StraightlineStepReturn? || sstep.StraightlineStepReturnThenCall? ==> ss.aux.phase.StraightlinePhaseEnsured?)
+  }
 
-        // First, we emulate zero or more loop body executions, by havocing the state subject to the
-        // local and global predicates, and the loop modifies clause. We keep the PC and stack of
-        // this actor unchanged, though.
+  predicate StraightlineSpecNextStep<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    step:Step
+    )
+  {
+    && StraightlineSpecNextCommon(cr, ss, ss', sstep, actor)
+    && cr.step_to_actor(step).Some?
+    && cr.step_to_actor(step).v == actor
+    && cr.step_to_proc(step) == proc
+    && ActionTuple(ss.state, ss'.state, step) in cr.spec.next
+    && cr.local_inv(ss.state, actor)
+  }
 
-        && cr.enablement_condition(s.state, actor)
-        && (pc in cr.loop_modifies_clauses ==> cr.loop_modifies_clauses[pc](s.state, post_loops_state, actor))
-        && cr.established_inv(post_loops_state)
-        && cr.global_inv(post_loops_state)
-        && cr.local_inv(post_loops_state, actor)
-        && pc_post_loops == pc
-        && stack_post_loops == stack
+  predicate StraightlineSpecNextNormal<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    step:Step
+    )
+    requires sstep.StraightlineStepNormal?
+  {
+    && StraightlineSpecNextStep(cr, ss, ss', sstep, actor, proc, step)
+    && cr.step_to_effect(step).CHLStepEffectNormal?
+  }
 
-        // Next, we execute the real step (the guard step).
-        && cr.enablement_condition(post_loops_state, actor)
-        && ActionTuple(post_loops_state, post_guard_state, guard_step) in cr.spec.next
-        && cr.idmap(guard_step).Some?
-        && cr.idmap(guard_step).v == actor
-        && cr.established_inv(post_guard_state)
-        && cr.global_inv(post_guard_state)
+  predicate StraightlineSpecNextCall<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    step:Step
+    )
+    requires sstep.StraightlineStepCall?
+  {
+    && StraightlineSpecNextStep(cr, ss, ss', sstep, actor, proc, step)
+    && cr.step_to_effect(step).CHLStepEffectCall?
+    && var s' := ss'.state;
+      var callee := cr.step_to_effect(step).callee;
+    && callee == cr.pc_to_proc(cr.get_actor_pc_stack(s', actor).v.pc)
+    && cr.requires_clauses(callee, s', actor)
+  }
 
-        // Finally, we havoc the state subject to the yield predicate
-        && cr.yield_pred(post_guard_state, s'.state, actor)
-        && s'.visited_loops == s.visited_loops[pc := s.state]
-        && cr.established_inv(s'.state)
-        && cr.global_inv(s'.state)
-    }
+  predicate StraightlineSpecNextReturn<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    step:Step
+    )
+    requires sstep.StraightlineStepReturn?
+  {
+    && StraightlineSpecNextStep(cr, ss, ss', sstep, actor, proc, step)
+    && cr.step_to_effect(step).CHLStepEffectReturn?
+  }
 
-    predicate StraightlineSpecNext<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        s:StraightlineState<State, PC>,
-        s':StraightlineState<State, PC>,
-        step:StraightlineStep<State, Step>,
-        actor:Actor,
-        proc:ProcName
-        )
-    {
-        match step
-           case StraightlineStepStart()
-               => StraightlineSpecNextStart(cr, s, s', actor, proc)
-           case StraightlineStepNormal(post_stmt_state, lstep)
-               => StraightlineSpecNextNormal(cr, s, s', actor, proc, post_stmt_state, lstep)
-           case StraightlineStepCall(post_call_state, pre_return_state, post_return_state, call_step, return_step)
-               => StraightlineSpecNextCall(cr, s, s', actor, proc, post_call_state, pre_return_state, post_return_state,
-                                           call_step, return_step)
-           case StraightlineStepLoop(post_loops_state, post_guard_state, guard_step)
-               => StraightlineSpecNextLoop(cr, s, s', actor, proc, post_loops_state, post_guard_state, guard_step)
-    }
+  predicate StraightlineSpecNextReturnThenCall<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    step:Step
+    )
+    requires sstep.StraightlineStepReturnThenCall?
+  {
+    && StraightlineSpecNextStep(cr, ss, ss', sstep, actor, proc, step)
+    && cr.step_to_effect(step).CHLStepEffectReturnThenCall?
+    && var s' := ss'.state;
+      var callee := cr.step_to_effect(step).callee;
+    && callee == cr.pc_to_proc(cr.get_actor_pc_stack(s', actor).v.pc)
+    && cr.requires_clauses(callee, s', actor)
+  }
 
-    function GetStraightlineSpec<State(!new), Actor(!new), Step(!new), PC(!new), ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>,
-        actor:Actor,
-        proc:ProcName
-        ) :
-        AnnotatedBehaviorSpec<StraightlineState<State, PC>, StraightlineStep<State, Step>>
-    {
-        AnnotatedBehaviorSpec(iset s | StraightlineSpecInit(cr, s, actor, proc),
-                              iset s, s', step | StraightlineSpecNext(cr, s, s', step, actor, proc) :: ActionTuple(s, s', step))
-    }
+  predicate StraightlineSpecNextYield<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc
+    )
+    requires sstep.StraightlineStepYield?
+  {
+    && StraightlineSpecNextCommon(cr, ss, ss', sstep, actor)
+    && var s := ss.state;
+       var s' := ss'.state;
+    && cr.get_actor_pc_stack(s', actor) == cr.get_actor_pc_stack(s, actor)
+    && cr.yield_pred(s, s', actor)
+  }
 
-    predicate YieldPredicateReflexive<State(!new), Actor(!new)>(yp:(State, State, Actor)->bool)
-    {
-        forall s, actor :: yp(s, s, actor)
-    }
+  predicate StraightlineSpecNextLoopModifies<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    pc:PC
+    )
+    requires sstep.StraightlineStepLoopModifies?
+  {
+    && StraightlineSpecNextCommon(cr, ss, ss', sstep, actor)
+    && var s := ss.state;
+      var s' := ss'.state;
+    && pc == cr.get_actor_pc_stack(s, actor).v.pc
+    && cr.is_loop_head(pc)
+    && cr.get_actor_pc_stack(s', actor) == cr.get_actor_pc_stack(s, actor)
+    && cr.loop_modifies_clauses(pc, s, s', actor)
+  }
 
-    predicate YieldPredicateTransitive<State(!new), Actor(!new)>(yp:(State, State, Actor)->bool)
-    {
-        forall s1, s2, s3, actor :: yp(s1, s2, actor) && yp(s2, s3, actor) ==> yp(s1, s3, actor)
-    }
+  predicate StraightlineSpecNextEnsures<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc,
+    callee:Proc
+    )
+    requires sstep.StraightlineStepEnsures?
+  {
+    && StraightlineSpecNextCommon(cr, ss, ss', sstep, actor)
+    && var s := ss.state;
+       var s' := ss'.state;
+       var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+       var PCStack(pc', stack') := cr.get_actor_pc_stack(s', actor).v;
+    && callee == cr.pc_to_proc(pc)
+    && callee == cr.pc_to_proc(pc')
+    && cr.is_return_site(pc')
+    && stack' == stack
+    && cr.ensures_clauses(callee, s, s', actor)
+  }
 
-    predicate YieldPredicateDoesntAffectActorInfo<State(!new), Actor, PC>(
-        actor_info:State->imap<Actor, PCStack<PC>>,
-        yield_pred:(State, State, Actor)->bool
-        )
-    {
-        forall s, s', actor ::
-            (actor in actor_info(s) && yield_pred(s, s', actor))
-            ==> actor in actor_info(s') && actor_info(s')[actor] == actor_info(s)[actor]
-    }
+  predicate StraightlineSpecNext<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    ss:StraightlineState<State, PC>,
+    ss':StraightlineState<State, PC>,
+    sstep:StraightlineStep<Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc
+    )
+  {
+    match sstep
+      case StraightlineStepNormal(step) =>
+        StraightlineSpecNextNormal(cr, ss, ss', sstep, actor, proc, step)
 
-    predicate DesiredInvariantsSatisfiedInitially<State(!new), Actor(!new), Step, PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        && (forall s :: s in cr.spec.init ==> cr.global_inv(s))
-        && (forall s, actor :: s in cr.spec.init ==> cr.local_inv(s, actor))
-        && (forall s, actor :: s in cr.spec.init && actor in cr.actor_info(s) ==>
-               var pc := cr.actor_info(s)[actor].pc;
-               var proc := cr.pc_to_proc(pc);
-               cr.requires_clauses(proc, s, actor))
-    }
+      case StraightlineStepLoopModifies(pc) =>
+        StraightlineSpecNextLoopModifies(cr, ss, ss', sstep, actor, proc, pc)
 
-    predicate StraightlineSpecSatisfiesGlobalInvariants<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc, s', step ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && var s := last(b.states).state;
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).Some?
-             && cr.idmap(step).v == actor
-            )
-            ==> cr.global_inv(s')
-    }
+      case StraightlineStepYield() =>
+        StraightlineSpecNextYield(cr, ss, ss', sstep, actor, proc)
 
-    predicate StraightlineSpecSatisfiesLocalInvariants<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc ::
-            AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-            ==> cr.local_inv(last(b.states).state, actor)
-    }
+      case StraightlineStepCall(step) =>
+        StraightlineSpecNextCall(cr, ss, ss', sstep, actor, proc, step)
 
-    predicate StraightlineSpecSatisfiesEnablementConditions<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc, s', step ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && last(b.states).started
-             && var s := last(b.states).state;
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).Some?
-             && cr.idmap(step).v == actor
-            )
-            ==> cr.enablement_condition(last(b.states).state, actor)
-    }
+      case StraightlineStepEnsures(callee) =>
+        StraightlineSpecNextEnsures(cr, ss, ss', sstep, actor, proc, callee)
 
-    predicate StraightlineSpecSatisfiesPreconditionsForCalls<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc, s', step ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && last(b.states).started
-             && var s := last(b.states).state;
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).Some?
-             && cr.idmap(step).v == actor
-             && actor in cr.actor_info(s)
-             && actor in cr.actor_info(s')
-             && var pc := cr.actor_info(s)[actor].pc;
-             && cr.pc_type(pc).CallSite?
-            )
-            ==> cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[actor].pc), s', actor)
-    }
+      case StraightlineStepReturn(step) =>
+        StraightlineSpecNextReturn(cr, ss, ss', sstep, actor, proc, step)
 
-    predicate StraightlineSpecSatisfiesPreconditionsForForks<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, other_actor, proc, s', step ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && last(b.states).started
-             && var s := last(b.states).state;
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).Some?
-             && cr.idmap(step).v == actor
-             && actor in cr.actor_info(s)
-             && actor in cr.actor_info(s')
-             && other_actor !in cr.actor_info(s)
-             && other_actor in cr.actor_info(s')
-             && var pc := cr.actor_info(s)[actor].pc;
-             && cr.pc_type(pc).ForkSite?
-            )
-            ==> cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[other_actor].pc), s', other_actor)
-    }
+      case StraightlineStepReturnThenCall(step) =>
+        StraightlineSpecNextReturnThenCall(cr, ss, ss', sstep, actor, proc, step)
+  }
 
-    predicate StraightlineSpecSatisfiesPostconditions<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && last(b.states).started
-             && var s := last(b.states).state;
-             && actor in cr.actor_info(s)
-             && var pc := cr.actor_info(s)[actor].pc;
-             && cr.pc_type(pc).ReturnSite?
-            )
-            ==> cr.ensures_clauses(proc, b.states[0].state, last(b.states).state, actor)
-    }
+  function GetStraightlineSpec<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    actor:Actor,
+    proc:Proc
+    ) :
+    AnnotatedBehaviorSpec<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>
+  {
+    AnnotatedBehaviorSpec(iset s | StraightlineSpecInit(cr, s, actor, proc),
+                          iset s, s', step | StraightlineSpecNext(cr, s, s', step, actor, proc) :: ActionTuple(s, s', step))
+  }
 
-    predicate StraightlineSpecSatisfiesLoopModifiesClausesOnEntry<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && var s := last(b.states).state;
-             && actor in cr.actor_info(s)
-             && var pc := cr.actor_info(s)[actor].pc;
-             && cr.pc_type(pc).LoopHead?
-             && pc in cr.loop_modifies_clauses
-             && pc !in last(b.states).visited_loops
-            )
-            ==> var s := last(b.states).state;
-                var pc := cr.actor_info(s)[actor].pc;
-                cr.loop_modifies_clauses[pc](s, s, actor)
-    }
+  /////////////////////////////////////////////////////
+  // Simple parameter validity
+  /////////////////////////////////////////////////////
 
-    predicate StraightlineSpecSatisfiesLoopModifiesClausesOnJumpBack<State(!new), Actor(!new), Step(!new), PC, ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && var s := last(b.states).state;
-             && actor in cr.actor_info(s)
-             && var pc := cr.actor_info(s)[actor].pc;
-             && cr.pc_type(pc).LoopHead?
-             && pc in cr.loop_modifies_clauses
-             && pc in last(b.states).visited_loops
-            )
-            ==> var s := last(b.states).state;
-                var pc := cr.actor_info(s)[actor].pc;
-                cr.loop_modifies_clauses[pc](last(b.states).visited_loops[pc], s, actor)
-    }
+  predicate LoopHeadsArentReturnSites<PC(!new)>(
+    is_loop_head:PC->bool,
+    is_return_site:PC->bool
+    )
+  {
+    forall pc :: !(is_loop_head(pc) && is_return_site(pc))
+  }
 
-    predicate StraightlineSpecSatisfiesYieldPredicateForOtherActor<State(!new), Actor(!new), Step(!new), PC(!new), ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall b, actor, proc, other_actor, s', step ::
-            (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-             && last(b.states).started
-             && var s := last(b.states).state;
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).Some?
-             && cr.idmap(step).v == actor
-             && actor != other_actor)
-            ==> cr.yield_pred(last(b.states).state, s', other_actor)
-    }
+  predicate YieldPredicateReflexive<State(!new), Actor(!new), Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s, actor {:trigger cr.yield_pred(s, s, actor)} ::
+      cr.state_ok(s) && cr.get_actor_pc_stack(s, actor).Some? ==> cr.yield_pred(s, s, actor)
+  }
 
-    predicate StraightlineSpecPreservesGlobalInvariantOnTermination<State(!new), Actor(!new), Step(!new), PC(!new), ProcName(!new)>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall s, s', step ::
-            (&& cr.established_inv(s)
-             && cr.global_inv(s)
-             && ActionTuple(s, s', step) in cr.spec.next
-             && (forall any_actor :: any_actor !in cr.actor_info(s'))
-            )
-            ==> cr.global_inv(s')
-    }
+  predicate YieldPredicateTransitive<State(!new), Actor(!new), Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s1, s2, s3, actor {:trigger cr.yield_pred(s1, s2, actor), cr.yield_pred(s2, s3, actor)} ::
+       && cr.established_inv(s1)
+       && cr.global_inv(s1)
+       && cr.established_inv(s2)
+       && cr.global_inv(s2)
+       && cr.yield_pred(s1, s2, actor)
+       && cr.yield_pred(s2, s3, actor)
+       ==> cr.yield_pred(s1, s3, actor)
+  }
 
-    predicate StraightlineSpecRequirements<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        && StraightlineSpecSatisfiesGlobalInvariants(cr)
-        && StraightlineSpecSatisfiesLocalInvariants(cr)
-        && StraightlineSpecSatisfiesEnablementConditions(cr)
-        && StraightlineSpecSatisfiesPreconditionsForCalls(cr)
-        && StraightlineSpecSatisfiesPreconditionsForForks(cr)
-        && StraightlineSpecSatisfiesPostconditions(cr)
-        && StraightlineSpecSatisfiesLoopModifiesClausesOnEntry(cr)
-        && StraightlineSpecSatisfiesLoopModifiesClausesOnJumpBack(cr)
-        && StraightlineSpecSatisfiesYieldPredicateForOtherActor(cr)
-        && StraightlineSpecPreservesGlobalInvariantOnTermination(cr)
-    }
+  /////////////////////////////////////////////////////
+  // State initialization
+  /////////////////////////////////////////////////////
 
-    predicate ActorlessActionsMaintainYieldPredicateAndGlobalInvariant<State(!new), Actor(!new), Step(!new), PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        forall s, s', step, actor ::
-            (&& cr.established_inv(s)
-             && cr.global_inv(s)
-             && ActionTuple(s, s', step) in cr.spec.next
-             && cr.idmap(step).None?)
-            ==> && cr.yield_pred(s, s', actor)
-                && cr.global_inv(s')
-    }
+  predicate ActorsBeginAtEntryPointsWithEmptyStacksConditions<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    actor:Actor
+    )
+  {
+    && s in cr.spec.init
+    && cr.get_actor_pc_stack(s, actor).Some?
+  }
 
-    predicate IsValidConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>(
-        cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, ProcName>
-        )
-    {
-        && IsInvariantPredicateOfSpec(cr.established_inv, cr.spec)
-        && SpecSatisfiesProgramControlFlow(cr.spec, cr.idmap, cr.actor_info, cr.pc_to_proc, cr.is_entry_point, cr.pc_type)
-        && YieldPredicateReflexive(cr.yield_pred)
-        && YieldPredicateTransitive(cr.yield_pred)
-        && YieldPredicateDoesntAffectActorInfo(cr.actor_info, cr.yield_pred)
-        && ActorlessActionsMaintainYieldPredicateAndGlobalInvariant(cr)
-        && DesiredInvariantsSatisfiedInitially(cr)
-        && StraightlineSpecRequirements(cr)
-    }
+  predicate ActorsBeginAtEntryPointsWithEmptyStacks<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    // At initialization, each thread is at a procedure entry point with an empty stack
+    forall s, actor {:trigger ActorsBeginAtEntryPointsWithEmptyStacksConditions(cr, s, actor)} ::
+      ActorsBeginAtEntryPointsWithEmptyStacksConditions(cr, s, actor)
+      ==> var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+          && cr.is_entry_point(pc)
+          && |stack| == 0
+  }
+
+  predicate GlobalInvariantSatisfiedInitially<State(!new), Actor(!new), Step, PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s :: s in cr.spec.init ==> cr.global_inv(s) && cr.state_ok(s)
+  }
+
+  predicate RequiresClausesSatisfiedInitiallyConditions<State(!new), Actor(!new), Step, PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    actor:Actor
+    )
+  {
+    && s in cr.spec.init
+    && cr.get_actor_pc_stack(s, actor).Some?
+  }
+
+  predicate RequiresClausesSatisfiedInitially<State(!new), Actor(!new), Step, PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s, actor {:trigger RequiresClausesSatisfiedInitiallyConditions(cr, s, actor)} ::
+      RequiresClausesSatisfiedInitiallyConditions(cr, s, actor)
+      ==> var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+          var proc := cr.pc_to_proc(pc);
+          cr.requires_clauses(proc, s, actor)
+  }
+
+  /////////////////////////////////////////////////////
+  // Actorless steps
+  /////////////////////////////////////////////////////
+
+  predicate ActorlessStepsDontChangeActorsConditions<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    actor:Actor
+    )
+  {
+    && cr.established_inv(s)
+    && ActionTuple(s, s', step) in cr.spec.next
+    && cr.step_to_actor(step).None?
+  }
+
+  predicate ActorlessStepsDontChangeActors<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s, s', step, actor {:trigger ActorlessStepsDontChangeActorsConditions(cr, s, s', step, actor)} ::
+      ActorlessStepsDontChangeActorsConditions(cr, s, s', step, actor)
+      ==> cr.get_actor_pc_stack(s', actor) == cr.get_actor_pc_stack(s, actor)
+  }
+
+  predicate ActorlessStepsMaintainYieldPredicateAndGlobalInvariantConditions<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    actor:Actor
+    )
+  {
+    && cr.established_inv(s)
+    && cr.global_inv(s)
+    && cr.established_inv(s')
+    && ActionTuple(s, s', step) in cr.spec.next
+    && cr.step_to_actor(step).None?
+    && cr.get_actor_pc_stack(s, actor).Some?
+  }
+
+  predicate ActorlessStepsMaintainYieldPredicateAndGlobalInvariant<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s, s', step, actor {:trigger ActorlessStepsMaintainYieldPredicateAndGlobalInvariantConditions(cr, s, s', step, actor)} ::
+      ActorlessStepsMaintainYieldPredicateAndGlobalInvariantConditions(cr, s, s', step, actor)
+      ==> cr.yield_pred(s, s', actor) && cr.global_inv(s') && cr.state_ok(s')
+  }
+
+  /////////////////////////////////////////////////////
+  // Step effects
+  /////////////////////////////////////////////////////
+
+  predicate CorrectCHLStepEffectNormal<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).Some?
+    && var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+      var PCStack(pc', stack') := cr.get_actor_pc_stack(s', actor).v;
+    && !cr.is_return_site(pc)
+    && cr.pc_to_proc(pc') == cr.pc_to_proc(pc) == cr.step_to_proc(step)
+    && stack' == stack
+  }
+
+  predicate CorrectCHLStepEffectCall<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    callee:Proc
+    )
+  {
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).Some?
+    && var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+      var PCStack(pc', stack') := cr.get_actor_pc_stack(s', actor).v;
+    && !cr.is_return_site(pc)
+    && cr.is_entry_point(pc')
+    && cr.pc_to_proc(pc') == callee
+    && |stack'| > 0
+    && stack'[0] == cr.pc_to_proc(pc) == cr.step_to_proc(step)
+    && stack'[1..] == stack
+  }
+
+  predicate CorrectCHLStepEffectReturn<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).Some?
+    && var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+      var PCStack(pc', stack') := cr.get_actor_pc_stack(s', actor).v;
+    && cr.is_return_site(pc)
+    && |stack| > 0
+    && cr.pc_to_proc(pc') == stack[0] == cr.step_to_proc(step)
+    && stack' == stack[1..]
+  }
+
+  predicate CorrectCHLStepEffectExit<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).None?
+    && var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+    && cr.is_return_site(pc)
+    && cr.pc_to_proc(pc) == cr.step_to_proc(step)
+    && |stack| == 0
+  }
+
+  predicate CorrectCHLStepEffectReturnThenCall<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    callee:Proc
+    )
+  {
+    // Step that returns to a caller, then does another call
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && cr.get_actor_pc_stack(s', actor).Some?
+    && var PCStack(pc, stack) := cr.get_actor_pc_stack(s, actor).v;
+      var PCStack(pc', stack') := cr.get_actor_pc_stack(s', actor).v;
+    && cr.is_return_site(pc)
+    && |stack| > 0
+    && stack[0] == cr.step_to_proc(step)
+    && cr.pc_to_proc(pc') == callee
+    && cr.is_entry_point(pc')
+    && stack' == stack
+  }
+
+  predicate CorrectCHLStepEffectActorless<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    && cr.state_ok(s)
+    && cr.state_ok(s')
+    && cr.step_to_actor(step).None?
+  }
+
+  predicate CorrectCHLStepEffectStop<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    && cr.state_ok(s)
+    && !cr.state_ok(s')
+    && (cr.step_to_actor(step).Some? ==> cr.get_actor_pc_stack(s, cr.step_to_actor(step).v).Some?)
+  }
+
+  predicate CorrectCHLStepEffect<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step
+    )
+  {
+    match cr.step_to_effect(step)
+      case CHLStepEffectNormal => CorrectCHLStepEffectNormal(cr, s, s', step)
+      case CHLStepEffectCall(callee) => CorrectCHLStepEffectCall(cr, s, s', step, callee)
+      case CHLStepEffectReturn => CorrectCHLStepEffectReturn(cr, s, s', step)
+      case CHLStepEffectExit => CorrectCHLStepEffectExit(cr, s, s', step)
+      case CHLStepEffectReturnThenCall(callee) => CorrectCHLStepEffectReturnThenCall(cr, s, s', step, callee)
+      case CHLStepEffectActorless => CorrectCHLStepEffectActorless(cr, s, s', step)
+      case CHLStepEffectStop => CorrectCHLStepEffectStop(cr, s, s', step)
+  }
+
+  predicate CHLStepEffectsCorrect<State(!new), Actor, Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall s, s', step :: ActionTuple(s, s', step) in cr.spec.next ==> CorrectCHLStepEffect(cr, s, s', step)
+  }
+
+  /////////////////////////////////////////////////////
+  // Other control flow
+  /////////////////////////////////////////////////////
+
+  predicate ForkedActorsStartAtEntryPointsWithEmptyStacksConditions<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    forked_actor:Actor
+    )
+  {
+    && ActionTuple(s, s', step) in cr.spec.next
+    && cr.get_actor_pc_stack(s, forked_actor).None?
+    && cr.get_actor_pc_stack(s', forked_actor).Some?
+  }
+
+  predicate ForkedActorsStartAtEntryPointsWithEmptyStacks<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    // When a thread starts (i.e., is forked), the forking step isn't actorless or an exit and the forked thread
+    // is at a procedure entry point with an empty stack
+    forall s, s', step, forked_actor {:trigger ForkedActorsStartAtEntryPointsWithEmptyStacksConditions(cr, s, s', step, forked_actor)} ::
+      ForkedActorsStartAtEntryPointsWithEmptyStacksConditions(cr, s, s', step, forked_actor)
+      ==> && cr.step_to_actor(step).Some?
+          && !cr.step_to_effect(step).CHLStepEffectExit?
+          && var PCStack(pc', stack') := cr.get_actor_pc_stack(s', forked_actor).v;
+          && cr.is_entry_point(pc')
+          && |stack'| == 0
+  }
+
+  predicate StepsDontChangeOtherActorsExceptViaForkConditions<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    s:State,
+    s':State,
+    step:Step,
+    other_actor:Actor
+    )
+  {
+    && ActionTuple(s, s', step) in cr.spec.next
+    && cr.step_to_actor(step) != Some(other_actor)
+    && cr.get_actor_pc_stack(s, other_actor).Some?
+  }
+
+  predicate StepsDontChangeOtherActorsExceptViaFork<State(!new), Actor(!new), Step(!new), PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    // One actor taking a step leaves each other actor's PC and stack unchanged
+    // (unless that other actor didn't have a PC before, i.e., this actor was forking that actor)
+    forall s, s', step, other_actor {:trigger StepsDontChangeOtherActorsExceptViaForkConditions(cr, s, s', step, other_actor)} ::
+      StepsDontChangeOtherActorsExceptViaForkConditions(cr, s, s', step, other_actor)
+      ==> cr.get_actor_pc_stack(s', other_actor) == cr.get_actor_pc_stack(s, other_actor)
+  }
+
+  /////////////////////////////////////////////////////
+  // Requirements for straightline behaviors
+  /////////////////////////////////////////////////////
+
+  predicate StraightlineBehaviorsSatisfyGlobalInvariantConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    step:Step,
+    s':State
+    )
+  {
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+      var proc := cr.step_to_proc(step);
+      var effect := cr.step_to_effect(step);
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.local_inv(s, actor)
+    && ActionTuple(s, s', step) in cr.spec.next
+    && !effect.CHLStepEffectStop?
+    && (if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+         phase.StraightlinePhaseEnsured?
+       else
+         phase.StraightlinePhaseYielded?)
+  }
+
+  predicate StraightlineBehaviorsSatisfyGlobalInvariant<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')} ::
+      StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')
+      ==> cr.global_inv(s')
+  }
+
+  predicate StraightlineBehaviorsSatisfyLocalInvariantConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    step:Step,
+    s':State
+    )
+  {
+    && cr.step_to_actor(step).Some?
+    && |sb.states| > 0
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+      var actor := cr.step_to_actor(step).v;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+      var proc := cr.pc_to_proc(pc);
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && ActionTuple(s, s', step) in cr.spec.next
+    && phase.StraightlinePhaseYielded?
+  }
+
+  predicate StraightlineBehaviorsSatisfyLocalInvariant<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyLocalInvariantConditions(cr, sb, step, s')} ::
+      StraightlineBehaviorsSatisfyLocalInvariantConditions(cr, sb, step, s')
+      ==> cr.local_inv(last(sb.states).state, cr.step_to_actor(step).v)
+  }
+
+  predicate StraightlineBehaviorsSatisfyPreconditionsForCallsConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    step:Step,
+    s':State
+    )
+  {
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+      var proc := cr.step_to_proc(step);
+      var effect := cr.step_to_effect(step);
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.local_inv(s, actor)
+    && ActionTuple(s, s', step) in cr.spec.next
+    && (|| (effect.CHLStepEffectCall? && phase.StraightlinePhaseYielded?)
+       || (effect.CHLStepEffectReturnThenCall? && phase.StraightlinePhaseEnsured?))
+    && cr.get_actor_pc_stack(s', actor).Some?
+  }
+
+  predicate StraightlineBehaviorsSatisfyPreconditionsForCalls<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyPreconditionsForCallsConditions(cr, sb, step, s')} ::
+      StraightlineBehaviorsSatisfyPreconditionsForCallsConditions(cr, sb, step, s')
+      ==> var actor := cr.step_to_actor(step).v;
+          var callee := cr.step_to_effect(step).callee;
+          cr.requires_clauses(callee, s', actor)
+  }
+
+  predicate StraightlineBehaviorsSatisfyPreconditionsForForksConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    step:Step,
+    s':State,
+    forked_actor:Actor
+    )
+  {
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+      var proc := cr.step_to_proc(step);
+      var effect := cr.step_to_effect(step);
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.local_inv(s, actor)
+    && ActionTuple(s, s', step) in cr.spec.next
+    && !effect.CHLStepEffectStop?
+    && (if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+         phase.StraightlinePhaseEnsured?
+       else 
+         phase.StraightlinePhaseYielded?)
+    && actor != forked_actor
+    && cr.get_actor_pc_stack(s, forked_actor).None?
+    && cr.get_actor_pc_stack(s', forked_actor).Some?
+  }
+
+  predicate StraightlineBehaviorsSatisfyPreconditionsForForks<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, step, s', forked_actor {:trigger StraightlineBehaviorsSatisfyPreconditionsForForksConditions(cr, sb, step, s', forked_actor)} ::
+      StraightlineBehaviorsSatisfyPreconditionsForForksConditions(cr, sb, step, s', forked_actor)
+      ==> var forked_pc := cr.get_actor_pc_stack(s', forked_actor).v.pc;
+          var forked_proc := cr.pc_to_proc(forked_pc);
+          cr.requires_clauses(forked_proc, s', forked_actor)
+  }
+
+  predicate StraightlineBehaviorsSatisfyPostconditionsConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    actor:Actor,
+    proc:Proc
+    )
+  {
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+    && cr.is_return_site(pc)
+    && phase.StraightlinePhaseYielded?
+  }
+
+  predicate StraightlineBehaviorsSatisfyPostconditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyPostconditionsConditions(cr, sb, actor, proc)} ::
+      StraightlineBehaviorsSatisfyPostconditionsConditions(cr, sb, actor, proc)
+      ==> cr.ensures_clauses(proc, sb.states[0].state, last(sb.states).state, actor)
+  }
+
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    actor:Actor,
+    proc:Proc
+    )
+  {
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var StraightlineState(s, aux) := ss;
+      var phase := aux.phase;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+    && cr.is_loop_head(pc)
+    && pc !in aux.visited_loops
+    && phase.StraightlinePhaseYielded?
+  }
+
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions(cr, sb, actor, proc)} ::
+      StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions(cr, sb, actor, proc)
+      ==> var s := last(sb.states).state;
+          var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+          cr.loop_modifies_clauses(pc, s, s, actor)
+  }
+
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    actor:Actor,
+    proc:Proc
+    )
+  {
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.get_actor_pc_stack(s, actor).Some?
+    && var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+    && cr.is_loop_head(pc)
+    && pc in ss.aux.visited_loops
+    && phase.StraightlinePhaseYielded?
+  }
+
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions(cr, sb, actor, proc)} ::
+      StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions(cr, sb, actor, proc)
+      ==> var StraightlineState(s, aux) := last(sb.states);
+          var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+          cr.loop_modifies_clauses(pc, aux.visited_loops[pc], s, actor)
+  }
+
+  predicate StraightlineBehaviorsSatisfyYieldPredicateConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
+    sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
+    step:Step,
+    s':State,
+    other_actor:Actor
+    )
+  {
+    && cr.step_to_actor(step).Some?
+    && var actor := cr.step_to_actor(step).v;
+      var proc := cr.step_to_proc(step);
+      var effect := cr.step_to_effect(step);
+    && AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, actor, proc))
+    && var ss := last(sb.states);
+      var s := ss.state;
+      var phase := ss.aux.phase;
+    && cr.local_inv(s, actor)
+    && ActionTuple(s, s', step) in cr.spec.next
+    && !effect.CHLStepEffectStop?
+    && (if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+         phase.StraightlinePhaseEnsured?
+       else 
+         phase.StraightlinePhaseYielded?)
+    && actor != other_actor
+    && cr.get_actor_pc_stack(s, other_actor).Some?
+  }
+
+  predicate StraightlineBehaviorsSatisfyYieldPredicate<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    forall sb, step, s', other_actor {:trigger StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)} ::
+      StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)
+      ==> cr.yield_pred(last(sb.states).state, s', other_actor)
+  }
+
+  /////////////////////////////////////////////////////
+  // Request validity
+  /////////////////////////////////////////////////////
+
+  predicate IsValidConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>(
+    cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
+    )
+  {
+    // Simple parameter validity
+    && IsInvariantPredicateOfSpec(cr.established_inv, cr.spec)
+    && LoopHeadsArentReturnSites(cr.is_loop_head, cr.is_return_site)
+    && YieldPredicateReflexive(cr)
+    && YieldPredicateTransitive(cr)
+
+    // Initialization
+    && ActorsBeginAtEntryPointsWithEmptyStacks(cr)
+    && GlobalInvariantSatisfiedInitially(cr)
+    && RequiresClausesSatisfiedInitially(cr)
+
+    // Actorless steps
+    && ActorlessStepsDontChangeActors(cr)
+    && ActorlessStepsMaintainYieldPredicateAndGlobalInvariant(cr)
+
+    // Control flow
+    && CHLStepEffectsCorrect(cr)
+    && ForkedActorsStartAtEntryPointsWithEmptyStacks(cr)
+    && StepsDontChangeOtherActorsExceptViaFork(cr)
+
+    // Straightline behaviors
+    && StraightlineBehaviorsSatisfyGlobalInvariant(cr)
+    && StraightlineBehaviorsSatisfyLocalInvariant(cr)
+    && StraightlineBehaviorsSatisfyPreconditionsForCalls(cr)
+    && StraightlineBehaviorsSatisfyPreconditionsForForks(cr)
+    && StraightlineBehaviorsSatisfyPostconditions(cr)
+    && StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry(cr)
+    && StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack(cr)
+    && StraightlineBehaviorsSatisfyYieldPredicate(cr)
+  }
 
 }

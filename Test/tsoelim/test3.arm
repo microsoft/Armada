@@ -28,13 +28,10 @@ level E using SharedStructs3 {
   noaddr var y:int32 := 0;
   noaddr var z:S3[10];
 
-  import opened util_option_s
-
   method Worker(i:int)
   {
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+    assume 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
 
     label lb1:
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
@@ -45,8 +42,8 @@ level E using SharedStructs3 {
     y := y + 1;
 
     label lb3:
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadNone];
 
     assert true;
   }
@@ -67,13 +64,10 @@ level F using SharedStructs3 {
   noaddr var y:int32 := 0;
   noaddr var z:S3[10];
 
-  import opened util_option_s
-
   method Worker(i:int)
   {
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+    assume 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
 
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
     x[i] ::= x[i] + 1;
@@ -81,8 +75,8 @@ level F using SharedStructs3 {
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
     y := y + 1;
 
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadNone];
 
     assert true;
   }
@@ -101,14 +95,14 @@ proof EF
   refinement E F
 
   tso_elim x @"
-    && tid in s.s.threads
-    && (var pc := s.s.threads[tid].pc;
+    && tid in threads
+    && (var pc := threads[tid].pc;
        || pc.Armada_PC_Worker_lb1?
        || pc.Armada_PC_Worker_lb2?
        || pc.Armada_PC_Worker_lb3?)
-    && s.s.threads[tid].top.Armada_StackFrame_Worker?
-    && idx0 == s.s.threads[tid].top.Worker'i
-    && 0 <= idx0 < |s.s.ghosts.lock_holder|
-    && s.s.ghosts.lock_holder[idx0] == OptionalThreadSome(tid)
+    && threads[tid].top.Armada_StackFrame_Worker?
+    && idx0 == threads[tid].top.Worker.i
+    && 0 <= idx0 < |ghosts.lock_holder|
+    && ghosts.lock_holder[idx0] == OptionalThreadSome(tid)
   "
 }

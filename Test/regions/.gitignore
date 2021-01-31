@@ -2,6 +2,7 @@ SharedStructs1.dfy
 SharedStructs2.dfy
 SharedStructs3.dfy
 SharedStructs4.dfy
+SharedStructsPointers.dfy
 A.dfy
 B.dfy
 AB.dfy
@@ -18,3 +19,8 @@ G.dfy
 H.dfy
 GH.dfy
 GH/
+SharedStructs.dfy
+level0.dfy
+level1.dfy
+level01proof/
+level01proof.dfy

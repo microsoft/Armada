@@ -13,15 +13,15 @@ namespace Microsoft.Armada {
 
   public class ResolutionContext
   {
-    private readonly Expression lvalueState;
-    private readonly Expression rvalueState;
-    public readonly Expression tid;
+    private readonly string lvalueState;
+    private readonly string rvalueState;
+    public readonly string tid;
     public readonly string methodName;
     public readonly ArmadaSymbolTable symbols;
     public readonly IFailureReporter failureReporter;
     public readonly string moduleName;
 
-    public ResolutionContext(Expression i_lvalueState, Expression i_rvalueState, Expression i_tid, string i_methodName,
+    public ResolutionContext(string i_lvalueState, string i_rvalueState, string i_tid, string i_methodName,
                              ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter, string i_moduleName = null)
     {
       lvalueState = i_lvalueState;
@@ -33,7 +33,7 @@ namespace Microsoft.Armada {
       moduleName = i_moduleName;
     }
 
-    public virtual Expression GetLValueState()
+    public virtual string GetLValueState()
     {
       if (lvalueState == null) {
         Fail("Can't get an lvalue state for this context");
@@ -41,7 +41,7 @@ namespace Microsoft.Armada {
       return lvalueState;
     }
 
-    public virtual Expression GetRValueState()
+    public virtual string GetRValueState()
     {
       if (rvalueState == null) {
         Fail("Can't get an rvalue state for this context");
@@ -49,57 +49,67 @@ namespace Microsoft.Armada {
       return rvalueState;
     }
 
-    public virtual Expression GetLValueTopStackFrame()
+    public virtual string GetLValueTopStackFrame()
     {
       if (lvalueState == null) {
         Fail("Can't get an lvalue state for this context");
         return null;
       }
-      var threads = AH.MakeExprDotName(lvalueState, "threads", AH.MakeThreadsType(moduleName));
-      var thread = AH.MakeSeqSelectExpr(threads, tid, AH.MakeThreadType(moduleName));
-      return AH.MakeExprDotName(thread, "top", AH.MakeStackFrameType(moduleName));
+      if (tid == null) {
+        Fail("No thread defined in this context, so can't determine top stack frame");
+        return null;
+      }
+      return $"({lvalueState}).threads[{tid}].top";
     }
 
-    public virtual Expression GetRValueHeap()
+    public virtual string GetRValueHeap()
     {
       if (rvalueState == null) {
         Fail("Can't get an rvalue state for this context");
+        return null;
+      }
+      if (tid == null) {
+        Fail("No thread defined in this context, so can't determine local view of heap");
         return null;
       }
       var fnName = AH.AddModuleToIdentifier(moduleName, "Armada_GetThreadLocalView");
-      var locv = AH.MakeApply2(fnName, rvalueState, tid, AH.MakeSharedMemoryType(moduleName));
-      return AH.MakeExprDotName(locv, "heap", "Armada_Heap");
+      return $"{fnName}({rvalueState}, {tid}).heap";
     }
 
-    public virtual Expression GetRValueGlobals()
+    public virtual string GetRValueGlobals()
     {
       if (rvalueState == null) {
         Fail("Can't get an rvalue state for this context");
+        return null;
+      }
+      if (tid == null) {
+        Fail("No thread defined in this context, so can't determine local view of globals");
         return null;
       }
       var fnName = AH.AddModuleToIdentifier(moduleName, "Armada_GetThreadLocalView");
-      var locv = AH.MakeApply2(fnName, rvalueState, tid, AH.MakeSharedMemoryType(moduleName));
-      return AH.MakeExprDotName(locv, "globals", AH.MakeGlobalsType(moduleName));
+      return $"{fnName}({rvalueState}, {tid}).globals";
     }
 
-    public virtual Expression GetRValueGhosts()
+    public virtual string GetRValueGhosts()
     {
       if (rvalueState == null) {
         Fail("Can't get an rvalue state for this context");
         return null;
       }
-      return AH.MakeExprDotName(rvalueState, "ghosts", AH.MakeGhostsType(moduleName));
+      return $"({rvalueState}).ghosts";
     }
 
-    public virtual Expression GetRValueTopStackFrame()
+    public virtual string GetRValueTopStackFrame()
     {
       if (rvalueState == null) {
         Fail("Can't get an rvalue state for this context");
         return null;
       }
-      var threads = AH.MakeExprDotName(rvalueState, "threads", AH.MakeThreadsType(moduleName));
-      var thread = AH.MakeSeqSelectExpr(threads, tid, AH.MakeThreadType(moduleName));
-      return AH.MakeExprDotName(thread, "top", AH.MakeStackFrameType(moduleName));
+      if (tid == null) {
+        Fail("No thread defined in this context, so can't determine top stack frame");
+        return null;
+      }
+      return $"({rvalueState}).threads[{tid}].top";
     }
 
     public virtual ArmadaRValue ResolveAsOldRValue(IToken tok, Expression expr)
@@ -108,125 +118,114 @@ namespace Microsoft.Armada {
       return null;
     }
 
+    public virtual ArmadaRValue ResolveAsMemoryRValue(IToken tok, Expression expr)
+    {
+      var subcontext = new GlobalViewResolutionContext(rvalueState, tid, methodName, symbols, failureReporter, moduleName);
+      return subcontext.ResolveAsRValue(expr);
+    }
+
     public void Fail(IToken tok, string reason) { failureReporter.Fail(tok, reason); }
     public void Fail(string reason) { failureReporter.Fail(reason); }
 
     public ArmadaRValue ResolveArmadaBinaryExpr(IToken tok, Type targetType, BinaryExpr.Opcode op,
-                                                ArmadaRValue operand1, ArmadaRValue operand2)
+                                                ArmadaRValue operand1, ArmadaRValue operand2,
+                                                Type operand1Type, Type operand2Type)
     {
       UndefinedBehaviorAvoidanceConstraint crashAvoidance = operand1.UndefinedBehaviorAvoidance + operand2.UndefinedBehaviorAvoidance;
 
       // If this is a pointer plus or minus an integer, the semantics is that it produces undefined behavior unless
       // it stays within an array.
 
-      if ((op == BinaryExpr.Opcode.Add || op == BinaryExpr.Opcode.Sub) && operand1.Val.Type is PointerType) {
-        var pt = (PointerType)operand1.Val.Type;
+      if ((op == BinaryExpr.Opcode.Add || op == BinaryExpr.Opcode.Sub) && operand1Type is PointerType) {
+        var pt = (PointerType)operand1Type;
 
         // operand1 in h.valid
         var h = GetRValueHeap();
-        var valid_set = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-        var operand1_valid = AH.MakeInExpr(operand1.Val, valid_set);
+        var operand1_valid = $"({operand1.Val}) in ({h}).valid";
         crashAvoidance.Add(operand1_valid);
 
-        // tree[operand1].field_of_parent.Armada_FieldArrayIndex?
-        // (in other words, operand1 must be a child of its parent via an index field)
-        var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-        var operand1_in_tree = AH.MakeInExpr(operand1.Val, tree);
+        // operand1 in h.tree
+        var tree = $"({h}).tree";
+        var operand1_in_tree = $"{operand1.Val} in {tree}";
         crashAvoidance.Add(operand1_in_tree);
-        var operand1Node = AH.MakeSeqSelectExpr(tree, operand1.Val, "Armada_Node");
-        var field_of_parent = AH.MakeExprDotName(operand1Node, "field_of_parent", "Armada_Field");
-        crashAvoidance.Add(AH.MakeExprDotName(field_of_parent, "Armada_FieldArrayIndex?", new BoolType()));
 
-        // Armada_FieldArrayIndex(field_of_parent.i <op> operand2) in tree[operand1.parent].children
-        var index_of_parent = AH.MakeExprDotName(field_of_parent, "i", new IntType());
-        var operand2val = AH.ConvertToIntIfNotInt(operand2.Val);
-        var updated_index = AH.MakeBinaryExpr(op, index_of_parent, operand2val, "Armada_Pointer");
-        var parent = AH.MakeExprDotName(operand1Node, "parent", "Armada_Pointer");
-        crashAvoidance.Add(AH.MakeInExpr(parent, tree));
-        var parentNode = AH.MakeSeqSelectExpr(tree, parent, "Armada_Node");
-        var children = AH.MakeExprDotName(parentNode, "children", AH.MakeChildrenType());
-        var updated_field = AH.MakeApply1("Armada_FieldArrayIndex", updated_index, "Armada_Field");
-        crashAvoidance.Add(AH.MakeInExpr(updated_field, children));
+        // tree[operand1].child_type.Armada_ChildTypeIndex?
+        // (in other words, operand1 must be a child of its parent via an index field)
+        var is_field_array_index = $"{tree}[{operand1.Val}].child_type.Armada_ChildTypeIndex?";
+        crashAvoidance.Add(is_field_array_index);
 
-        // child := tree[operand1.parent].children[Armada_FieldArrayIndex(field_of_parent.i + operand2)]
-        var child = AH.MakeSeqSelectExpr(children, updated_field, operand1.Val.Type);
-        return new ArmadaRValue(crashAvoidance, child);
+        // tree[operand1].parent in h.tree
+        var parent = $"{tree}[{operand1.Val}].parent";
+        crashAvoidance.Add($"{parent} in {tree}");
+
+        // 0 <= (child_type.i <op> operand2) < |tree[operand1.parent].children|
+        var operand2val = AH.ConvertToIntIfNotInt(operand2.Val, operand2Type);
+        var updated_index = $"{tree}[{operand1.Val}].child_type.i {BinaryExpr.OpcodeString(op)} {operand2val}";
+        crashAvoidance.Add($"0 <= {updated_index} < |{tree}[{parent}].children|");
+
+        // return tree[operand1.parent].children[child_type.i + operand2]
+        return new ArmadaRValue(crashAvoidance, $"{tree}[{parent}].children[{updated_index}]");
       }
 
       // Order-based comparison of pointers is only allowed when they're in the same array.  The semantics for such a
       // comparison is that their indices within that array have the given comparison relationship.
 
       if ((op == BinaryExpr.Opcode.Lt || op == BinaryExpr.Opcode.Le || op == BinaryExpr.Opcode.Gt || op == BinaryExpr.Opcode.Ge) &&
-          (operand1.Val.Type is PointerType || operand2.Val.Type is PointerType))
+          (operand1Type is PointerType || operand2Type is PointerType))
       {
-        if (!AH.TypesMatch(operand1.Val.Type, operand2.Val.Type)) {
+        if (!AH.TypesMatch(operand1Type, operand2Type)) {
           Fail(tok, "Can't compare a pointer to anything except a pointer of the same type");
           return null;
         }
 
         var h = GetRValueHeap();
-        var valid_set = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
 
         // It's undefined behavior if operand 1 or 2 isn't a valid pointer
-        var operand1_valid = AH.MakeInExpr(operand1.Val, valid_set);
-        crashAvoidance.Add(operand1_valid);
-        var operand2_valid = AH.MakeInExpr(operand2.Val, valid_set);
-        crashAvoidance.Add(operand2_valid);
+        crashAvoidance.Add($"({operand1.Val}) in ({h}).valid");
+        crashAvoidance.Add($"({operand2.Val}) in ({h}).valid");
 
         // It's undefined behavior if operand 1 or 2 isn't in the tree
-        var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-        var operand1_in_tree = AH.MakeInExpr(operand1.Val, tree);
-        crashAvoidance.Add(operand1_in_tree);
-        var operand2_in_tree = AH.MakeInExpr(operand2.Val, tree);
-        crashAvoidance.Add(operand2_in_tree);
+        var tree = $"({h}).tree";
+        crashAvoidance.Add($"({operand1.Val}) in {tree}");
+        crashAvoidance.Add($"({operand2.Val}) in {tree}");
 
         // It's undefined behavior if operand 1 or 2 isn't an array element
-        var operand1Node = AH.MakeSeqSelectExpr(tree, operand1.Val, "Armada_Node");
-        var field1_of_parent = AH.MakeExprDotName(operand1Node, "field_of_parent", "Armada_Field");
-        crashAvoidance.Add(AH.MakeExprDotName(field1_of_parent, "Armada_FieldArrayIndex?", new BoolType()));
-        var operand2Node = AH.MakeSeqSelectExpr(tree, operand2.Val, "Armada_Node");
-        var field2_of_parent = AH.MakeExprDotName(operand2Node, "field_of_parent", "Armada_Field");
-        crashAvoidance.Add(AH.MakeExprDotName(field2_of_parent, "Armada_FieldArrayIndex?", new BoolType()));
+        crashAvoidance.Add($"{tree}[{operand1.Val}].child_type.Armada_ChildTypeIndex?");
+        crashAvoidance.Add($"{tree}[{operand2.Val}].child_type.Armada_ChildTypeIndex?");
 
         // It's undefined behavior if operands 1 and 2 don't have the same parent
-        var parent1 = AH.MakeExprDotName(operand1Node, "parent", "Armada_Pointer");
-        var parent2 = AH.MakeExprDotName(operand2Node, "parent", "Armada_Pointer");
-        crashAvoidance.Add(AH.MakeEqExpr(parent1, parent2));
+        crashAvoidance.Add($"{tree}[{operand1.Val}].parent == {tree}[{operand2.Val}].parent");
 
         // The actual comparison is between the field indices of operands 1 and 2
-        var idx1 = AH.MakeExprDotName(field1_of_parent, "i", new IntType());
-        var idx2 = AH.MakeExprDotName(field2_of_parent, "i", new IntType());
-        var result = AH.MakeBinaryExpr(op, idx1, idx2, new BoolType());
+        var result = $"{tree}[{operand1.Val}].child_type.i {BinaryExpr.OpcodeString(op)} {tree}[{operand2.Val}].child_type.i";
         return new ArmadaRValue(crashAvoidance, result);
       }
 
       if (op == BinaryExpr.Opcode.And) {
         if (operand2.CanCauseUndefinedBehavior) {
-          crashAvoidance = operand1.UndefinedBehaviorAvoidance + AH.MakeImpliesExpr(operand1.Val, operand2.UndefinedBehaviorAvoidance.Expr);
+          crashAvoidance = operand1.UndefinedBehaviorAvoidance + $"({operand1.Val}) ==> ({operand2.UndefinedBehaviorAvoidance.Expr})";
         }
       }
       else if (op == BinaryExpr.Opcode.Or) {
         if (operand2.CanCauseUndefinedBehavior) {
-          crashAvoidance = operand1.UndefinedBehaviorAvoidance + AH.MakeOrExpr(operand1.Val, operand2.UndefinedBehaviorAvoidance.Expr);
+          crashAvoidance = operand1.UndefinedBehaviorAvoidance + $"({operand1.Val}) || ({operand2.UndefinedBehaviorAvoidance.Expr})";
         }
       }
       else if (op == BinaryExpr.Opcode.Imp) {
         if (operand2.CanCauseUndefinedBehavior) {
-          crashAvoidance = operand1.UndefinedBehaviorAvoidance + AH.MakeImpliesExpr(operand1.Val, operand2.UndefinedBehaviorAvoidance.Expr);
+          crashAvoidance = operand1.UndefinedBehaviorAvoidance + $"({operand1.Val}) ==> ({operand2.UndefinedBehaviorAvoidance.Expr})";
         }
       }
       else if (op == BinaryExpr.Opcode.Exp) {
         if (operand1.CanCauseUndefinedBehavior) {
-          crashAvoidance = operand2.UndefinedBehaviorAvoidance + AH.MakeImpliesExpr(operand2.Val, operand1.UndefinedBehaviorAvoidance.Expr);
+          crashAvoidance = operand2.UndefinedBehaviorAvoidance + $"({operand2.Val}) ==> ({operand1.UndefinedBehaviorAvoidance.Expr})";
         }
       }
       else if (op == BinaryExpr.Opcode.Div) {
-        var div_by_zero = AH.MakeNeqExpr(operand2.Val, AH.MakeZero());
-        crashAvoidance.Add(div_by_zero);
+        crashAvoidance.Add($"({operand2.Val}) != 0");
       }
       else if (op == BinaryExpr.Opcode.Mod) {
-        var mod_by_zero = AH.MakeNeqExpr(operand2.Val, AH.MakeZero());
-        crashAvoidance.Add(mod_by_zero);
+        crashAvoidance.Add($"({operand2.Val}) != 0");
       }
 
       /*
@@ -260,11 +259,11 @@ namespace Microsoft.Armada {
       {
         var h = GetRValueHeap();
 
-        if (operand1.Val.Type is PointerType) {
-          crashAvoidance.Add(AH.MakeApply2("Armada_ComparablePointer", operand1.Val, h, "bool"));
+        if (operand1Type is PointerType) {
+          crashAvoidance.Add($"Armada_ComparablePointer({operand1.Val}, {h})");
         }
-        if (operand2.Val.Type is PointerType) {
-          crashAvoidance.Add(AH.MakeApply2("Armada_ComparablePointer", operand2.Val, h, "bool"));
+        if (operand2Type is PointerType) {
+          crashAvoidance.Add($"Armada_ComparablePointer({operand2.Val}, {h})");
         }
       }
 
@@ -288,85 +287,68 @@ namespace Microsoft.Armada {
         } else if (op == BinaryExpr.Opcode.RightShift) {
           name = "bit_rshift_uint";
         }
-
-        var bitwidth = AH.GetBitWidth(operand1.Val.Type as UserDefinedType);
-        var e = AH.MakeFunctionCallExpr(tok, name + bitwidth,
-          new List<Expression>() {operand1.Val, operand2.Val}, targetType);
-        return new ArmadaRValue(crashAvoidance, e, targetType);
+        name += AH.GetBitWidth(operand1Type as UserDefinedType);
+        var e = $"{name}({operand1.Val}, {operand2.Val})";
+        return new ArmadaRValue(crashAvoidance, e);
       }
       // For mathematical expressions, we should treat them as if
       else if (op == BinaryExpr.Opcode.In || op == BinaryExpr.Opcode.NotIn ||
                op == BinaryExpr.Opcode.Eq || op == BinaryExpr.Opcode.Neq) {
-        var op1val = operand1.Val;
-        var op2val = operand2.Val;
-        var e = AH.MakeBinaryExpr(op, operand1.Val, operand2.Val, targetType);
+        var e = $"({operand1.Val}) {BinaryExpr.OpcodeString(op)} ({operand2.Val})";
         return new ArmadaRValue(crashAvoidance, e);
       }
       else {
-        var op1val = AH.IsLimitedSizeIntType(operand1.Val.Type) ? AH.MakeConversionExpr(operand1.Val, new IntType()) : operand1.Val;
-        var op2val = AH.IsLimitedSizeIntType(operand2.Val.Type) ? AH.MakeConversionExpr(operand2.Val, new IntType()) : operand2.Val;
-        var e = AH.EnsureIntegerFit(new BinaryExpr(tok, op, op1val, op2val), targetType);
+        var op1val = AH.ConvertToIntIfLimitedSizeInt(operand1.Val, operand1Type);
+        var op2val = AH.ConvertToIntIfLimitedSizeInt(operand2.Val, operand2Type);
+        var e = $"({op1val}) {BinaryExpr.OpcodeString(op)} ({op2val})";
+        e = AH.EnsureIntegerFit(e, new IntType(), targetType);
         return new ArmadaRValue(crashAvoidance, e);
       }
     }
 
-    public ArmadaLValue ResolveArmadaDereferenceExprAsLValue(IToken tok, ArmadaRValue addr)
+    public ArmadaLValue ResolveArmadaDereferenceExprAsLValue(IToken tok, ArmadaRValue addr, Type targetType)
     {
-      if (addr.Val.Type == null) {
+      if (targetType == null) {
         Fail(tok, "Attempt to dereference a value whose type isn't known");
         return null;
       }
 
-      Type subtype;
-      string err;
-      if (!AH.GetDereferenceType(addr.Val.Type, out subtype, out err)) {
-        Fail(tok, err);
-        return null;
-      }
-
-      return new AddressableArmadaLValue(tok, subtype, addr);
+      return new AddressableArmadaLValue(tok, targetType, addr);
     }
 
-    public ArmadaRValue ResolveArmadaDereferenceExprAsRValue(IToken tok, ArmadaRValue addr)
+    public ArmadaRValue ResolveArmadaDereferenceExprAsRValue(IToken tok, ArmadaRValue addr, Type targetType)
     {
-      if (addr.Val.Type == null) {
+      if (targetType == null) {
         Fail(tok, "Attempt to dereference a value whose type isn't known");
-        return new ArmadaRValue(null);
-      }
-
-      Type subtype;
-      string err;
-      if (!AH.GetDereferenceType(addr.Val.Type, out subtype, out err)) {
-        Fail(tok, err);
         return new ArmadaRValue(null);
       }
 
       var h = GetRValueHeap();
 
-      var valid = AH.GetInvocationOfValidPointer(h, addr.Val, subtype);
+      var valid = AH.GetInvocationOfValidPointer(h, addr.Val, targetType);
       if (valid == null) {
-        Fail(tok, "Type {subtype} is not supported on the heap, and thus not for dereference operations");
+        Fail(tok, $"Type {targetType} is not supported on the heap, and thus not for dereference operations");
         return new ArmadaRValue(null);
       }
       var crashAvoidance = addr.UndefinedBehaviorAvoidance + valid;
 
-      var ret = AH.GetInvocationOfDereferencePointer(h, addr.Val, subtype);
+      var ret = AH.GetInvocationOfDereferencePointer(h, addr.Val, targetType);
       if (ret == null) {
-        Fail(tok, "Type {subtype} is not supported on the heap, and thus not for dereference operations");
+        Fail(tok, $"Type {targetType} is not supported on the heap, and thus not for dereference operations");
       }
       return new ArmadaRValue(crashAvoidance, ret);
     }
 
-    public ArmadaRValue ResolveAllocatedExpr(IToken tok, ArmadaRValue addr)
+    public ArmadaRValue ResolveAllocatedExpr(IToken tok, ArmadaRValue addr, Type addrType)
     {
-      if (addr.Val.Type == null) {
+      if (addrType == null) {
         Fail(tok, "Attempt to determine the allocated-ness of a value whose type isn't known");
         return new ArmadaRValue(null);
       }
 
       Type subtype;
       string err;
-      if (!AH.GetDereferenceType(addr.Val.Type, out subtype, out err)) {
+      if (!AH.GetDereferenceType(addrType, out subtype, out err)) {
         Fail(tok, err);
         return new ArmadaRValue(null);
       }
@@ -375,23 +357,23 @@ namespace Microsoft.Armada {
 
       var valid = AH.GetInvocationOfValidPointer(h, addr.Val, subtype);
       if (valid == null) {
-        Fail(tok, "Type {subtype} is not supported on the heap, and thus not for allocated() expressions");
+        Fail(tok, $"Type {subtype} is not supported on the heap, and thus not for allocated() expressions");
         return new ArmadaRValue(null);
       }
 
       return new ArmadaRValue(addr.UndefinedBehaviorAvoidance, valid);
     }
 
-    public ArmadaRValue ResolveAllocatedArrayExpr(IToken tok, ArmadaRValue addr)
+    public ArmadaRValue ResolveAllocatedArrayExpr(IToken tok, ArmadaRValue addr, Type addrType)
     {
-      if (addr.Val.Type == null) {
+      if (addrType == null) {
         Fail(tok, "Attempt to determine the allocated-array-ness of a value whose type isn't known");
         return new ArmadaRValue(null);
       }
 
       Type subtype;
       string err;
-      if (!AH.GetDereferenceType(addr.Val.Type, out subtype, out err)) {
+      if (!AH.GetDereferenceType(addrType, out subtype, out err)) {
         Fail(tok, err);
         return new ArmadaRValue(null);
       }
@@ -400,61 +382,38 @@ namespace Microsoft.Armada {
 
       var valid = AH.GetInvocationOfValidPointer(h, addr.Val, subtype);
       if (valid == null) {
-        Fail(tok, "Type {subtype} is not supported on the heap, and thus not for allocated_array() expressions");
+        Fail(tok, $"Type {subtype} is not supported on the heap, and thus not for allocated_array() expressions");
         return new ArmadaRValue(null);
       }
 
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      var node = AH.MakeSeqSelectExpr(tree, addr.Val, "Armada_Node");
-      var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-      var is_array_field = AH.MakeExprDotName(field_of_parent, "Armada_FieldArrayIndex?", new BoolType());
+      var node = $"({h}).tree[{addr.Val}]";
+      var is_array_field = $"{node}.child_type.Armada_ChildTypeIndex?";
+      var parent_valid = $"Armada_ValidPointer({h}, {node}.parent)";
 
-      var parent = AH.MakeExprDotName(node, "parent", "Armada_Pointer");
-      var parent_valid = AH.GetInvocationOfValidPointer(h, parent, new SizedArrayType(subtype, null));
-      if (parent_valid == null) {
-        Fail(tok, "Arrays of type {subtype} aren't supported on the heap, and thus can't be used for allocated_array() expressions");
-        return new ArmadaRValue(null);
-      }
-
-      var res = AH.MakeAndExpr(valid, is_array_field);
-      res = AH.MakeAndExpr(res, parent_valid);
+      var res = $"({valid}) && ({is_array_field}) && ({parent_valid})";
 
       return new ArmadaRValue(addr.UndefinedBehaviorAvoidance, res);
     }
 
-    private Attributes ResolveAttributes(Attributes attrs)
+    private string ResolveTriggers(Attributes attrs)
     {
       if (attrs == null) {
-        return null;
+        return "";
       }
 
-      var prev = ResolveAttributes(attrs.Prev);
+      var prev_triggers = ResolveTriggers(attrs.Prev);
 
       if (attrs.Name == "trigger") {
-        var args = attrs.Args.Select(arg => ResolveAsRValue(arg).Val).ToList();
-        return new Attributes(attrs.Name, args, prev);
+        var rs = ResolveAsRValueList(attrs.Args);
+        var s = String.Join(", ", rs.Vals);
+        return $"{prev_triggers} {{:trigger {s}}}";
       }
       else {
-        return new Attributes(attrs.Name, attrs.Args, prev);
+        return prev_triggers;
       }
     }
 
-    private static Attributes CullAttributesToTriggersOnly(Attributes attrs)
-    {
-      if (attrs == null) {
-        return null;
-      }
-
-      var prev = CullAttributesToTriggersOnly(attrs.Prev);
-      if (attrs.Name == "trigger") {
-        return new Attributes(attrs.Name, attrs.Args, prev);
-      }
-      else {
-        return prev;
-      }
-    }
-
-    private static UndefinedBehaviorAvoidanceConstraint GetQuantifiedUndefinedBehaviorAvoidanceConstraint(
+    private UndefinedBehaviorAvoidanceConstraint GetQuantifiedUndefinedBehaviorAvoidanceConstraint(
       ArmadaRValue range,
       ArmadaRValue term,
       List<TypeParameter> typeArgs,
@@ -462,33 +421,40 @@ namespace Microsoft.Armada {
       Attributes attrs
       )
     {
-      Expression crashExpr = null;
+      string body = null;
       if (range != null && range.CanCauseUndefinedBehavior) {
         if (term.CanCauseUndefinedBehavior) {
-          crashExpr = AH.MakeAndExpr(range.UndefinedBehaviorAvoidance.Expr, AH.MakeImpliesExpr(range.Val, term.UndefinedBehaviorAvoidance.Expr));
+          body = $"({range.UndefinedBehaviorAvoidance.Expr}) && (({range.Val}) ==> ({term.UndefinedBehaviorAvoidance.Expr}))";
         }
         else {
-          crashExpr = range.UndefinedBehaviorAvoidance.Expr;
+          body = range.UndefinedBehaviorAvoidance.Expr;
         }
       }
       else if (term.CanCauseUndefinedBehavior) {
         if (range != null && range.Val != null) {
-          crashExpr = AH.MakeImpliesExpr(range.Val, term.UndefinedBehaviorAvoidance.Expr);
+          body = $"({range.Val}) ==> ({term.UndefinedBehaviorAvoidance.Expr})";
         }
         else {
-          crashExpr = term.UndefinedBehaviorAvoidance.Expr;
+          body = term.UndefinedBehaviorAvoidance.Expr;
         }
+      }
+
+      if (body == null) {
+        return new UndefinedBehaviorAvoidanceConstraint();
       }
 
       // No matter what kind of quantified expression it is, forall or exists, to avoid crashing it must be true for
-      // all elements in the domain.  So we always use a ForallExpr expression, even if the quantifier is an exists.
-
-      if (crashExpr != null) {
-        var triggers = CullAttributesToTriggersOnly(attrs);
-        crashExpr = new ForallExpr(Token.NoToken, typeArgs, bvars, null /* no range */, crashExpr, triggers);
-        crashExpr = AH.SetExprType(crashExpr, new BoolType());
-      }
-      return new UndefinedBehaviorAvoidanceConstraint(crashExpr);
+      // all elements in the domain.  So we always use a forall expression, even if the quantifier is an exists.
+      // Note that we don't need to put a range on this forall (i.e., we don't need to say | range ::) because
+      // the restriction to the range is already talked about in the body.
+      
+      var avoidanceExpr = "forall "
+                          + String.Join(", ", bvars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                          + " "
+                          + ResolveTriggers(attrs) // intentionally leave out range, since it's in the body
+                          + " :: "
+                          + body;
+      return new UndefinedBehaviorAvoidanceConstraint(avoidanceExpr);
     }
 
     public ArmadaLValue ResolveAsLValue(Expression expr)
@@ -535,14 +501,14 @@ namespace Microsoft.Armada {
         }
 
         var newE0 = ResolveAsRValue(e.E0);
-        return newSeq.ApplySeqSelect(e.tok, this, newE0, expr.Type);
+        return newSeq.ApplySeqSelect(e.tok, this, newE0, e.E0.Type, expr.Type);
       }
 
       if (expr is UnaryOpExpr) {
         var e = (UnaryOpExpr)expr;
         if (e.Op == UnaryOpExpr.Opcode.Dereference) {
           var newE = ResolveAsRValue(e.E);
-          return ResolveArmadaDereferenceExprAsLValue(e.tok, newE);
+          return ResolveArmadaDereferenceExprAsLValue(e.tok, newE, expr.Type);
         }
         else {
           Fail(expr.tok, "Can't resolve unary-operator expression as an lvalue since it's not the dereference operator (*)");
@@ -567,32 +533,29 @@ namespace Microsoft.Armada {
       if (expr is ChainingExpression) {
         var e = (ChainingExpression)expr;
         ArmadaRValueList newOperands = ResolveAsRValueList(e.Operands);
-        ArmadaRValueList newPrefixLimits = ResolveAsRValueList(e.PrefixLimits);
-        var crashAvoidance = newOperands.UndefinedBehaviorAvoidance + newPrefixLimits.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance,
-                                new ChainingExpression(e.tok, newOperands.Vals, e.Operators, e.OperatorLocs, newPrefixLimits.Vals),
-                                expr.Type);
+        var newOperandStrings = newOperands.Vals;
+        var crashAvoidance = newOperands.UndefinedBehaviorAvoidance;
+        var val = newOperandStrings[0]
+                + String.Concat(Enumerable.Range(0, e.Operands.Count - 1).Select(i => $" {BinaryExpr.OpcodeString(e.Operators[i])} ({newOperandStrings[i + 1]})"));
+        return new ArmadaRValue(crashAvoidance, val);
       }
 
       if (expr is NegationExpression) {
         var e = (NegationExpression)expr;
         var newE = ResolveAsRValue(e.E);
-        var newE_val = AH.ConvertToIntIfLimitedSizeInt(newE.Val);
-        var val = AH.EnsureIntegerFit(new NegationExpression(e.tok, newE_val), expr.Type);
+        var newEAsInt = AH.ConvertToIntIfLimitedSizeInt(newE.Val, e.E.Type);
+        var val = AH.EnsureIntegerFit($"-({newEAsInt})", new IntType(), expr.Type);
         return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, val);
       }
 
       if (expr is LiteralExpr) {
         var e = (LiteralExpr)expr;
         if (e.Value == null) {
-          // If an expression is null, treat it as the null pointer.
-          // That is, treat it as 0 with the same type that the resolver already assigned it.
-          var null_ptr = new LiteralExpr(e.tok, 0);
-          null_ptr.Type = e.Type;
-          return new ArmadaRValue(null_ptr);
+          // If an expression is null, treat it as the null pointer. That is, treat it as 0.
+          return new ArmadaRValue("0");
         }
         else {
-          return new ArmadaRValue(expr);
+          return new ArmadaRValue(Printer.ExprToString(expr));
         }
       }
 
@@ -602,17 +565,42 @@ namespace Microsoft.Armada {
       }
 
       if (expr is MeExpr) {
+        if (tid == null) {
+          Fail(expr.tok, "No thread defined in this context, $me isn't defined");
+        }
         return new ArmadaRValue(tid);
       }
 
       if (expr is StoreBufferEmptyExpr) {
-        var s = GetRValueState();
-        var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-        var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-        var storeBuffer = AH.MakeExprDotName(thread, "storeBuffer", "Armada_StoreBuffer");
-        var storeBufferCardinality = AH.MakeCardinalityExpr(storeBuffer);
-        var storeBufferEmpty = AH.MakeEqExpr(storeBufferCardinality, AH.MakeZero());
+        if (tid == null) {
+          Fail("No thread defined in this context, so $sb_empty is undefined");
+          return null;
+        }
+        var storeBufferEmpty = $"|({GetRValueState()}).threads[{tid}].storeBuffer| == 0";
         return new ArmadaRValue(storeBufferEmpty);
+      }
+
+      if (expr is TotalStateExpr) {
+        return new ArmadaRValue(GetRValueState());
+      }
+
+      if (expr is IfUndefinedExpr) {
+        var e = (IfUndefinedExpr)expr;
+        var potentiallyUnsafe = ResolveAsRValue(e.PotentiallyUnsafe);
+        if (!potentiallyUnsafe.CanCauseUndefinedBehavior) {
+          return potentiallyUnsafe;
+        }
+        var safeSubstitution = ResolveAsRValue(e.SafeSubstitution);
+        var undefinedBehaviorAvoidance = new UndefinedBehaviorAvoidanceConstraint();
+        if (safeSubstitution.CanCauseUndefinedBehavior) {
+          undefinedBehaviorAvoidance.Add(
+            $"({potentiallyUnsafe.UndefinedBehaviorAvoidance.Expr}) || ({safeSubstitution.UndefinedBehaviorAvoidance.Expr})"
+          );
+        }
+        return new ArmadaRValue(
+          undefinedBehaviorAvoidance,
+          $"if {potentiallyUnsafe.UndefinedBehaviorAvoidance.Expr} then {potentiallyUnsafe.Val} else {safeSubstitution.Val}"
+        );
       }
 
       if (expr is IdentifierExpr) {
@@ -623,46 +611,54 @@ namespace Microsoft.Armada {
       if (expr is SetDisplayExpr) {
         var e = (SetDisplayExpr)expr;
         var newElements = ResolveAsRValueList(e.Elements);
-        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, new SetDisplayExpr(e.tok, e.Finite, newElements.Vals), expr.Type);
+        var v = "{" + String.Join(", ", newElements.Vals) + "}";
+        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is MultiSetDisplayExpr) {
         var e = (MultiSetDisplayExpr)expr;
         var newElements = ResolveAsRValueList(e.Elements);
-        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, new MultiSetDisplayExpr(e.tok, newElements.Vals), expr.Type);
+        var v = "multiset {" + String.Join(", ", newElements.Vals) + "}";
+        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is SeqDisplayExpr) {
         var e = (SeqDisplayExpr)expr;
         var newElements = ResolveAsRValueList(e.Elements);
-        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, new SeqDisplayExpr(e.tok, newElements.Vals), expr.Type);
+        var v = "[" + String.Join(", ", newElements.Vals) + "]";
+        return new ArmadaRValue(newElements.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is MapDisplayExpr) {
         var e = (MapDisplayExpr)expr;
-        var newElements = new List<ExpressionPair>();
+        var mapElements = new List<string>();
         var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
         foreach (var pair in e.Elements) {
           var newA = ResolveAsRValue(pair.A);
           var newB = ResolveAsRValue(pair.B);
-          newElements.Add(new ExpressionPair(newA.Val, newB.Val));
+          mapElements.Add($"({newA.Val}) := ({newB.Val})");
           crashAvoidance.Add(newA.UndefinedBehaviorAvoidance);
           crashAvoidance.Add(newB.UndefinedBehaviorAvoidance);
         }
-        return new ArmadaRValue(crashAvoidance, new MapDisplayExpr(e.tok, e.Finite, newElements), expr.Type);
+        var v = "map [" + String.Join(", ", mapElements) + "]";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is DatatypeValue) {
         var e = (DatatypeValue)expr;
         var newArgs = ResolveAsRValueList(e.Arguments);
-        return new ArmadaRValue(newArgs.UndefinedBehaviorAvoidance, new DatatypeValue(e.tok, e.DatatypeName, e.MemberName, newArgs.Vals), expr.Type);
+        var v = $"{e.DatatypeName}.{e.MemberName}";
+        if (e.Arguments.Any()) {
+          v += "(" + String.Join(", ", newArgs.Vals) + ")";
+        }
+        return new ArmadaRValue(newArgs.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is NameSegment) {
         var e = (NameSegment)expr;
         var av = symbols.Lookup(methodName, e.Name);
         if (av == null) {
-          return new ArmadaRValue(expr);
+          return new ArmadaRValue(e.Name);
         }
         else {
           return av.GetRValue(e.tok, this);
@@ -672,7 +668,9 @@ namespace Microsoft.Armada {
       if (expr is ExprDotName) {
         var e = (ExprDotName)expr;
         var newLhs = ResolveAsRValue(e.Lhs);
-        return new ArmadaRValue(newLhs.UndefinedBehaviorAvoidance, new ExprDotName(e.tok, newLhs.Val, e.SuffixName, e.OptTypeArguments), expr.Type);
+        var newLhsParenthesized = AH.IsJustNames(e.Lhs) ? newLhs.Val : "(" + newLhs.Val + ")";
+        var v = $"{newLhsParenthesized}.{e.SuffixName}";
+        return new ArmadaRValue(newLhs.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is ApplySuffix) {
@@ -680,11 +678,15 @@ namespace Microsoft.Armada {
         var newLhs = ResolveAsRValue(e.Lhs);
         var newArgs = ResolveAsRValueList(e.Args);
         var crashAvoidance = newLhs.UndefinedBehaviorAvoidance + newArgs.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new ApplySuffix(e.tok, newLhs.Val, newArgs.Vals), expr.Type);
+        var newLhsParenthesized = AH.IsJustNames(e.Lhs) ? newLhs.Val : $"({newLhs.Val})";
+        var v = $"{newLhsParenthesized}(" + String.Join(", ", newArgs.Vals) + ")";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is RevealExpr) {
-        return new ArmadaRValue(expr);
+        var e = (RevealExpr) expr;
+        var subexpr = ResolveAsRValue(e.Expr);
+        return new ArmadaRValue(subexpr.UndefinedBehaviorAvoidance, $"reveal {subexpr.Val}");
       }
 
       if (expr is MemberSelectExpr) {
@@ -699,8 +701,9 @@ namespace Microsoft.Armada {
         var newE1 = ResolveAsRValue(e.E1);
         var type = e.Seq.Type;
 
-        var newE0val = (type is MapType) ? newE0.Val : AH.ConvertToIntIfNotInt(newE0.Val);
-        var newE1val = (type is MapType) ? newE1.Val : e.SelectOne ? null : AH.ConvertToIntIfNotInt(newE1.Val);
+        var newE0val = (type is MapType) ? newE0.Val : AH.ConvertToIntIfNotInt(newE0.Val, e.E0.Type);
+        var newE1val = (type is MapType) ? newE1.Val
+                                         : ((e.SelectOne || e.E1 == null) ? null : AH.ConvertToIntIfNotInt(newE1.Val, e.E1.Type));
         var crashAvoidance = newSeq.UndefinedBehaviorAvoidance + newE0.UndefinedBehaviorAvoidance;
         if (!e.SelectOne && e.E1 != null)
         {
@@ -708,19 +711,20 @@ namespace Microsoft.Armada {
         }
 
         if (type is SeqType || type is SizedArrayType) {
-          var cardinality = AH.MakeCardinalityExpr(newSeq.Val);
-          crashAvoidance.Add(AH.MakeLeExpr(AH.MakeZero(), newE0val));
+          string v;
           if (e.SelectOne) {
-            crashAvoidance.Add(AH.MakeLtExpr(newE0val, cardinality));
+            crashAvoidance.Add($"0 <= {newE0val} < |{newSeq.Val}|");
+            v = $"({newSeq.Val})[{newE0val}]";
           }
           else if (e.E1 == null) {
-            crashAvoidance.Add(AH.MakeLeExpr(newE0val, cardinality));
+            crashAvoidance.Add($"0 <= {newE0val} <= |{newSeq.Val}|");
+            v = $"({newSeq.Val})[{newE0val}..]";
           }
           else {
-            crashAvoidance.Add(AH.MakeLeExpr(newE0val, newE1val));
-            crashAvoidance.Add(AH.MakeLeExpr(newE1val, cardinality));
+            crashAvoidance.Add($"0 <= {newE0val} <= {newE1val} <= |{newSeq.Val}|");
+            v = $"({newSeq.Val})[{newE0val}..{newE1val}]";
           }
-          return new ArmadaRValue(crashAvoidance, new SeqSelectExpr(e.tok, e.SelectOne, newSeq.Val, newE0val, newE1val), expr.Type);
+          return new ArmadaRValue(crashAvoidance, v);
         }
 
         if (type is MapType) {
@@ -728,8 +732,9 @@ namespace Microsoft.Armada {
             Fail(e.tok, "Attempt to take range of map");
             return new ArmadaRValue(null);
           }
-          crashAvoidance.Add(AH.MakeInExpr(newE0val, newSeq.Val));
-          return new ArmadaRValue(crashAvoidance, new SeqSelectExpr(e.tok, e.SelectOne, newSeq.Val, newE0val, newE1val), expr.Type);
+          crashAvoidance.Add($"({newE0val}) in ({newSeq.Val})");
+          var v = $"({newSeq.Val})[{newE0val}]";
+          return new ArmadaRValue(crashAvoidance, v);
         }
 
         Fail(e.tok, $"Attempt to obtain element of non-array, non-sequence, non-map type {type}");
@@ -747,20 +752,22 @@ namespace Microsoft.Armada {
         var newIndex = ResolveAsRValue(e.Index);
         var newValue = ResolveAsRValue(e.Value);
         var crashAvoidance = newSeq.UndefinedBehaviorAvoidance + newIndex.UndefinedBehaviorAvoidance + newValue.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new SeqUpdateExpr(e.tok, newSeq.Val, newIndex.Val, newValue.Val), expr.Type);
+        var v = $"({newSeq.Val})[{newIndex.Val} := {newValue.Val}]";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is DatatypeUpdateExpr) {
         var e = (DatatypeUpdateExpr)expr;
         var newRoot = ResolveAsRValue(e.Root);
-        var newUpdates = new List<Tuple<IToken, string, Expression>>();
+        var newUpdates = new List<string>();
         var crashAvoidance = newRoot.UndefinedBehaviorAvoidance;
         foreach (var update in e.Updates) {
           var newItem3 = ResolveAsRValue(update.Item3);
-          newUpdates.Add(new Tuple<IToken, string, Expression>(update.Item1, update.Item2, newItem3.Val));
+          newUpdates.Add($"{update.Item2} := {newItem3.Val}");
           crashAvoidance.Add(newItem3.UndefinedBehaviorAvoidance);
         }
-        return new ArmadaRValue(crashAvoidance, new DatatypeUpdateExpr(e.tok, newRoot.Val, newUpdates), expr.Type);
+        var v = $"({newRoot.Val}).(" + String.Join(", ", newUpdates) + ")";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is FunctionCallExpr) {
@@ -768,7 +775,12 @@ namespace Microsoft.Armada {
         var newReceiver = ResolveAsRValue(e.Receiver);
         var newArgs = ResolveAsRValueList(e.Args);
         var crashAvoidance = newReceiver.UndefinedBehaviorAvoidance + newArgs.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new FunctionCallExpr(e.tok, e.Name, newReceiver.Val, e.OpenParen, newArgs.Vals), expr.Type);
+        if (e.Receiver != null) {
+          Fail(e.tok, "Receivers not supported in Armada");
+          return null;
+        }
+        var v = $"{e.Name}(" + String.Join(", ", newArgs.Vals) + ")";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is ApplyExpr) {
@@ -776,13 +788,16 @@ namespace Microsoft.Armada {
         var newFunction = ResolveAsRValue(e.Function);
         var newArgs = ResolveAsRValueList(e.Args);
         var crashAvoidance = newFunction.UndefinedBehaviorAvoidance + newArgs.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new ApplyExpr(e.tok, newFunction.Val, newArgs.Vals), expr.Type);
+        var newFunctionParenthesized = AH.IsJustNames(e.Function) ? newFunction.Val : $"({newFunction.Val})";
+        var v = $"{newFunctionParenthesized}(" + String.Join(", ", newArgs.Vals) + ")";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is MultiSetFormingExpr) {
         var e = (MultiSetFormingExpr)expr;
         var newE = ResolveAsRValue(e.E);
-        return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, new MultiSetFormingExpr(e.tok, newE.Val), expr.Type);
+        var v = $"multiset ({newE.Val})";
+        return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is OldExpr) {
@@ -803,160 +818,201 @@ namespace Microsoft.Armada {
 
       if (expr is UnaryOpExpr) {
         var e = (UnaryOpExpr)expr;
-        if (e.Op == UnaryOpExpr.Opcode.Dereference) {
-          var newE = ResolveAsRValue(e.E);
-          if (newE == null) {
+        ArmadaRValue newRV;
+        string val;
+        switch (e.Op) {
+          case UnaryOpExpr.Opcode.Not :
+            if (e.Type is PointerType) {
+              Fail(e.tok, "Can't do not (or any other integer manipulation, for that matter) on a pointer value");
+              return new ArmadaRValue(null);
+            }
+            newRV = ResolveAsRValue(e.E);
+            val = $"!({newRV.Val})";
+            return new ArmadaRValue(newRV.UndefinedBehaviorAvoidance, val);
+
+          case UnaryOpExpr.Opcode.Cardinality :
+            newRV = ResolveAsRValue(e.E);
+            val = $"|({newRV.Val})|";
+            return new ArmadaRValue(newRV.UndefinedBehaviorAvoidance, val);
+
+          case UnaryOpExpr.Opcode.Allocated :
+            newRV = ResolveAsRValue(e.E);
+            return ResolveAllocatedExpr(e.tok, newRV, e.E.Type);
+
+          case UnaryOpExpr.Opcode.AddressOf :
+            var newLV = ResolveAsLValue(e.E);
+            if (newLV == null) {
+              Fail(e.tok, "Attempt to get address of value that isn't an lvalue");
+              return new ArmadaRValue(null);
+            }
+            var addr = newLV.GetAddress();
+            if (addr == null) {
+              Fail(e.tok, "Attempt to get address of value without an address");
+              return new ArmadaRValue(null);
+            }
+            var crashAvoidance = newLV.GetUndefinedBehaviorAvoidanceConstraint();
+            return new ArmadaRValue(crashAvoidance, addr);
+
+          case UnaryOpExpr.Opcode.Dereference :
+            newRV = ResolveAsRValue(e.E);
+            if (newRV == null) {
+              return new ArmadaRValue(null);
+            }
+            return ResolveArmadaDereferenceExprAsRValue(e.tok, newRV, expr.Type);
+
+          case UnaryOpExpr.Opcode.AllocatedArray :
+            newRV = ResolveAsRValue(e.E);
+            return ResolveAllocatedArrayExpr(e.tok, newRV, e.E.Type);
+
+          case UnaryOpExpr.Opcode.GlobalView :
+            return ResolveAsMemoryRValue(e.tok, e.E);
+
+          default :
+            Fail(e.tok, $"Armada doesn't support the {e.Op.ToString()} operator");
             return new ArmadaRValue(null);
-          }
-          return ResolveArmadaDereferenceExprAsRValue(e.tok, newE);
-        }
-        else if (e.Op == UnaryOpExpr.Opcode.AddressOf) {
-          var newE = ResolveAsLValue(e.E);
-          if (newE == null) {
-            Fail(e.tok, "Attempt to get address of value that isn't an lvalue");
-            return new ArmadaRValue(null);
-          }
-          var addr = newE.GetAddress();
-          if (addr == null) {
-            Fail(e.tok, "Attempt to get address of value without an address");
-            return new ArmadaRValue(null);
-          }
-          var crashAvoidance = newE.GetUndefinedBehaviorAvoidanceConstraint();
-          return new ArmadaRValue(crashAvoidance, addr);
-        }
-        else if (e.Op == UnaryOpExpr.Opcode.Allocated) {
-          var newE = ResolveAsRValue(e.E);
-          return ResolveAllocatedExpr(e.tok, newE);
-        }
-        else if (e.Op == UnaryOpExpr.Opcode.AllocatedArray) {
-          var newE = ResolveAsRValue(e.E);
-          return ResolveAllocatedArrayExpr(e.tok, newE);
-        }
-        else if (e.Op == UnaryOpExpr.Opcode.Not && e.Type is PointerType) {
-          Fail(e.tok, "Can't do bitwise-not (or any other integer manipulation, for that matter) on a pointer value");
-          return new ArmadaRValue(null);
-        }
-        else {
-          var newE = ResolveAsRValue(e.E);
-          var newE_val = AH.ConvertToIntIfLimitedSizeInt(newE.Val);
-          var val = AH.EnsureIntegerFit(new UnaryOpExpr(e.tok, e.Op, newE_val), expr.Type);
-          return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, val);
         }
       }
 
       if (expr is ConversionExpr) {
         var e = (ConversionExpr)expr;
         var newE = ResolveAsRValue(e.E);
-        return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, new ConversionExpr(e.tok, newE.Val, e.ToType), expr.Type);
+        var v = $"({newE.Val}) as {e.ToType.ToString()}";
+        return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, v);
       }
 
       if (expr is BinaryExpr) {
         var e = (BinaryExpr)expr;
         var newE0 = ResolveAsRValue(e.E0);
         var newE1 = ResolveAsRValue(e.E1);
-        return ResolveArmadaBinaryExpr(e.tok, e.Type, e.Op, newE0, newE1);
+        return ResolveArmadaBinaryExpr(e.tok, e.Type, e.Op, newE0, newE1, e.E0.Type, e.E1.Type);
       }
 
       if (expr is TernaryExpr) {
         var e = (TernaryExpr)expr;
+        Fail(expr.tok, "Ternary operators not supported in Armada");
+        return new ArmadaRValue(null);
+        /*
         var newE0 = ResolveAsRValue(e.E0);
         var newE1 = ResolveAsRValue(e.E1);
         var newE2 = ResolveAsRValue(e.E2);
         var crashAvoidance = newE0.UndefinedBehaviorAvoidance + newE1.UndefinedBehaviorAvoidance + newE2.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new TernaryExpr(e.tok, e.Op, newE0.Val, newE1.Val, newE2.Val), expr.Type);
+        var v = ...;
+        return new ArmadaRValue(crashAvoidance, v);
+        */
       }
 
       if (expr is LetExpr) {
         var e = (LetExpr)expr;
         var newRHSs = ResolveAsRValueList(e.RHSs);
         var newBody = ResolveAsRValue(e.Body);
-        var newAttrs = ResolveAttributes(e.Attributes);
         var crashAvoidance = newRHSs.UndefinedBehaviorAvoidance;
+        var defs = String.Concat(Enumerable.Range(0, e.LHSs.Count).Select(i => $"var {e.LHSs[i].Id} := {newRHSs.Vals[i]}; "));
         if (newBody.CanCauseUndefinedBehavior) {
-          crashAvoidance.Add(new LetExpr(Token.NoToken, e.LHSs, newRHSs.Vals, newBody.UndefinedBehaviorAvoidance.Expr, e.Exact, null));
+          crashAvoidance.Add($"{defs}{newBody.UndefinedBehaviorAvoidance.Expr}");
         }
-        return new ArmadaRValue(crashAvoidance, new LetExpr(e.tok, e.LHSs, newRHSs.Vals, newBody.Val, e.Exact, newAttrs), expr.Type);
+        return new ArmadaRValue(crashAvoidance, $"{defs}{newBody.Val}");
       }
 
       if (expr is NamedExpr) {
         var e = (NamedExpr)expr;
         var newBody = ResolveAsRValue(e.Body);
-        var newContract = ResolveAsRValue(e.Contract);
-        var crashAvoidance = newBody.UndefinedBehaviorAvoidance + newContract.UndefinedBehaviorAvoidance;
-        return new ArmadaRValue(crashAvoidance, new NamedExpr(e.tok, e.Name, newBody.Val, newContract.Val, e.ReplacerToken), expr.Type);
+        var crashAvoidance = newBody.UndefinedBehaviorAvoidance;
+        var v = $"label {e.Name} : {newBody.Val}";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is ForallExpr) {
         var e = (ForallExpr)expr;
         var newRange = ResolveAsRValue(e.Range);
         var newTerm = ResolveAsRValue(e.Term);
-        var newAttrs = ResolveAttributes(e.Attributes);
-        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, e.TypeArgs, e.BoundVars, newAttrs);
-        return new ArmadaRValue(crashAvoidance,
-                                new ForallExpr(e.tok, e.TypeArgs, e.BoundVars, newRange.Val, newTerm.Val, newAttrs),
-                                expr.Type);
+        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, e.TypeArgs, e.BoundVars, e.Attributes);
+        var v = "forall "
+                + String.Join(", ", e.BoundVars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                + " "
+                + ResolveTriggers(e.Attributes)
+                + (e.Range != null ? " | " + newRange.Val : "")
+                + " :: "
+                + newTerm.Val;
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is ExistsExpr) {
         var e = (ExistsExpr)expr;
         var newRange = ResolveAsRValue(e.Range);
         var newTerm = ResolveAsRValue(e.Term);
-        var newAttrs = ResolveAttributes(e.Attributes);
-        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, e.TypeArgs, e.BoundVars, newAttrs);
-        return new ArmadaRValue(crashAvoidance,
-                                new ExistsExpr(e.tok, e.TypeArgs, e.BoundVars, newRange.Val, newTerm.Val, newAttrs),
-                                expr.Type);
+        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, e.TypeArgs, e.BoundVars, e.Attributes);
+        var v = "exists "
+                + String.Join(", ", e.BoundVars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                + " "
+                + ResolveTriggers(e.Attributes)
+                + (e.Range != null ? " | " + newRange.Val : "")
+                + " :: "
+                + newTerm.Val;
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is SetComprehension) {
         var e = (SetComprehension)expr;
         var newRange = ResolveAsRValue(e.Range);
         var newTerm = ResolveAsRValue(e.Term);
-        var newAttrs = ResolveAttributes(e.Attributes);
-        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, new List<TypeParameter>(), e.BoundVars, newAttrs);
-        return new ArmadaRValue(crashAvoidance,
-                                new SetComprehension(e.tok, e.Finite, e.BoundVars, newRange.Val, newTerm.Val, newAttrs),
-                                expr.Type);
+        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newTerm, new List<TypeParameter>(), e.BoundVars,
+                                                                               e.Attributes);
+        var v = (e.Finite ? "set " : "iset ")
+                + String.Join(", ", e.BoundVars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                + ResolveTriggers(e.Attributes)
+                + " | "
+                + newRange.Val
+                + (e.Term != null ? " :: " + newTerm.Val : "");
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is MapComprehension) {
-        // FIXME: I have no idea about what the left term is doing,
-        //        and this is only minimal fix to make CSharp happy
         var e = (MapComprehension)expr;
         var newRange = ResolveAsRValue(e.Range);
         var newRightTerm = ResolveAsRValue(e.Term);
         var newLeftTerm = ResolveAsRValue(e.TermLeft);
-        var newAttrs = ResolveAttributes(e.Attributes);
-        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newRightTerm, new List<TypeParameter>(), e.BoundVars, newAttrs);
-        return new ArmadaRValue(crashAvoidance,
-                                new MapComprehension(e.tok, e.Finite, e.BoundVars, newRange.Val, newLeftTerm.Val, newRightTerm.Val, newAttrs),
-                                expr.Type);
+        var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newRightTerm, new List<TypeParameter>(),
+                                                                               e.BoundVars, e.Attributes);
+        if (e.TermLeft != null) {
+          crashAvoidance += GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRange, newLeftTerm, new List<TypeParameter>(),
+                                                                              e.BoundVars, e.Attributes);
+        }
+        var v = (e.Finite ? "map " : "imap ")
+                + String.Join(", ", e.BoundVars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                + ResolveTriggers(e.Attributes)
+                + (e.Range != null ? " | " + newRange.Val : "")
+                + " :: "
+                + (e.TermLeft != null ? $"{newLeftTerm.Val} := " : "")
+                + newRightTerm.Val;
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is LambdaExpr) {
         var e = (LambdaExpr)expr;
         var newRequires = ResolveAsRValue(e.Range);
         var newBody = ResolveAsRValue(e.Body);
-        var newReads = new List<FrameExpression>();
         if (e.Reads != null && e.Reads.Any()) {
           Fail(expr.tok, "Can't resolve a lambda expression with a reads clause");
+          return new ArmadaRValue(null);
         }
         var crashAvoidance = GetQuantifiedUndefinedBehaviorAvoidanceConstraint(newRequires, newBody, new List<TypeParameter>(), e.BoundVars,
-                                                                   null /* no attributes */);
-        return new ArmadaRValue(crashAvoidance,
-                                new LambdaExpr(e.tok, e.BoundVars, newRequires.Val, newReads, newBody.Val),
-                                expr.Type);
+                                                                               null /* no attributes */);
+        var v = "lambda "
+                + String.Join(", ", e.BoundVars.Select(bv => $"{bv.Name}:{bv.Type.ToString()}"))
+                + (e.Range != null ? $" requires {newRequires.Val}" : "")
+                + " => "
+                + newBody.Val;
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is WildcardExpr) {
         Fail("Can't resolve wildcard expression in this context");
-        return new ArmadaRValue(expr);
+        return new ArmadaRValue(null);
       }
 
       if (expr is StmtExpr) {
-        var e = (StmtExpr)expr;
-        var newE = ResolveAsRValue(e.E);
-        return new ArmadaRValue(newE.UndefinedBehaviorAvoidance, new StmtExpr(e.tok, e.S, newE.Val), expr.Type);
+        Fail("Can't resolve statement expression in this context");
+        return new ArmadaRValue(null);
       }
 
       if (expr is ITEExpr) {
@@ -966,31 +1022,37 @@ namespace Microsoft.Armada {
         var newEls = ResolveAsRValue(e.Els);
         var crashAvoidance = newTest.UndefinedBehaviorAvoidance;
         if (newThn.CanCauseUndefinedBehavior) {
-          crashAvoidance.Add(AH.MakeImpliesExpr(newTest.Val, newThn.UndefinedBehaviorAvoidance.Expr));
+          crashAvoidance.Add($"({newTest.Val}) ==> ({newThn.UndefinedBehaviorAvoidance.Expr})");
         }
         if (newEls != null && newEls.CanCauseUndefinedBehavior) {
-          crashAvoidance.Add(AH.MakeOrExpr(newTest.Val, newEls.UndefinedBehaviorAvoidance.Expr));
+          crashAvoidance.Add($"({newTest.Val}) || ({newEls.UndefinedBehaviorAvoidance.Expr})");
         }
-        return new ArmadaRValue(crashAvoidance, new ITEExpr(e.tok, e.IsBindingGuard, newTest.Val, newThn.Val, newEls.Val), expr.Type);
+        var v = $"if {newTest.Val} then {newThn.Val} else {newEls.Val}";
+        return new ArmadaRValue(crashAvoidance, v);
       }
 
       if (expr is MatchExpr) {
         var e = (MatchExpr)expr;
         var newSource = ResolveAsRValue(e.Source);
-        var newCases = new List<MatchCaseExpr>();
+        var newCases = "";
 
         bool canCrash = false;
-        var crashAvoidanceCases = new List<MatchCaseExpr>();
+        var crashAvoidanceCases = "";
         foreach (var c in e.Cases) {
           var newBody = ResolveAsRValue(c.Body);
           // I believe that it's best to always use CasePatterns, because we can't be sure that it's resolved.
-          newCases.Add(new MatchCaseExpr(c.tok, c.Id, c.CasePatterns, newBody.Val));
+          var cpHeader = $"case {c.Id}";
+          if (c.CasePatterns != null) {
+            cpHeader += "(" + String.Join(", ", c.CasePatterns.Select(cp => $"{cp.Var.Name}:{cp.Var.Type.ToString()}")) + ")";
+          }
+          cpHeader += " => ";
+          newCases += (cpHeader + newBody.Val + "\n");
 
           // Now, add a case to the list of crash-avoidance cases.  We need to get this case
           // even if it's empty (true) since some of the cases might not be empty.
 
           var crashExpr = newBody.UndefinedBehaviorAvoidance.Expr;
-          crashAvoidanceCases.Add(new MatchCaseExpr(c.tok, c.Id, c.CasePatterns, crashExpr));
+          crashAvoidanceCases += (cpHeader + crashExpr + "\n");
           if (newBody.CanCauseUndefinedBehavior) {
             canCrash = true;
           }
@@ -1002,14 +1064,14 @@ namespace Microsoft.Armada {
 
         var crashAvoidance = newSource.UndefinedBehaviorAvoidance;
         if (canCrash) {
-          crashAvoidance.Add(new MatchExpr(e.tok, newSource.Val, crashAvoidanceCases, e.UsesOptionalBraces));
+          crashAvoidance.Add($"match {newSource.Val}\n{crashAvoidanceCases}");
         }
 
-        return new ArmadaRValue(crashAvoidance, new MatchExpr(e.tok, newSource.Val, newCases, e.UsesOptionalBraces), expr.Type);
+        return new ArmadaRValue(crashAvoidance, $"match {newSource.Val}\n{newCases}");
       }
 
       Fail(expr.tok, $"Can't resolve the following expression as an rvalue since it has an unexpected expression type:  {expr}\n");
-      return new ArmadaRValue(expr);
+      return new ArmadaRValue(null);
     }
 
     public ArmadaRValueList ResolveAsRValueList(List<Expression> es)
@@ -1028,47 +1090,54 @@ namespace Microsoft.Armada {
 
   public class NormalResolutionContext : ResolutionContext
   {
-    private readonly Expression locv;
-    private readonly Expression t;
+    private readonly string locv;
+    private readonly string t;
 
-    public NormalResolutionContext(NextRoutine next, ArmadaSymbolTable i_symbols)
+    public NormalResolutionContext(NextRoutineConstructor next, ArmadaSymbolTable i_symbols)
       : base(next.s, next.s, next.tid, next.method.Name, i_symbols, next)
     {
       locv = next.locv;
       t = next.t;
     }
 
-    public NormalResolutionContext(Expression i_lvalueState, NextRoutine next, ArmadaSymbolTable i_symbols)
+    public NormalResolutionContext(string i_lvalueState, NextRoutineConstructor next, ArmadaSymbolTable i_symbols)
       : base(i_lvalueState, next.s, next.tid, next.method.Name, i_symbols, next)
     {
       locv = next.locv;
       t = next.t;
     }
 
-    public override Expression GetRValueHeap()
+    public NormalResolutionContext(string moduleName, string methodName, ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter)
+      : base("s", "s", "tid", methodName, i_symbols, i_failureReporter, moduleName)
     {
-      return AH.MakeExprDotName(locv, "heap", "Armada_Heap");
+      locv = "locv";
+      t = "t";
     }
 
-    public override Expression GetRValueGlobals()
+    public override string GetRValueHeap()
     {
-      return AH.MakeExprDotName(locv, "globals", AH.MakeGlobalsType(moduleName));
+      return $"({locv}).heap";
     }
 
-    public override Expression GetRValueTopStackFrame()
+    public override string GetRValueGlobals()
     {
-      return AH.MakeExprDotName(t, "top", AH.MakeStackFrameType(moduleName));
+      return $"({locv}).globals";
+    }
+
+    public override string GetRValueTopStackFrame()
+    {
+      return $"({t}).top";
     }
   }
 
   public class CustomResolutionContext : ResolutionContext
   {
-    private readonly Expression locv;
-    private readonly Expression top;
-    private readonly Expression ghosts;
+    private readonly string locv;
+    private readonly string top;
+    private readonly string ghosts;
 
-    public CustomResolutionContext(Expression i_lvalueState, Expression i_rvalueState, Expression i_locv, Expression i_top,
-                                   Expression i_ghosts, Expression i_tid, string i_methodName,
+    public CustomResolutionContext(string i_lvalueState, string i_rvalueState, string i_locv, string i_top,
+                                   string i_ghosts, string i_tid, string i_methodName,
                                    ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter)
       : base(i_lvalueState, i_rvalueState, i_tid, i_methodName, i_symbols, i_failureReporter)
     {
@@ -1077,53 +1146,57 @@ namespace Microsoft.Armada {
       ghosts = i_ghosts;
     }
 
-    public override Expression GetRValueHeap()
+    public override string GetRValueHeap()
     {
-      return AH.MakeExprDotName(locv, "heap", "Armada_Heap");
+      return $"({locv}).heap";
     }
 
-    public override Expression GetRValueGlobals()
+    public override string GetRValueGlobals()
     {
-      return AH.MakeExprDotName(locv, "globals", AH.MakeGlobalsType(moduleName));
+      return $"({locv}).globals";
     }
 
-    public override Expression GetRValueGhosts()
+    public override string GetRValueGhosts()
     {
       return ghosts;
     }
 
-    public override Expression GetRValueTopStackFrame()
+    public override string GetRValueTopStackFrame()
     {
       return top;
+    }
+
+    public override ArmadaRValue ResolveAsMemoryRValue(IToken tok, Expression expr)
+    {
+      Fail(tok, "Can't use mem() in this context");
+      return null;
     }
   }
 
   public class GlobalInvariantResolutionContext : ResolutionContext
   {
-    public GlobalInvariantResolutionContext(Expression i_s, ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter,
+    public GlobalInvariantResolutionContext(string i_s, ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter,
                                             string i_moduleName)
       : base(i_s, i_s, null, null, i_symbols, i_failureReporter, i_moduleName)
     {
     }
 
-    public override Expression GetRValueHeap()
+    public override string GetRValueHeap()
     {
-      var mem = AH.MakeExprDotName(GetRValueState(), "mem", "Armada_SharedMemory");
-      return AH.MakeExprDotName(mem, "heap", "Armada_Heap");
+      return $"({GetRValueState()}).mem.heap";
     }
 
-    public override Expression GetRValueGlobals()
+    public override string GetRValueGlobals()
     {
-      var mem = AH.MakeExprDotName(GetRValueState(), "mem", "Armada_SharedMemory");
-      return AH.MakeExprDotName(mem, "globals", AH.MakeGlobalsType(moduleName));
+      return $"({GetRValueState()}).mem.globals";
     }
 
-    public override Expression GetRValueGhosts()
+    public override string GetRValueGhosts()
     {
-      return AH.MakeExprDotName(GetRValueState(), "ghosts", AH.MakeGhostsType(moduleName));
+      return $"({GetRValueState()}).ghosts";
     }
 
-    public override Expression GetRValueTopStackFrame()
+    public override string GetRValueTopStackFrame()
     {
       Fail("Can't refer to a stack variable in a global invariant");
       return null;
@@ -1132,16 +1205,16 @@ namespace Microsoft.Armada {
 
   public class YieldPredicateResolutionContext : ResolutionContext
   {
-    private readonly Expression s;
+    private readonly string s;
 
-    public YieldPredicateResolutionContext(Expression i_s, Expression s_prime, Expression i_tid,
+    public YieldPredicateResolutionContext(string i_s, string s_prime, string i_tid,
                                            ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter, string i_moduleName)
       : base(s_prime, s_prime, i_tid, null, i_symbols, i_failureReporter, i_moduleName)
     {
       s = i_s;
     }
 
-    public override Expression GetRValueTopStackFrame()
+    public override string GetRValueTopStackFrame()
     {
       Fail("Can't refer to a stack variable in a yield predicate");
       return null;
@@ -1156,7 +1229,7 @@ namespace Microsoft.Armada {
 
   public class RequiresResolutionContext : ResolutionContext
   {
-    public RequiresResolutionContext(Expression i_s, Expression i_tid, string i_methodName, ArmadaSymbolTable i_symbols,
+    public RequiresResolutionContext(string i_s, string i_tid, string i_methodName, ArmadaSymbolTable i_symbols,
                                      IFailureReporter i_failureReporter, string i_moduleName = null)
       : base(i_s, i_s, i_tid, i_methodName, i_symbols, i_failureReporter, i_moduleName)
     {
@@ -1165,9 +1238,9 @@ namespace Microsoft.Armada {
 
   public class EnsuresResolutionContext : ResolutionContext
   {
-    private readonly Expression s;
+    private readonly string s;
 
-    public EnsuresResolutionContext(Expression i_s, Expression s_prime, Expression i_tid, string i_methodName,
+    public EnsuresResolutionContext(string i_s, string s_prime, string i_tid, string i_methodName,
                                     ArmadaSymbolTable i_symbols, IFailureReporter i_failureReporter, string i_moduleName)
       : base(s_prime, s_prime, i_tid, i_methodName, i_symbols, i_failureReporter, i_moduleName)
     {
@@ -1186,7 +1259,7 @@ namespace Microsoft.Armada {
     private List<Expression> oldValues;
     private bool resolving;
 
-    public BodylessMethodSnapshotResolutionContext(Expression i_s, Expression i_tid, string i_methodName, ArmadaSymbolTable i_symbols,
+    public BodylessMethodSnapshotResolutionContext(string i_s, string i_tid, string i_methodName, ArmadaSymbolTable i_symbols,
                                                    IFailureReporter i_failureReporter)
       : base(i_s, i_s, i_tid, i_methodName, i_symbols, i_failureReporter, null)
     {
@@ -1217,7 +1290,7 @@ namespace Microsoft.Armada {
   {
     private int numOldResolutions;
 
-    public BodylessMethodPostconditionResolutionContext(NextRoutine next, ArmadaSymbolTable i_symbols)
+    public BodylessMethodPostconditionResolutionContext(NextRoutineConstructor next, ArmadaSymbolTable i_symbols)
       : base(next.s, next.s, next.tid, next.method.Name, i_symbols, next)
     {
       numOldResolutions = 0;
@@ -1228,6 +1301,96 @@ namespace Microsoft.Armada {
       var v = symbols.Lookup(methodName, $"Armada_Old{numOldResolutions}");
       ++numOldResolutions;
       return v.GetRValue(tok, this);
+    }
+  }
+
+  public class TSOBypassingResolutionContext : ResolutionContext
+  {
+    private readonly string mem;
+    private readonly string t;
+
+    public TSOBypassingResolutionContext(NextRoutineConstructor next, ArmadaSymbolTable i_symbols)
+      : base(next.s, next.s, next.tid, next.method.Name, i_symbols, next)
+    {
+      mem = $"({next.s}).mem";
+      t = next.t;
+    }
+
+    public override string GetRValueHeap()
+    {
+      return $"({mem}).heap";
+    }
+
+    public override string GetRValueGlobals()
+    {
+      return $"({mem}).globals";
+    }
+
+    public override string GetRValueTopStackFrame()
+    {
+      return $"({t}).top";
+    }
+
+    public override ArmadaRValue ResolveAsMemoryRValue(IToken tok, Expression expr)
+    {
+      return ResolveAsRValue(expr);
+    }
+  }
+
+  public class GlobalViewResolutionContext : ResolutionContext
+  {
+    private readonly string mem;
+
+    public GlobalViewResolutionContext(string s, string i_tid, string i_methodName, ArmadaSymbolTable i_symbols,
+                                       IFailureReporter i_failureReporter, string i_moduleName)
+      : base(null, s, i_tid, i_methodName, i_symbols, i_failureReporter, i_moduleName)
+    {
+      mem = $"({s}).mem";
+    }
+
+    public override string GetRValueHeap()
+    {
+      return $"({mem}).heap";
+    }
+
+    public override string GetRValueGlobals()
+    {
+      return $"({mem}).globals";
+    }
+  }
+
+  public class EnablingConstraintResolutionContext : ResolutionContext
+  {
+    private readonly string locv;
+    private readonly string top;
+    private readonly string ghosts;
+
+    public EnablingConstraintResolutionContext(EnablingConstraintCollector ecc, string methodName, ArmadaSymbolTable symbols)
+      : base(ecc.s, ecc.s, ecc.tid, methodName, symbols, ecc)
+    {
+      locv = ecc.locv;
+      top = ecc.top;
+      ghosts = ecc.ghosts;
+    }
+
+    public override string GetRValueHeap()
+    {
+      return $"({locv}).heap";
+    }
+
+    public override string GetRValueGlobals()
+    {
+      return $"({locv}).globals";
+    }
+
+    public override string GetRValueGhosts()
+    {
+      return ghosts;
+    }
+
+    public override string GetRValueTopStackFrame()
+    {
+      return top;
     }
   }
 }

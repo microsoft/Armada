@@ -12,13 +12,10 @@ level G using SharedStructs4 {
   noaddr var x:int32 := 0;
   noaddr var y:int32 := 0;
 
-  import opened util_option_s
-
   method Worker()
   {
-    somehow awaits lock_holder.OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == OptionalThreadSome($me);
+    assume lock_holder.OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadSome($me);
 
     explicit_yield {
 
@@ -33,8 +30,8 @@ level G using SharedStructs4 {
     }
 
     label lb3:
-    somehow awaits lock_holder == OptionalThreadSome($me)
-            ensures lock_holder == OptionalThreadNone() && $sb_empty;
+    assume lock_holder == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadNone();
 
     assert true;
   }
@@ -53,13 +50,10 @@ level H using SharedStructs4 {
   noaddr var x:int32 := 0;
   noaddr var y:int32 := 0;
 
-  import opened util_option_s
-
   method Worker()
   {
-    somehow awaits lock_holder.OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == OptionalThreadSome($me);
+    assume lock_holder.OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadSome($me);
 
     explicit_yield {
 
@@ -71,8 +65,8 @@ level H using SharedStructs4 {
 
     }
 
-    somehow awaits lock_holder == OptionalThreadSome($me)
-            ensures lock_holder == OptionalThreadNone() && $sb_empty;
+    assume lock_holder == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == OptionalThreadNone();
 
     assert true;
   }
@@ -90,11 +84,11 @@ proof GH
   refinement G H
 
   tso_elim x @"
-    && tid in s.s.threads
-    && (var pc := s.s.threads[tid].pc;
+    && tid in threads
+    && (var pc := threads[tid].pc;
        || pc.Armada_PC_Worker_lb1?
        || pc.Armada_PC_Worker_lb2?
        || pc.Armada_PC_Worker_lb3?)
-    && s.s.ghosts.lock_holder == OptionalThreadSome(tid)
+    && ghosts.lock_holder == OptionalThreadSome(tid)
   "
 }

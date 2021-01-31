@@ -18,7 +18,7 @@ namespace Microsoft.Armada {
     private HashSet<ArmadaPC> weakenedPCs;
 
     public StarWeakeningProofGenerator(ProofGenerationParams i_pgp, StarWeakeningStrategyDecl i_strategy)
-      : base(i_pgp)
+      : base(i_pgp, true)
     {
       strategy = i_strategy;
       weakenedPCs = new HashSet<ArmadaPC>();
@@ -28,11 +28,7 @@ namespace Microsoft.Armada {
     {
       base.AddIncludesAndImports();
       
-      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/starweakening/StarWeakening.i.dfy");
-      pgp.MainProof.AddImport("StarWeakeningModule");
-      pgp.MainProof.AddImport("StarWeakeningSpecModule");
       pgp.MainProof.AddImport("InvariantsModule");
-
 
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy");
       pgp.MainProof.AddImport("util_option_s");
@@ -51,74 +47,26 @@ namespace Microsoft.Armada {
       pgp.MainProof.AddImport("util_collections_maps_i");
     }
 
-    protected override void GenerateConvertTraceEntry_LH()
+    protected override void GenerateConvertStep_LH()
     {
-      var cases = new List<MatchCaseExpr>();
+      var cases = new List<string>();
 
       foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        cases.Add(GetTraceEntryCaseForNextRoutine_LH(nextRoutine));
+        cases.Add(GetStepCaseForNextRoutine_LH(nextRoutine));
       }
 
-      ExpressionBuilder bodyBuilder = new ExpressionBuilder(pgp.prog);
-
-      var ls = AH.MakeNameSegment("ls", "L.Armada_TraceEntry");
-      var entry = AH.MakeNameSegment("entry", "L.Armada_TraceEntry");
-      var tid = AH.MakeExprDotName(entry, "tid", "L.Armada_ThreadHandle");
-
-      var locv = AH.MakeApply2("L.Armada_GetThreadLocalView", ls, tid, "L.Armada_SharedMemory");
-      var threads = AH.MakeExprDotName(ls, "threads", "map<Armada_ThreadHandle, Armada_Thread>");
-      var t = AH.MakeSeqSelectExpr(threads, tid, "L.Armada_Thread");
-      // var t = AH.ParseExpression(pgp.prog, "", "ls.threads[tid]");
-
-      locv = bodyBuilder.AddVariableDeclaration("locv", locv);
-      t = bodyBuilder.AddVariableDeclaration("t", t);
-
-      var source = AH.MakeNameSegment("entry", "L.Armada_TraceEntry");
-      var body = AH.MakeMatchExpr(source, cases, "H.Armada_TraceEntry");
-      bodyBuilder.SetBody(body);
-
-      var formals = new List<Formal> { AH.MakeFormal ("ls", "LState"), AH.MakeFormal("entry", "L.Armada_TraceEntry") };
-      var validTraceEntryPredicate = AH.MakeApply2("L.Armada_ValidStep", ls, entry, new BoolType());
-
-      var fn = AH.MakeFunctionWithReq("ConvertTraceEntry_LH", formals, validTraceEntryPredicate, bodyBuilder.Extract());
-      pgp.AddDefaultClassDecl(fn, "convert");
-    }
-
-    private void GenerateStepRefiner()
-    {
-      var str = @"
-        predicate ValidStepSequence(ls: LState, lsteps: seq<L.Armada_TraceEntry>)
-          decreases |lsteps|
-        {
-          if |lsteps| == 0 then
-            true
-          else
-            var ls' := L.Armada_GetNextStateAlways(ls, lsteps[0]); L.Armada_ValidStep(ls, lsteps[0]) && ValidStepSequence(ls', lsteps[1..])
-        }
+      var fn = $@"
+        function ConvertStep_LH(ls: LPlusState, step: L.Armada_Step, tid: Armada_ThreadHandle) : H.Armada_Step
+          requires L.Armada_ValidStep(ls.s, step, tid)
+        {{
+          reveal L.Armada_ValidStepCases();
+          var locv := L.Armada_GetThreadLocalView(ls.s, tid);
+          var t := ls.s.threads[tid];
+          match step
+            {String.Concat(cases)}
+        }}
       ";
-      pgp.AddPredicate(str);
-
-      str = @"
-        function ConvertStepSequence_LH(ls: LState, lsteps: seq<L.Armada_TraceEntry>): seq<H.Armada_TraceEntry>
-          requires ValidStepSequence(ls, lsteps)
-          decreases |lsteps|
-        {
-          if |lsteps| == 0 then
-            []
-          else
-            var ls' := L.Armada_GetNextStateAlways(ls, lsteps[0]); [ConvertTraceEntry_LH(ls, lsteps[0])] + ConvertStepSequence_LH(ls', lsteps[1..])
-        }
-      ";
-      pgp.AddFunction(str);
-
-      str = @"  
-        function StepRefiner(lps: LPlusState, entry: LStep): HStep
-          requires ValidStepSequence(lps.s, entry.steps)
-        {
-          Armada_Multistep(ConvertStepSequence_LH(lps.s, entry.steps), entry.tid, entry.tau)
-        }
-      ";
-      pgp.AddFunction(str);
+      pgp.AddFunction(fn, "convert");
     }
 
     public override void GenerateProof()
@@ -132,20 +80,26 @@ namespace Microsoft.Armada {
       MakeTrivialPCMap();
       GenerateNextRoutineMap();
       GenerateProofHeader();
-      GenerateStarWeakeningRequest();
+      GenerateAtomicSpecs();
       GenerateStateAbstractionFunctions_LH();
       GeneratePCFunctions_L();
       foreach (var globalVarName in strategy.GlobalVars)
       {
         GenerateNoStoreBufferEntriesLemmas(globalVarName);
       }
-      GenerateConvertTraceEntry_LH();
-      GenerateStepRefiner();
+      GenerateConvertStep_LH();
+      GenerateAllConvertImpliesValidStepLemmas();
+      GenerateConvertAtomicPath_LH();
       GenerateLocalViewCommutativityLemmas();
-      GenerateLiftNextLemmas();
-      GenerateAllActionsLiftableWeakenedLemmas();
-      GenerateInitStatesEquivalentLemma();
-      GenerateIsInvariantPredicateLemma();
+      GenerateInvariantProof(pgp);
+      GenerateEstablishInitRequirementsLemma();
+      GenerateEstablishStateOKRequirementLemma();
+      GenerateEstablishRelationRequirementLemma();
+      GenerateLiftingRelation();
+      GenerateLiftAtomicPathLemmas();
+      GenerateEstablishAtomicPathLiftableLemma();
+      GenerateEstablishAtomicPathsLiftableLemma(false, false);
+      GenerateLiftLAtomicToHAtomicLemma(false, false);
       GenerateFinalProof();
     }
 
@@ -171,45 +125,39 @@ namespace Microsoft.Armada {
       return Printer.ExprToString(a) == Printer.ExprToString(b);
     }
 
-    protected MatchCaseExpr GetTraceEntryCaseForUpdateToSomehowNextRoutine_LH(NextRoutine nextRoutine) {
-      var highNextRoutine = nextRoutineMap[nextRoutine];
+    protected string GetStepCaseForUpdateToSomehowNextRoutine_LH(NextRoutine nextRoutine)
+    {
+      var hNextRoutine = nextRoutineMap[nextRoutine];
       var lowStmt = (UpdateStmt)nextRoutine.armadaStatement.Stmt;
       var lowExprs = lowStmt.Lhss;
 
-      var highStmt = (SomehowStmt)highNextRoutine.armadaStatement.Stmt;
-      var highExprs = highStmt.Mod.Expressions;
+      var hStmt = (SomehowStmt)hNextRoutine.armadaStatement.Stmt;
+      var hExprs = hStmt.Mod.Expressions;
 
-      var pi = GetMatchingLowLevelLhssForHighLevelLhss(lowExprs, highExprs);
+      var pi = GetMatchingLowLevelLhssForHighLevelLhss(lowExprs, hExprs);
+      var bvs = nextRoutine.HasFormals ? $"params: L.Armada_StepParams_{nextRoutine.NameSuffix}" : "";
+      var ps = nextRoutine.Formals.Select(f => $"params{f.LocalVarName}").ToList();
 
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
-      var ps = new List<Expression> { AH.MakeNameSegment("tid", "Armada_ThreadHandle") };
-      ps.AddRange(nextRoutine.Formals.Select(f => AH.MakeNameSegment(f.LocalVarName, f.VarType))); // Use the tid (and any other) parameters from the bound vars in the case statement
-
-      for (int i = 0; i < highExprs.Count; i++) {
-        var context = new NormalResolutionContext(nextRoutine, pgp.symbolsLow);
+      for (int i = 0; i < hExprs.Count; i++) {
+        var failureReporter = new SimpleFailureReporter(pgp.prog);
+        var context = new NormalResolutionContext("L", nextRoutine.method.Name, pgp.symbolsLow, failureReporter);
         // Add the pi[i]'th rhs from the low-level update statement
         var rhs = lowStmt.Rhss.ElementAt(pi[i]);
-        Expression newRhs;
         if (rhs is ExprRhs) {
           var erhs = (ExprRhs)rhs;
           var newRhsRValue = context.ResolveAsRValue(erhs.Expr);
-          newRhs = newRhsRValue.Val;
+          ps.Add(newRhsRValue.Val);
         }
         else {
           AH.PrintError(pgp.prog, "Havoc RHS not yet supported");
           return null;
         }
-        
-        ps.Add(newRhs);
       }
 
-      string nextRoutineName = nextRoutine.NameSuffix;
-      string hname = nextRoutineMap[nextRoutine].NameSuffix;
-      var case_body = AH.MakeApplyN($"H.Armada_TraceEntry_{hname}", ps, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutineName}", bvs, case_body);
-      return case0;
+      string hname = hNextRoutine.NameSuffix;
+      var caseBody = hNextRoutine.HasFormals ? $"H.Armada_Step_{hname}(H.Armada_StepParams_{hname}({AH.CombineStringsWithCommas(ps)}))"
+                                               : $"H.Armada_Step_{hname}";
+      return $"case Armada_Step_{nextRoutine.NameSuffix}({bvs}) => {caseBody}\n";
     }
 
     protected List<int> GetMatchingLowLevelLhssForHighLevelLhss(List<Expression> lowLhss, List<Expression> highLhss)
@@ -231,83 +179,74 @@ namespace Microsoft.Armada {
       return pi;
     }
 
-    protected MatchCaseExpr GetTraceEntryCaseForUpdateToUpdateNextRoutine_LH(NextRoutine nextRoutine) {
-      var highNextRoutine = nextRoutineMap[nextRoutine];
+    protected string GetStepCaseForUpdateToUpdateNextRoutine_LH(NextRoutine nextRoutine)
+    {
+      var hNextRoutine = nextRoutineMap[nextRoutine];
       var lowStmt = (UpdateStmt)nextRoutine.armadaStatement.Stmt;
       var lowExprs = lowStmt.Lhss;
 
-      var highStmt = (UpdateStmt)highNextRoutine.armadaStatement.Stmt;
-      var highExprs = highStmt.Lhss;
+      var hStmt = (UpdateStmt)hNextRoutine.armadaStatement.Stmt;
+      var hExprs = hStmt.Lhss;
 
-      var pi = GetMatchingLowLevelLhssForHighLevelLhss(lowExprs, highExprs);
+      var pi = GetMatchingLowLevelLhssForHighLevelLhss(lowExprs, hExprs);
+      var bvs = nextRoutine.HasFormals ? $"params: L.Armada_StepParams_{nextRoutine.NameSuffix}" : "";
+      var ps = new List<string>();
 
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
-      var ps = new List<Expression> { AH.MakeNameSegment("tid", "Armada_ThreadHandle") };
-      // ps.AddRange(nextRoutine.Formals.Select(f => AH.MakeNameSegment(f.LocalVarName, f.VarType))); // Use the tid (and any other) parameters from the bound vars in the case statement
-
-      for (int i = 0; i < highExprs.Count; i++) {
-        var context = new NormalResolutionContext(nextRoutine, pgp.symbolsLow);
+      for (int i = 0; i < hExprs.Count; i++) {
+        var failureReporter = new SimpleFailureReporter(pgp.prog);
+        var context = new NormalResolutionContext("L", nextRoutine.method.Name, pgp.symbolsLow, failureReporter);
         // Add the pi[i]'th rhs from the low-level update statement
         var rhs = lowStmt.Rhss.ElementAt(pi[i]);
-        Expression newRhs;
+        string newRhs;
         if (rhs is ExprRhs) {
           var erhs = (ExprRhs)rhs;
           var newRhsRValue = context.ResolveAsRValue(erhs.Expr);
           newRhs = newRhsRValue.Val;
         }
         else { // rhs must be HavocRhs here
-          newRhs = AH.MakeNameSegment($"nondet{i}", lowExprs[pi[i]].Type);
+          newRhs = $"params.nondet{i}";
         }
-        if (highStmt.Rhss.ElementAt(i) is HavocRhs) { // If the high level is a havoc-rhs, then it needs to be given the values
+        if (hStmt.Rhss.ElementAt(i) is HavocRhs) { // If the high level is a havoc-rhs, then it needs to be given the values
           ps.Add(newRhs);
         }
       }
 
-      string nextRoutineName = nextRoutine.NameSuffix;
-      string hname = nextRoutineMap[nextRoutine].NameSuffix;
-      var case_body = AH.MakeApplyN($"H.Armada_TraceEntry_{hname}", ps, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutineName}", bvs, case_body);
-      return case0;
+      string hname = hNextRoutine.NameSuffix;
+      var caseBody = hNextRoutine.HasFormals ? $"H.Armada_Step_{hname}(H.Armada_StepParams_{hname}({AH.CombineStringsWithCommas(ps)}))"
+                                               : $"H.Armada_Step_{hname}";
+      return $"case Armada_Step_{nextRoutine.NameSuffix}({bvs}) => {caseBody}\n";
     }
 
-    protected MatchCaseExpr GetTraceEntryCaseForIfToIfNextRoutine_LH(NextRoutine nextRoutine) {
-      var highNextRoutine = nextRoutineMap[nextRoutine];
-      var lowStmt = (IfStmt)nextRoutine.armadaStatement.Stmt;
-      var highStmt = (IfStmt)highNextRoutine.armadaStatement.Stmt;
-
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
-      var ps = new List<Expression> { AH.MakeNameSegment("tid", "Armada_ThreadHandle") };
-      string nextRoutineName = nextRoutine.NameSuffix;
-      string hname = nextRoutineMap[nextRoutine].NameSuffix;
-      var case_body = AH.MakeApplyN($"H.Armada_TraceEntry_{hname}", ps, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutineName}", bvs, case_body);
-      return case0;
-    }
-
-    protected override MatchCaseExpr GetTraceEntryCaseForNextRoutine_LH(NextRoutine nextRoutine)
+    protected string GetStepCaseForIfToIfNextRoutine_LH(NextRoutine nextRoutine)
     {
-      var highNextRoutine = nextRoutineMap[nextRoutine];
+      string hname = nextRoutineMap[nextRoutine].NameSuffix;
+      return $"case Armada_Step_{nextRoutine.NameSuffix}() => H.Armada_Step_{hname}\n";
+    }
 
-      if (highNextRoutine.nextType == NextType.Update
+    protected override string GetStepCaseForNextRoutine_LH(NextRoutine nextRoutine)
+    {
+      var hNextRoutine = LiftNextRoutine(nextRoutine);
+
+      if (hNextRoutine == null) {
+        return GetStepCaseForSuppressedNextRoutine_LH(nextRoutine);
+      }
+
+      if (hNextRoutine.nextType == NextType.Update
             && nextRoutine.nextType == NextType.Update) {
         // e.g.  low-level: v_1 := e_1;
         //      high-level: v_1 := *
         //
         // Also low-level: v_1 ::= e_1;
         //      high-level: v_1 ::= *
-        return GetTraceEntryCaseForUpdateToUpdateNextRoutine_LH(nextRoutine);
+        return GetStepCaseForUpdateToUpdateNextRoutine_LH(nextRoutine);
       }
-      else if ((highNextRoutine.nextType == NextType.IfTrue || highNextRoutine.nextType == NextType.IfFalse)
+      else if ((hNextRoutine.nextType == NextType.IfTrue || hNextRoutine.nextType == NextType.IfFalse)
                && (nextRoutine.nextType == NextType.IfTrue || nextRoutine.nextType == NextType.IfFalse)) {
         // e.g.  low-level: if p {}
         //      high-level: if * {}
-        return GetTraceEntryCaseForIfToIfNextRoutine_LH(nextRoutine);
+        return GetStepCaseForIfToIfNextRoutine_LH(nextRoutine);
       }
-      else if (highNextRoutine.nextType == NextType.Somehow
+      else if (hNextRoutine.nextType == NextType.Somehow
             && nextRoutine.nextType == NextType.Update) {
         // low-level: v_1, ..., v_n ::= e_1, ..., e_n;
         // high-level: for some permutation pi \in S_n,
@@ -321,187 +260,92 @@ namespace Microsoft.Armada {
         // Then, the low level step of NextStep()
         // newval{j} is the non-det variable that holds the new value of v_{pi_j}. So,
         // the j'th value in the list of hstep params given in the constructor called by 
-        // ConvertTraceEntry_LH should be e_{pi_j}.
-        return GetTraceEntryCaseForUpdateToSomehowNextRoutine_LH(nextRoutine);
+        // ConvertStep_LH should be e_{pi_j}.
+        return GetStepCaseForUpdateToSomehowNextRoutine_LH(nextRoutine);
       }
-      else if (highNextRoutine.nextType == nextRoutine.nextType) {
-        return GetTraceEntryCaseForNormalNextRoutine_LH(nextRoutine);
+      else if (hNextRoutine.nextType == nextRoutine.nextType) {
+        return GetStepCaseForNormalNextRoutine_LH(nextRoutine);
       }
       AH.PrintError(pgp.prog, "Invalid statement for weakening.");
       return null;
     }
 
-    protected override MatchCaseExpr GetTraceEntryCaseForNormalNextRoutine_LH(NextRoutine nextRoutine)
+    protected override string GetStepCaseForNormalNextRoutine_LH(NextRoutine nextRoutine)
     {
-      var highNextRoutine = nextRoutineMap[nextRoutine];
-      string nextRoutineName = nextRoutine.NameSuffix;
+      var bvs = nextRoutine.HasFormals ? $"params: L.Armada_StepParams_{nextRoutine.NameSuffix}" : "";
+      var ps = nextRoutine.Formals.Select(f => $"params.{f.LocalVarName}");
 
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
-      var ps = new List<Expression> { AH.MakeNameSegment("tid", "Armada_ThreadHandle") };
-      ps.AddRange(highNextRoutine.Formals.Select(f => AH.MakeNameSegment(f.LocalVarName, f.VarType)));
-
-      string hname = nextRoutineMap[nextRoutine].NameSuffix;
-      var case_body = AH.MakeApplyN($"H.Armada_TraceEntry_{hname}", ps, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutineName}", bvs, case_body);
-      return case0;
+      var hNextRoutine = nextRoutineMap[nextRoutine];
+      string hname = hNextRoutine.NameSuffix;
+      var caseBody = hNextRoutine.HasFormals ? $"H.Armada_Step_{hname}(H.Armada_StepParams_{hname}({AH.CombineStringsWithCommas(ps)}))"
+                                             : $"H.Armada_Step_{hname}";
+      return $"case Armada_Step_{nextRoutine.NameSuffix}({bvs}) => {caseBody}\n";
     }
 
-    private void GenerateIsInvariantPredicateLemma()
+    protected override void GenerateLiftAtomicPathLemmaForNormalPath(AtomicPath atomicPath, string typeComparison,
+                                                                     string extraSignatureLines, string extraProof)
     {
-      // var inv = new VarHidingRequestInvariantInfo();
-      // AddInvariant(inv);
-      GenerateInvariantProof(pgp);
-    }
-
-    private void GenerateStarWeakeningRequest()
-    {
-      var lplusstate = AH.ReferToType("LPlusState");
-      var hstate = AH.ReferToType("HState");
-      var lstep = AH.ReferToType("LStep");
-      var hstep = AH.ReferToType("HStep");
-      var wrequest = AH.MakeGenericTypeSpecific("StarWeakeningRequest", new List<Type>{ lplusstate, hstate, lstep, hstep });
-      pgp.MainProof.AddTypeSynonymDecl("WRequest", wrequest);
-
-      var str = @"
-      function GetStarWeakeningRequest(): WRequest
-      {
-        StarWeakeningRequest(GetLPlusSpec(), GetHSpec(), GetLPlusHRefinementRelation(), iset lps : LPlusState | InductiveInv(lps) :: lps, ConvertTotalState_LPlusH, StepRefiner)
-      }
-      ";
-      pgp.AddFunction(str);
-    }
-
-    protected override void GenerateLiftStepLemmaForNormalNextRoutine(NextRoutine nextRoutine)
-    {
-      
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      NextRoutine highNextRoutine = nextRoutineMap[nextRoutine];
-      string highNextRoutineName = highNextRoutine.NameSuffix;
-
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lentry.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", highNextRoutine.Formals.Select(f => $", hstep.{f.GloballyUniqueVarName}"));
-
-      bool needIsValidStepLemma = false;
-
-      if (nextRoutine.stmt != null && nextRoutine.pc != null && weakenedPCs.Contains(nextRoutine.pc)) {
-        needIsValidStepLemma = true;
-        GenerateConvertImpliesValidStepLemma(nextRoutine);
-      }
-
-      var str = $@"
-        lemma lemma_LiftNext_{nextRoutineName}(wr: WRequest, lps: LPlusState, lps':LPlusState, lentry: L.Armada_TraceEntry)
-          requires wr == GetStarWeakeningRequest()
-          requires LPlus_NextOneStep(lps, lps', lentry)
-          requires lentry.Armada_TraceEntry_{nextRoutineName}?
-          requires lps in wr.inv
-          ensures H.Armada_NextOneStep(ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps'), ConvertTraceEntry_LH(lps.s, lentry))
-        {{
-          var hs := wr.converter(lps);
-          var hs' := wr.converter(lps');
-          var tid := lentry.tid;
-          var hstep := ConvertTraceEntry_LH(lps.s, lentry);
-          lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
-          lemma_StoreBufferAppendAlwaysCommutesWithConvert();
-          { (needIsValidStepLemma ? $@"lemma_TraceEntry_{nextRoutineName}_ImpliesConvertedIsValidStep(wr, lps, lps', lentry, hstep);" : "" )}
-          assert H.Armada_ValidStep_{highNextRoutineName}(hs, tid{hstep_params});
-          if L.Armada_UndefinedBehaviorAvoidance_{nextRoutineName}(lps.s, tid{lstep_params}) {{
-            assert H.Armada_UndefinedBehaviorAvoidance_{highNextRoutineName}(hs, tid{hstep_params});
-            var alt_hs' := H.Armada_GetNextState_{highNextRoutineName}(hs, tid{hstep_params});
-            assert hs'.stop_reason == alt_hs'.stop_reason;
-            if tid in hs'.threads {{
-              assert hs'.threads[tid] == alt_hs'.threads[tid];
-            }}
-            assert hs'.threads == alt_hs'.threads;
-            assert hs'.mem == alt_hs'.mem;
-            assert hs' == alt_hs';
-            assert H.Armada_Next_{highNextRoutineName}(hs, hs', tid{hstep_params});
-          }} else {{
-            assert !H.Armada_UndefinedBehaviorAvoidance_{highNextRoutineName}(hs, tid{hstep_params});
-          }}
-        }}
-      ";
-      pgp.AddLemma(str);
-    }
-
-    protected override void GenerateLiftStepLemmaForTauNextRoutine(NextRoutine nextRoutine)
-    {
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      NextRoutine highNextRoutine = nextRoutineMap[nextRoutine];
-      string highNextRoutineName = highNextRoutine.NameSuffix;
-
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lstep.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", highNextRoutine.Formals.Select(f => $", hstep.{f.GloballyUniqueVarName}"));
-
-      var str = $@"
-        lemma lemma_LiftNext_{nextRoutineName}(wr:WRequest, lps:LPlusState, lps':LPlusState, lstep:L.Armada_TraceEntry)
-          requires wr == GetStarWeakeningRequest()
-          requires LPlus_NextOneStep(lps, lps', lstep)
-          requires lstep.Armada_TraceEntry_{nextRoutineName}?
-          requires lps in wr.inv
-          ensures H.Armada_NextOneStep(ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps'), ConvertTraceEntry_LH(lps.s, lstep))
-        {{
-            var hs := wr.converter(lps);
-            var hs' := wr.converter(lps');
-            var tid := lstep.tid;
-            var hstep := ConvertTraceEntry_LH(lps.s, lstep);
-
-            var lentry := lps.s.threads[tid].storeBuffer[0];
-            assert H.Armada_ValidStep_{highNextRoutineName}(hs, tid{hstep_params});
-            assert H.Armada_UndefinedBehaviorAvoidance_{highNextRoutineName}(hs, tid{hstep_params});
-            var hentry := hs.threads[tid].storeBuffer[0];
-            var lmem := lps.s.mem;
-            var hmem1 := ConvertSharedMemory_LH(L.Armada_ApplyStoreBufferEntry(lmem, lentry));
-            var hmem2 := H.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_LH(lmem), hentry);
-            lemma_ApplyStoreBufferEntryCommutesWithConvert(lmem, lentry, hentry, hmem1, hmem2);
-
-            var alt_hs' := H.Armada_GetNextState_{highNextRoutineName}(hs, tid{hstep_params});
-            assert hmem1 == hmem2;
-            assert hs'.threads[tid].storeBuffer == alt_hs'.threads[tid].storeBuffer;
-            assert hs'.threads[tid] == alt_hs'.threads[tid];
-            assert hs'.threads == alt_hs'.threads;
-            assert hs' == alt_hs';
-            assert H.Armada_Next_{highNextRoutineName}(hs, hs', tid{hstep_params});
-        }}
-      ";
-      pgp.AddLemma(str);
+      var isValidStepLemmaInvocations = String.Concat(atomicPath.NextRoutines
+          .Where(nextRoutine => nextRoutine.stmt != null && nextRoutine.startPC != null && weakenedPCs.Contains(nextRoutine.startPC))
+          .Select((nextRoutine, idx) => $@"
+             lemma_Step_{nextRoutine.NameSuffix}_ImpliesConvertedIsValidStep(
+               lstates.s{idx}, lstates.s{idx+1}, lsteps.step{idx}, hsteps.step{idx}, tid);
+          "));
+      base.GenerateLiftAtomicPathLemmaForNormalPath(atomicPath, typeComparison, extraSignatureLines,
+                                                    extraProof + "\n" + isValidStepLemmaInvocations);
     }
 
     private void GenerateConvertImpliesValidStepLemma(NextRoutine nextRoutine)
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
+      NextRoutine hNextRoutine = nextRoutineMap[nextRoutine];
+      string hNextRoutineName = hNextRoutine.NameSuffix;
 
-      NextRoutine highNextRoutine = nextRoutineMap[nextRoutine];
-      string highNextRoutineName = highNextRoutine.NameSuffix;
+      var hstep_params = String.Join("", hNextRoutine.Formals.Select(f => $", hentry.{f.GloballyUniqueVarName}"));
 
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lentry.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", highNextRoutine.Formals.Select(f => $", hentry.{f.GloballyUniqueVarName}"));
-
-      string body = "";
-      foreach (var globalVarName in strategy.GlobalVars) {
-        body += $@"
-          DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_AlwaysMatchesGlobalView();
-        ";
-      }
+      var lpr = new ModuleStepPrinter("L");
+      lpr.State = "ls.s";
+      lpr.NextState = "ls'.s";
+      lpr.Step = "lstep";
+      var hpr = new ModuleStepPrinter("H");
+      hpr.State = "hs";
+      hpr.NextState = "hs'";
+      hpr.Step = "hstep";
 
       var str = $@"
-        lemma lemma_TraceEntry_{nextRoutineName}_ImpliesConvertedIsValidStep(wr: WRequest, lps: LPlusState, lps': LPlusState, lentry: L.Armada_TraceEntry, hentry: H.Armada_TraceEntry)
-          requires wr == GetStarWeakeningRequest()
-          requires LPlus_NextOneStep(lps, lps', lentry)
-          requires lentry.Armada_TraceEntry_{nextRoutineName}?
-          requires lps in wr.inv
-          requires hentry == ConvertTraceEntry_LH(lps.s, lentry);
-          ensures H.Armada_ValidStep_{highNextRoutineName}(ConvertTotalState_LPlusH(lps), lentry.tid{hstep_params});
+        lemma lemma_Step_{nextRoutine.NameSuffix}_ImpliesConvertedIsValidStep(
+          ls: LPlusState,
+          ls': LPlusState,
+          lstep: L.Armada_Step,
+          hstep: H.Armada_Step,
+          tid: Armada_ThreadHandle
+          )
+          requires LPlus_ValidStep(ls, lstep, tid)
+          requires ls' == LPlus_GetNextState(ls, lstep, tid)
+          requires lstep.Armada_Step_{nextRoutine.NameSuffix}?
+          requires InductiveInv(ls)
+          requires hstep == ConvertStep_LH(ls, lstep, tid)
+          ensures  H.Armada_ValidStep(ConvertTotalState_LPlusH(ls), hstep, tid)
         {{
+          { lpr.GetOpenValidStepInvocation(nextRoutine) }
+          var hs := ConvertTotalState_LPlusH(ls);
+          var hs' := H.Armada_GetNextState(hs, hstep, tid);
           lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
-          {body}
-        }}
       ";
-      pgp.AddLemma(str);
+      foreach (var globalVarName in strategy.GlobalVars) {
+        str += $"lemma_DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_AlwaysMatchesGlobalView();\n";
+      }
+      str += hpr.GetOpenStepInvocation(hNextRoutine);
+      str += "ProofCustomizationGoesHere(); }";
+      pgp.AddLemma(str, "lift");
+    }
 
+    private void GenerateAllConvertImpliesValidStepLemmas()
+    {
+      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
+        if (nextRoutine.stmt != null && nextRoutine.startPC != null && weakenedPCs.Contains(nextRoutine.startPC)) {
+          GenerateConvertImpliesValidStepLemma(nextRoutine);
+        }
+      }
     }
 
     private void GenerateNoStoreBufferEntriesLemmas(string globalVarName)
@@ -513,21 +357,21 @@ namespace Microsoft.Armada {
             ==> storeBufferEntry.loc.v != H.Armada_GlobalStaticVar_{globalVarName}
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       
       str =$@"
-        predicate L_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(lps: LPlusState)
+        predicate L_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(ls: LPlusState)
         {{
-          forall storeBufferEntry, tid :: tid in lps.s.threads && storeBufferEntry in lps.s.threads[tid].storeBuffer && storeBufferEntry.loc.Armada_StoreBufferLocation_Unaddressable?
+          forall storeBufferEntry, tid :: tid in ls.s.threads && storeBufferEntry in ls.s.threads[tid].storeBuffer && storeBufferEntry.loc.Armada_StoreBufferLocation_Unaddressable?
             ==> storeBufferEntry.loc.v != L.Armada_GlobalStaticVar_{globalVarName}
         }}
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
       AddInvariant(new InternalInvariantInfo($@"GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer", $@"L_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer", new List<string>()));
 
       str = $@"
-        lemma DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(mem: H.Armada_SharedMemory, storeBuffer: seq<H.Armada_StoreBufferEntry>)
+        lemma lemma_DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(mem: H.Armada_SharedMemory, storeBuffer: seq<H.Armada_StoreBufferEntry>)
           requires forall storeBufferEntry :: storeBufferEntry in storeBuffer && storeBufferEntry.loc.Armada_StoreBufferLocation_Unaddressable?
           ==> storeBufferEntry.loc.v != H.Armada_GlobalStaticVar_{globalVarName}
           ensures H.Armada_ApplyStoreBuffer(mem, storeBuffer).globals.{globalVarName} == mem.globals.{globalVarName}
@@ -538,300 +382,47 @@ namespace Microsoft.Armada {
           else {{
             var mem' := H.Armada_ApplyStoreBufferEntry(mem, storeBuffer[0]);
             assert mem'.globals.{globalVarName} == mem.globals.{globalVarName};
-            DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(mem, storeBuffer[1..]);
+            lemma_DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(mem, storeBuffer[1..]);
           }}
         }}
       ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "utility");
 
       str = $@"
-        lemma DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_MatchesGlobalView(hs: HState, tid: Armada_ThreadHandle)
+        lemma lemma_DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_MatchesGlobalView(hs: HState, tid: Armada_ThreadHandle)
           requires tid in hs.threads
           requires H_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(hs)
           ensures hs.mem.globals.{globalVarName} == H.Armada_GetThreadLocalView(hs, tid).globals.{globalVarName}
         {{
-          DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(hs.mem, hs.threads[tid].storeBuffer);
+          lemma_DoesNotAppearInStoreBufferImplies_GlobalStaticVar_{globalVarName}_UnchangedByApplyStoreBuffer(hs.mem, hs.threads[tid].storeBuffer);
         }}
       ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "utility");
 
       str = $@"
-        lemma DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_AlwaysMatchesGlobalView()
+        lemma lemma_DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_AlwaysMatchesGlobalView()
         ensures forall hs, tid :: H_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(hs) && tid in hs.threads ==> hs.mem.globals.{globalVarName} == H.Armada_GetThreadLocalView(hs, tid).globals.{globalVarName}
         {{
           forall hs, tid |
             H_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(hs) && tid in hs.threads
             ensures hs.mem.globals.{globalVarName} == H.Armada_GetThreadLocalView(hs, tid).globals.{globalVarName}
             {{
-              DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_MatchesGlobalView(hs, tid);
+              lemma_DoesNotAppearInStoreBufferImpliesThreadLocalViewOf_GlobalStaticVar_{globalVarName}_MatchesGlobalView(hs, tid);
             }}
         }}
       ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "utility");
 
 
       str = $@"
-        lemma Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer_LPlusImpliesH(lps: LPlusState, hs: HState)
-          requires L_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(lps)
-          requires hs == ConvertTotalState_LPlusH(lps)
+        lemma Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer_LPlusImpliesH(ls: LPlusState, hs: HState)
+          requires L_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(ls)
+          requires hs == ConvertTotalState_LPlusH(ls)
           ensures H_Armada_GlobalStaticVar_{globalVarName}_DoesNotAppearInStoreBuffer(hs)
         {{
         }}
       ";
-      pgp.AddLemma(str);
-
-    }
-
-    private void GenerateLiftNextLemmas()
-    {
-      var finalCases = "";
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        if (nextRoutine.nextType == NextType.Tau) {
-          GenerateLiftStepLemmaForTauNextRoutine(nextRoutine);
-        }
-        else {
-          GenerateLiftStepLemmaForNormalNextRoutine(nextRoutine);
-        }
-        var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        var nextRoutineName = nextRoutine.NameSuffix;
-        finalCases += $"case Armada_TraceEntry_{nextRoutineName}(_{lstep_params}) => lemma_LiftNext_{nextRoutineName}(wr, lps, lps', lentry);";
-      }
-      string str =$@"
-        lemma lemma_LNextOneImpliesHNextOne(wr: WRequest, lps:LPlusState, lps':LPlusState, hs:HState, hs':HState,
-          lentry: L.Armada_TraceEntry, hentry: H.Armada_TraceEntry)
-          requires wr == GetStarWeakeningRequest()
-          requires lps in wr.inv
-          requires LPlus_NextOneStep(lps, lps', lentry)
-          requires hs == ConvertTotalState_LPlusH(lps)
-          requires hs' == ConvertTotalState_LPlusH(lps')
-          requires hentry == ConvertTraceEntry_LH(lps.s, lentry)
-          ensures H.Armada_NextOneStep(hs, hs', hentry)
-        {{
-          match lentry {{
-            {finalCases}
-          }}
-        }}
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateAllActionsLiftableWeakenedLemmas()
-    {
-      string str = @"  
-        lemma lemma_NextMultipleStepsImpliesValidStepSequence(lps: LPlusState, lps': LPlusState, steps: seq<L.Armada_TraceEntry>)
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), lps, lps', steps)
-          ensures ValidStepSequence(lps.s, steps)
-          decreases |steps|
-        {
-          if |steps| == 0 {
-          } else {
-            assert L.Armada_ValidStep(lps.s, steps[0]);
-            assert Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), LPlus_GetNextStateAlways(lps, steps[0]), lps', steps[1..]);
-            lemma_NextMultipleStepsImpliesValidStepSequence(LPlus_GetNextStateAlways(lps, steps[0]), lps', steps[1..]);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_LNextMultipleImpliesHNextMultiple(wr: WRequest, lps: LPlusState, lps': LPlusState, steps: seq<L.Armada_TraceEntry>)
-          requires wr == GetStarWeakeningRequest()
-          requires lps in wr.inv
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), lps, lps', steps)
-          ensures ValidStepSequence(lps.s, steps) && Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps'), ConvertStepSequence_LH(lps.s, steps))
-          decreases |steps|
-        {
-          if |steps| == 0 {
-            return;
-          }
-          var lps_next := LPlus_GetNextStateAlways(lps, steps[0]);
-          var hs, hs_next, hs' := ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps_next), ConvertTotalState_LPlusH(lps');
-          lemma_NextMultipleStepsImpliesValidStepSequence(lps, lps', steps);
-          var hsteps := ConvertStepSequence_LH(lps.s, steps);
-          lemma_NextOneStepMaintainsInductiveInv(lps, lps_next, steps[0]);
-          assert lps_next in wr.inv;
-          lemma_LNextMultipleImpliesHNextMultiple(wr, lps_next, lps', steps[1..]);
-          lemma_LNextOneImpliesHNextOne(wr, lps, lps_next, hs, hs_next, steps[0], hsteps[0]);
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_GetStateSequenceCommutesWithConvert(wr: WRequest, lps: LPlusState, lpstates: seq<LPlusState>, hs: HState, hstates: seq<HState>, lsteps:seq<L.Armada_TraceEntry>, hsteps:seq<H.Armada_TraceEntry>)
-          requires wr == GetStarWeakeningRequest()
-          requires lps in wr.inv
-          requires ValidStepSequence(lps.s, lsteps) && hsteps == ConvertStepSequence_LH(lps.s, lsteps)
-          requires hs == ConvertTotalState_LPlusH(lps)
-          requires lpstates == Armada_GetStateSequence(LPlus_GetSpecFunctions(), lps, lsteps)
-          requires hstates == Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps)
-          ensures Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps) == MapSeqToSeq(Armada_GetStateSequence(LPlus_GetSpecFunctions(), lps, lsteps), ConvertTotalState_LPlusH)
-          decreases |lsteps|
-        {
-          if |lsteps| == 0 {
-          }
-          else {
-            var lps_next, hs_next := lpstates[1], hstates[1];
-            assert LPlus_NextOneStep(lps, lps_next, lsteps[0]);
-            lemma_NextOneStepMaintainsInductiveInv(lps, lps_next, lsteps[0]);
-            assert lps_next in wr.inv;
-            lemma_LNextOneImpliesHNextOne(wr, lps, lps_next, hs, ConvertTotalState_LPlusH(lps_next), lsteps[0], hsteps[0]);
-            assert hstates[1] == ConvertTotalState_LPlusH(lpstates[1]); 
-            lemma_GetStateSequenceCommutesWithConvert(wr, lps_next, lpstates[1..], hs_next, hstates[1..], lsteps[1..], hsteps[1..]);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_IntermediateStatesNonyielding(wr: WRequest, lps: LPlusState, lps': LPlusState, hs: HState, hs': HState, lsteps: seq<L.Armada_TraceEntry>, hsteps: seq<H.Armada_TraceEntry>, tid: Armada_ThreadHandle, tau: bool, lpstates: seq<LPlusState>, hstates: seq<HState>)
-          requires wr == GetStarWeakeningRequest()
-          requires lps in wr.inv
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), lps, lps', lsteps)
-          requires tid in lps.s.threads ==> !L.Armada_IsNonyieldingPC(lps.s.threads[tid].pc)
-          requires tid in lps'.s.threads ==> !L.Armada_IsNonyieldingPC(lps'.s.threads[tid].pc)
-          requires forall step :: step in lsteps ==> step.tid == tid
-          requires forall step :: step in lsteps ==> step.Armada_TraceEntry_Tau? == tau
-          requires lpstates == Armada_GetStateSequence(LPlus_GetSpecFunctions(), lps, lsteps)
-          requires forall i :: 0 < i < |lsteps| ==> tid in lpstates[i].s.threads && L.Armada_IsNonyieldingPC(lpstates[i].s.threads[tid].pc)
-          requires hs == ConvertTotalState_LPlusH(lps)
-          requires hs' == ConvertTotalState_LPlusH(lps')
-          requires ValidStepSequence(lps.s, lsteps)
-          requires hsteps ==  ConvertStepSequence_LH(lps.s, lsteps)
-          requires Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), hs, hs', hsteps)
-          requires forall step :: step in hsteps ==> step.tid == tid
-          requires forall step :: step in hsteps ==> step.Armada_TraceEntry_Tau? == tau
-          requires hstates == Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps);
-          ensures  forall i :: 0 < i < |hsteps| ==> tid in hstates[i].threads && H.Armada_IsNonyieldingPC(hstates[i].threads[tid].pc)
-          ensures tid in hs'.threads ==> !H.Armada_IsNonyieldingPC(hs'.threads[tid].pc)
-        {
-          lemma_GetStateSequenceCommutesWithConvert(wr, lps, Armada_GetStateSequence(LPlus_GetSpecFunctions(), lps, lsteps), hs, Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps), lsteps, hsteps);
-          forall i | 0 < i < |hsteps|
-            ensures tid in hstates[i].threads
-            ensures H.Armada_IsNonyieldingPC(hstates[i].threads[tid].pc)
-          {
-            assert tid in lpstates[i].s.threads;
-            assert L.Armada_IsNonyieldingPC(lpstates[i].s.threads[tid].pc);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_ConvertStepSequenceMaintainsMatching(s: LState, tau: bool, tid: Armada_ThreadHandle, steps: seq<L.Armada_TraceEntry>)
-          requires ValidStepSequence(s, steps)
-          requires forall step :: step in steps ==> step.tid == tid
-          requires forall step :: step in steps ==> step.Armada_TraceEntry_Tau? == tau
-          ensures forall step :: step in ConvertStepSequence_LH(s, steps) ==> step.tid == tid
-          ensures forall step :: step in ConvertStepSequence_LH(s, steps) ==> step.Armada_TraceEntry_Tau? == tau
-          decreases |steps|
-        {
-          if |steps| > 0 {
-            var s' := L.Armada_GetNextStateAlways(s, steps[0]);
-            lemma_ConvertStepSequenceMaintainsMatching(s', tau, tid, steps[1..]);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-          lemma lemma_LNextImpliesHNext(wr: WRequest, lps: LPlusState, lps': LPlusState, lstep: LStep)
-          requires wr == GetStarWeakeningRequest()
-          requires LPlus_Next(lps, lps', lstep)
-          requires lps in wr.inv
-          ensures ValidStepSequence(lps.s, lstep.steps)
-          ensures H.Armada_Next(ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps'), StepRefiner(lps, lstep))
-        {
-          var hs, hs' := ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps');
-          lemma_NextMultipleStepsImpliesValidStepSequence(lps, lps', lstep.steps);
-          var hstep := StepRefiner(lps, lstep);
-          lemma_LNextMultipleImpliesHNextMultiple(wr, lps, lps', lstep.steps);
-          assert Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), ConvertTotalState_LPlusH(lps), ConvertTotalState_LPlusH(lps'), hstep.steps);
-          assert hstep.tid in hs.threads ==> !H.Armada_IsNonyieldingPC(hs.threads[hstep.tid].pc);
-          assert hstep.tid in hs'.threads ==> !H.Armada_IsNonyieldingPC(hs'.threads[hstep.tid].pc);
-          var states := Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hstep.steps);
-          assert forall step :: step in lstep.steps ==> step.Armada_TraceEntry_Tau? == lstep.tau;
-          lemma_ConvertStepSequenceMaintainsMatching(lps.s, lstep.tau, lstep.tid, lstep.steps);
-          var hstates := Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hstep.steps);
-          lemma_IntermediateStatesNonyielding(wr, lps, lps', hs, hs', lstep.steps, hstep.steps, lstep.tid, lstep.tau, Armada_GetStateSequence(LPlus_GetSpecFunctions(), lps, lstep.steps), hstates);
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_AllActionsLiftableWeakened()
-          ensures AllActionsLiftableStarWeakened(GetStarWeakeningRequest())
-        {
-          var wr := GetStarWeakeningRequest();
-
-          forall lps, lps', lstep |
-            && ActionTuple(lps, lps', lstep) in wr.lspec.next
-            && lps in wr.inv
-            ensures ActionTuple(wr.converter(lps), wr.converter(lps'), wr.step_refiner(lps, lstep)) in wr.hspec.next
-            ensures StepRefiner.requires(lps, lstep);
-          {
-            lemma_LNextImpliesHNext(wr, lps, lps', lstep);
-            lemma_NextMultipleStepsImpliesValidStepSequence(lps, lps', lstep.steps);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateInitStatesEquivalentLemma()
-    {
-      string str = @"
-        lemma lemma_LInitImpliesHInit(lps:LPlusState, hs:HState, hconf:H.Armada_Config)
-          requires LPlus_Init(lps)
-          requires hs == ConvertTotalState_LPlusH(lps)
-          requires hconf == ConvertConfig_LH(lps.config)
-          ensures H.Armada_InitConfig(hs, hconf)
-        {
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-         lemma lemma_InitStatesEquivalent(wr:WRequest)
-          requires wr == GetStarWeakeningRequest()
-          ensures InitStatesEquivalent(wr)
-        {
-          forall initial_lps | initial_lps in wr.lspec.init
-            ensures wr.converter(initial_lps) in wr.hspec.init
-          {
-            lemma_LInitImpliesHInit(initial_lps, ConvertTotalState_LPlusH(initial_lps), ConvertConfig_LH(initial_lps.config));
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateFinalProof()
-    {
-      string str = @"
-        lemma lemma_ProveRefinementViaWeakening()
-          ensures SpecRefinesSpec(L.Armada_Spec(), H.Armada_Spec(), GetLHRefinementRelation())
-        {
-          var lspec := L.Armada_Spec();
-          var hspec := H.Armada_Spec();
-          var wr := GetStarWeakeningRequest();
-          
-          forall lb | BehaviorSatisfiesSpec(lb, lspec)
-            ensures BehaviorRefinesSpec(lb, hspec, GetLHRefinementRelation())
-          {
-            var alb := lemma_GetLPlusAnnotatedBehavior(lb);
-
-            lemma_InitStatesEquivalent(wr);
-            lemma_AllActionsLiftableWeakened();
-            lemma_InductiveInvIsInvariant();
-            
-            assert ValidStarWeakeningRequest(wr);
-            var ahb := lemma_PerformStarWeakening(wr, alb);
-            lemma_IfLPlusBehaviorRefinesBehaviorThenLBehaviorDoes(lb, alb.states, ahb.states);
-            lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes(ahb);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "utility");
     }
   }
 }

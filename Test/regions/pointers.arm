@@ -1,10 +1,10 @@
-// Test the regions invariant generation
+// Test the regions invariant generation 
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs SharedStructs {
+structs SharedStructsPointers {
 }
 
-level level0 using SharedStructs {
+layer level0 using SharedStructsPointers {
     noaddr var g_p:ptr<int32> := null;
     var x:int32;
     var z:int32;
@@ -27,20 +27,20 @@ label stmt2:
         b, *g_p ::= 3, 4;
     }
 
-    method main()
+    method main() 
     {
         noaddr var p1:ptr<int32> := null;
         noaddr var p2:ptr<int32> := null;
         noaddr var y:ptr<int32> := null;
         test_store_arg_unknown(y);
-
+ 
         p1 := &x;
         p2 := malloc(int32);
         *p1, *p2 ::= 1, 2;
     }
 }
 
-level level1 using SharedStructs {
+layer level1 using SharedStructsPointers {
     noaddr var g_p:ptr<int32> := null;
     var x:int32;
     var z:int32;
@@ -61,13 +61,13 @@ level level1 using SharedStructs {
         *g_p, b ::= 4, 3;
     }
 
-    method main()
+    method main() 
     {
         noaddr var p1:ptr<int32> := null;
         noaddr var p2:ptr<int32> := null;
         noaddr var y:ptr<int32> := null;
         test_store_arg_unknown(y);
-
+ 
         p1 := &x;
         p2 := malloc(int32);
         *p2, *p1 ::= 2, 1;
@@ -81,4 +81,10 @@ proof level01proof {
 
     extra lemma_LiftNext_Update_test_store_arg_unknown_stmt1 "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();"
     extra lemma_LiftNext_Update_test_store_arg_unknown_stmt2 "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();"
+    extra lemma_LiftAtomicPath_From_test_store_arg_unknown_stmt1_To_test_store_arg_unknown_stmt2 @"
+      lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();
+    "
+    extra lemma_LiftAtomicPath_From_test_store_arg_unknown_stmt2_To_test_store_arg_unknown_End @"
+      lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();
+    "
 }

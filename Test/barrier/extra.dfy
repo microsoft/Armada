@@ -15,7 +15,6 @@ module L1RefinesL2Helpers {
                         && entry'.loc.Armada_StoreBufferLocation_Unaddressable?
                         && entry'.loc.v.Armada_GlobalStaticVar_barrier?
                         && |entry'.loc.fields| == 1
-                        && entry'.loc.fields[0].Armada_FieldArrayIndex?
                         && entry'.value.Armada_PrimitiveValue_uint32?
                         ==> entry'.value.n_uint32 == 0 || entry'.value.n_uint32 == 1
     requires |mem.globals.barrier| == 10
@@ -27,8 +26,7 @@ module L1RefinesL2Helpers {
     ensures  entry.loc.Armada_StoreBufferLocation_Unaddressable?
     ensures  entry.loc.v.Armada_GlobalStaticVar_barrier?
     ensures  |entry.loc.fields| == 1
-    ensures  entry.loc.fields[0].Armada_FieldArrayIndex?
-    ensures  entry.loc.fields[0].i == which_thread
+    ensures  entry.loc.fields[0] == which_thread
     ensures  entry.value.Armada_PrimitiveValue_uint32?
     ensures  entry.value.n_uint32 == 1
     decreases |storeBuffer|
@@ -41,8 +39,7 @@ module L1RefinesL2Helpers {
     if && entry0.loc.Armada_StoreBufferLocation_Unaddressable?
        && entry0.loc.v.Armada_GlobalStaticVar_barrier?
        && |entry0.loc.fields| == 1
-       && entry0.loc.fields[0].Armada_FieldArrayIndex?
-       && entry0.loc.fields[0].i == which_thread
+       && entry0.loc.fields[0] == which_thread
        && entry0.value.Armada_PrimitiveValue_uint32?
     {
       if entry0.value.n_uint32 == 1 {
@@ -65,7 +62,6 @@ module L1RefinesL2Helpers {
       entry.loc.Armada_StoreBufferLocation_Unaddressable? &&
       entry.loc.v.Armada_GlobalStaticVar_barrier? &&
       |entry.loc.fields| == 1 &&
-      entry.loc.fields[0].Armada_FieldArrayIndex? &&
       entry.value.Armada_PrimitiveValue_uint32? ==>
       entry.value.n_uint32 == 0 || entry.value.n_uint32 == 1
 
@@ -77,10 +73,9 @@ module L1RefinesL2Helpers {
       entry.loc.Armada_StoreBufferLocation_Unaddressable? &&
       entry.loc.v.Armada_GlobalStaticVar_barrier? &&
       |entry.loc.fields| == 1 &&
-      entry.loc.fields[0].Armada_FieldArrayIndex? &&
       entry.value.Armada_PrimitiveValue_uint32? &&
       entry.value.n_uint32 == 1 ==>
-        var which_thread := entry.loc.fields[0].i; 0 <= which_thread < 10 && s.ghosts.threads_past_barrier[which_thread]
+        var which_thread := entry.loc.fields[0]; 0 <= which_thread < 10 && s.ghosts.threads_past_barrier[which_thread]
 
     requires forall which_thread :: 
       s.ghosts.all_initialized &&

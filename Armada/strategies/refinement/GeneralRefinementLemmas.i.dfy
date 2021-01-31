@@ -166,6 +166,32 @@ module GeneralRefinementLemmasModule {
     assert BehaviorRefinesBehaviorUsingRefinementMap(lb', hb', relation, lh_map');
   }
 
+  lemma lemma_ExtendBehaviorRefinesBehaviorRightOne_LStutter<T, U>(lb:seq<T>, hb:seq<U>, relation:RefinementRelation<T, U>, hs:U)
+    requires BehaviorRefinesBehavior(lb, hb, relation)
+    requires RefinementPair(last(lb), hs) in relation
+    ensures  BehaviorRefinesBehavior(lb, hb + [hs], relation)
+  {
+    var lh_map :| BehaviorRefinesBehaviorUsingRefinementMap(lb, hb, relation, lh_map);
+    var last_range := last(lh_map);
+    var last_range' := last_range.(last := |hb|);
+
+    var hb' := hb + [hs];
+    var lh_map' := lh_map[|lh_map|-1 := last_range'];
+    assert BehaviorRefinesBehaviorUsingRefinementMap(lb, hb', relation, lh_map');
+  }
+
+  lemma lemma_ExtendBehaviorRefinesBehaviorRightOne_HStutter<T, U>(lb:seq<T>, hb:seq<U>, relation:RefinementRelation<T, U>, ls:T)
+    requires BehaviorRefinesBehavior(lb, hb, relation)
+    requires RefinementPair(ls, last(hb)) in relation
+    ensures  BehaviorRefinesBehavior(lb + [ls], hb, relation)
+  {
+    var lh_map :| BehaviorRefinesBehaviorUsingRefinementMap(lb, hb, relation, lh_map);
+
+    var lb' := lb + [ls];
+    var lh_map' := lh_map + [RefinementRange(|hb|-1, |hb|-1)];
+    assert BehaviorRefinesBehaviorUsingRefinementMap(lb', hb, relation, lh_map');
+  }
+
   lemma lemma_ExtendBehaviorRefinesBehaviorLeftOne<T>(lb:seq<T>, hb:seq<T>, relation:RefinementRelation<T, T>, s:T)
     requires BehaviorRefinesBehavior(lb, hb, relation)
     requires RefinementRelationReflexive(relation)
@@ -231,5 +257,13 @@ module GeneralRefinementLemmasModule {
       lemma_SequenceConcatenationAssociative(all_but_last(eb), [last(eb)], hb);
     }
   }
+
+  lemma lemma_ExtendBehaviorSatisfiesSpecRightOne<State>(b:seq<State>, spec:Spec<State>, s':State)
+    requires BehaviorSatisfiesSpec(b, spec)
+    requires StatePair(last(b), s') in spec.next
+    ensures  BehaviorSatisfiesSpec(b + [s'], spec)
+  {
+  }
+    
 
 }

@@ -46,15 +46,20 @@ level F using SharedStructs3 {
     {
       bar ::= 41;
       return;
-      bar ::= 42;
+      atomic {
+        bar ::= 42;
+        z := 7;
+      }
     }
 
     method main()
     {
         x := 41;
-        z ::= 42;
-        y := *;
-        z := 5;
+        atomic {
+          z ::= 42;
+          y := *;
+          z := 5;
+        }
         z := 6;
     }
 }

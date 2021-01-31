@@ -1,3 +1,4 @@
+# -*- python -*-
 import re
 import sys
 import os, os.path
@@ -13,45 +14,36 @@ Import("*")
 
 env = Environment()
 if sys.platform != 'win32' and sys.platform != 'cygwin':
-  env['MONO'] = 'mono'
+  env['MONO'] = 'dotnet'
 
 # Retrieve tool-specific command overrides passed in by the user
 AddOption('--DAFNYPATH',
   dest='dafny_path',
   type='string',
-  default='/armada/dafny/Binaries',
+  default=None,
   action='store',
   help='Specify the path to Dafny tool binaries')
 
-AddOption('--PROGRAM',
-          dest='program',
-          type='string',
-          default=None,
-          action='store',
-          help='Specify which program to verify')
+AddOption('--ONLYFILENAMES',
+  dest='onlyfilenames',
+  action='store_true',
+  default=False,
+  help='Only print out the file paths of dafny files that would be verified')
+onlyfilenames = GetOption('onlyfilenames')
 
 dafny_path = GetOption('dafny_path')
-program = GetOption('program')
 if dafny_path is None:
   sys.stderr.write("ERROR:  Missing --DAFNYPATH on command line\n")
   exit(-1)
-dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.exe')
+if sys.platform == "win32" or sys.platform == "cygwin":
+  dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.exe')
+else:
+  dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.dll')
 
 # Useful Dafny command lines
-dafny_basic_args = '/compile:0 /timeLimit:240 /trace /noCheating:1'
+dafny_basic_args = '/compile:0 /timeLimit:120 /trace /noCheating:1'
 dafny_default_args = dafny_basic_args + ' /arith:5'
 dafny_args_nlarith = dafny_basic_args + ' /arith:2'
-
-####################################################################
-#
-#   Describe the files needed for Mono
-#
-####################################################################
-
-if sys.platform == 'win32' or sys.platform == 'cygwin':
-  env['CSC'] = env.Detect('csc')
-else: # mono
-  env['CSC'] = env.Detect('dmcs')
 
 ####################################################################
 #
@@ -80,7 +72,9 @@ def recursive_glob(env, pattern, strings=False):
 
 source_to_args = [
   ('.*test\/weakening\/ArithmeticFacts\.dfy', dafny_args_nlarith),
-  ('.*Armada\/util\/math\/.*\.dfy', dafny_args_nlarith),
+  ('.*Armada\/util\/math\/[^\.]+nonlinear\.i\.dfy', dafny_args_nlarith),
+  ('.*Armada\/util\/math\/[^\.]+auto[^\.]*\.i\.dfy', dafny_args_nlarith),
+  ('.*Armada\/util\/math\/mul\.i\.dfy', dafny_args_nlarith),
   ('.*\.dfy', dafny_default_args),
 ]
 
@@ -107,6 +101,7 @@ def get_dafny_command_line_args(srcpath):
 
 dependencies_by_file = dict()
 already_verified_files = set()
+already_printed_files = set()
 
 # Scan a .dfy file to discover its transitive dependencies, and store a
 # list of them in dependencies_by_file[fullpath].
@@ -153,8 +148,15 @@ def generate_dafny_verifier_actions(source, target, env, for_signature):
   source_name = os.path.basename(abs_source)
   temp_target_file = os.path.splitext(abs_target)[0] + '.tmp'
   args = get_dafny_command_line_args(abs_source)
+  if onlyfilenames:
+      relative_source = str(source[0])
+      if relative_source not in already_printed_files:
+          already_printed_files.add(relative_source)
+          print(args + " " + relative_source)
+      return []
   return [
       "cd %s; $MONO %s %s %s > %s" % (abs_dir, dafny_exe, args, source_name, temp_target_file),
+      "python check_dafny.py %s" % (temp_target_file),
       "tail -n 1 %s" % (temp_target_file),
       "mv %s %s" % (temp_target_file, abs_target)
   ]
@@ -247,23 +249,30 @@ atexit.register(display_build_status)
 
 def run_directory(dir_name, dafny_files):
   for dafny_file in dafny_files:
-    if program is None or program == dir_name or program == dir_name + '/' + dafny_file:
-      source = "Test/%s/%s.dfy" % (dir_name, dafny_file)
-      target = "Test/%s/%s.vdfy" % (dir_name, dafny_file)
-      env.DafnyVerify(target, [source, dafny_exe])
+    source = "Test/%s/%s.dfy" % (dir_name, dafny_file)
+    target = "Test/%s/%s.vdfy" % (dir_name, dafny_file)
+    env.DafnyVerify(target, [source, dafny_exe])
 
 run_directory("assume-intro", ["AB", "CD", "EF"])
 run_directory("barrier", ["ImplRefinesL1", "L1RefinesL2"])
 run_directory("tsoelim", ["AB", "CD", "EF", "GH"])
 run_directory("reduction", ["AB", "CD"])
 run_directory("combining", ["AB"])
-run_directory("varhiding", ["AB", "CD", "EF", "GH"])
-run_directory("varintro", ["AB", "CD", "EF", "XY"])
+run_directory("varhiding", ["AB", "CD", "EF", "GH", "IJ"])
+run_directory("varintro", ["AB", "CD", "EF", "GH"])
 run_directory("weakening", ["AB", "CD", "EF"])
-run_directory("regions", ["level01proof", "AB", "CD", "EF", "GH"])
+run_directory("counter", ["AB", "BC", "CD", "DE", "EF", "FG", "GI", "IJ"])
+run_directory("bitvector", ["AB"])
+run_directory("regions", ["AB", "CD", "EF", "GH", "level01proof"])
 run_directory("starweakening", ["AB", "CD", "EF", "GH"])
-run_directory("armada-parser", ["test1", "test2", "test3", "test4", "test5", "test6"])
+run_directory("armada-parser", ["A", "B", "C", "D", "E", "F"])
 run_directory("mcslock", ["pseudo_impl_L1", "L1_L2", "L2_L3", "L3_L4", "L4_L5", "L5_L6"])
-run_directory("qbss", ["NoTSOIntroduceAbstractQueue", "CombineEnqueueAtomicAbstractQueue",
-                       "CombineDequeueAtomicAbstractQueue", "NoTSOUseAbstractQueueForLog",
-                       "NoTSOStarWeaken", "HideEnqueueLocals", "HideDequeueLocals", "HideGlobal"])
+run_directory("qbss", ["NoTSOIntroduceAbstractQueue",
+                       "CombineEnqueueAtomicAbstractQueue",
+                       "CombineDequeueAtomicAbstractQueue",
+                       "NoTSOUseAbstractQueueForLog",
+                       "NoTSOStarWeaken",
+                       "HideEnqueueLocals",
+                       "HideDequeueLocals",
+                       "HideGlobal",
+                      ])

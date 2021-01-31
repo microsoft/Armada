@@ -26,20 +26,23 @@ predicate ModAuto(n:int)
                     || (-n <= z < 0 && (x - y) % n == z + n))))
 }
 
-predicate mod_auto_pred1(xy:(int, int), n:int)
+lemma lemma_QuotientAndRemainderUnique(x:int, q:int, r:int, n:int)
     requires n > 0
+    requires 0 <= r < n
+    requires x == q * n + r
+    ensures  q == x / n
+    ensures  r == x % n
+    decreases if q > 0 then q else -q
 {
-   var z := (xy.0 % n) + (xy.1 % n);
-      (0 <= z < n && (xy.0 + xy.1) % n == z)
-   || (n <= z < 2 * n && (xy.0 + xy.1) % n == z - n)
-}
-
-predicate mod_auto_pred2(xy:(int, int), n:int)
-    requires n > 0
-{
-    var z := (xy.0 % n) - (xy.1 % n);
-       (0 <= z < n && (xy.0 - xy.1) % n == z)
-    || (-n <= z < 0 && (xy.0 - xy.1) % n == z + n)
+    lemma_mod_auto_basics(n);
+    if q > 0 {
+        assert q * n + r == (q - 1) * n + r + n;
+        lemma_QuotientAndRemainderUnique(x - n, q - 1, r, n);
+    }
+    else if q < 0 {
+        assert q * n + r == (q + 1) * n + r - n;
+        lemma_QuotientAndRemainderUnique(x + n, q + 1, r, n);
+    }
 }
 
 lemma lemma_mod_auto(n:int)
@@ -47,65 +50,39 @@ lemma lemma_mod_auto(n:int)
     ensures  ModAuto(n);
 {
     lemma_mod_auto_basics(n);
-    assert (0 + n) % n == 0;
-    assert (0 - n) % n == 0;
-    assert forall i, j {:trigger ((i + n) + j) % n} :: ((i + n) + j) % n == ((i + j) + n) % n;
-    assert forall i, j {:trigger ((i + n) - j) % n} :: ((i + n) - j) % n == ((i - j) + n) % n;
-    assert forall i, j {:trigger (i + (j + n)) % n} :: (i + (j + n)) % n == ((i + j) + n) % n;
-    assert forall i, j {:trigger (i - (j - n)) % n} :: (i - (j - n)) % n == ((i - j) + n) % n;
-    assert forall i, j {:trigger ((i - n) + j) % n} :: ((i - n) + j) % n == ((i + j) - n) % n;
-    assert forall i, j {:trigger ((i - n) - j) % n} :: ((i - n) - j) % n == ((i - j) - n) % n;
-    assert forall i, j {:trigger (i + (j - n)) % n} :: (i + (j - n)) % n == ((i + j) - n) % n;
-    assert forall i, j {:trigger (i - (j + n)) % n} :: (i - (j + n)) % n == ((i - j) - n) % n;
+
     forall x:int, y:int {:trigger (x + y) % n}
-        ensures  (var z := (x % n) + (y % n);
-                     (   (0 <= z < n && (x + y) % n == z)
-                      || (n <= z < 2 * n && (x + y) % n == z - n)));
+        ensures var z := (x % n) + (y % n);
+                  (0 <= z < n && (x + y) % n == z)
+                || (n <= z < 2 * n && (x + y) % n == z - n)
     {
-        var f := imap xy:(int, int) :: mod_auto_pred1(xy, n);
-
-        forall i, j | 0 <= i < n && 0 <= j < n
-            ensures (var z := (i % n) + (j % n);
-                     (   (0 <= z < n && (i + j) % n == z)
-                      || (n <= z < 2 * n && (i + j) % n == z - n)));
-            ensures f[(i, j)]
-        {
-            assert ((i + j) - n) % n == (i + j) % n;
+        var xq, xr := x / n, x % n;
+        assert x == xq * n + xr;
+        var yq, yr := y / n, y % n;
+        assert y == yq * n + yr;
+        if xr + yr < n {
+            lemma_QuotientAndRemainderUnique(x + y, xq + yq, xr + yr, n);
         }
-
-        lemma_mod_induction_forall2(n, f);
-        assert f[(x, y)];
+        else {
+            lemma_QuotientAndRemainderUnique(x + y, xq + yq + 1, xr + yr - n, n);
+        }
     }
+
     forall x:int, y:int {:trigger (x - y) % n}
-        ensures  (var z := (x % n) - (y % n);
-                     (   (0 <= z < n && (x - y) % n == z)
-                      || (-n <= z < 0 && (x - y) % n == z + n)));
+        ensures var z := (x % n) - (y % n);
+                  (0 <= z < n && (x - y) % n == z)
+                || (-n <= z < 0 && (x - y) % n == z + n)
     {
-        var f := imap xy:(int, int) :: mod_auto_pred2(xy, n);
-
-        forall i, j | 0 <= i < n && 0 <= j < n
-            ensures (var z := (i % n) - (j % n);
-                     (   (0 <= z < n && (i - j) % n == z)
-                      || (-n <= z < 0 && (i - j) % n == z + n)));
-            ensures f[(i, j)]
-        {
-            assert ((i - j) + n) % n == (i - j) % n;
+        var xq, xr := x / n, x % n;
+        assert x == xq * n + xr;
+        var yq, yr := y / n, y % n;
+        assert y == yq * n + yr;
+        if xr - yr >= 0 {
+            lemma_QuotientAndRemainderUnique(x - y, xq - yq, xr - yr, n);
         }
-
-        forall i, j {:trigger f[(i, j)], f[(i + n, j)]} | i >= 0 && f[(i, j)]
-            ensures f[(i + n, j)]
-        {
-            assert (i + n) % n == i % n;
+        else {
+            lemma_QuotientAndRemainderUnique(x - y, xq - yq - 1, xr - yr + n, n);
         }
-
-        forall i, j {:trigger f[(i, j)], f[(i, j + n)]} | j >= 0 && f[(i, j)]
-            ensures f[(i, j + n)]
-        {
-            assert (j + n) % n == j % n;
-        }
-
-        lemma_mod_induction_forall2(n, f);
-        assert f[(x, y)];
     }
 }
 

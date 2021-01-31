@@ -9,775 +9,194 @@ using System.Text.RegularExpressions;
 
 namespace Microsoft.Armada
 {
-  public class AssumeIntroHelpers
+  ////////////////////////////////////////////////
+  // CHLStepEffect
+  ////////////////////////////////////////////////
+
+  abstract class CHLPathEffect
   {
-    public static string GetCommonPathStateString(int i, bool behavior)
+    // A path's effective procedure can be obtained by calling ProcName.  Usually, that's the
+    // procedure where the path starts.  However, when the first thing that happens is a return,
+    // it's the procedure returned to.
+
+    // The start and end PCs are the actual PC values at the start and end of running the path.
+    // The effective start and end PCs, however, are always in the effective procedure of the path.
+    // They correspond to the PC at the top of the stack at the time.
+    // So, if the path starts out by returning, the effective start PC is the PC popped off the
+    // stack by the return.
+    // And, if the path ends by calling, the end PC is the PC pushed onto the stack by the call.
+
+    // The effective PCs are useful because they can be unambiguously used to name a sequence of
+    // paths in a straightline behavior.  The procedure name, effective end PC, and branch outcomes
+    // uniquely identify a straightline behavior.  They're also useful in constructing a sequence
+    // corresponding to a straightline behavior:  the effective end PC of one step is the effective
+    // start PC of the next.
+
+    public CHLPathEffect(ArmadaPC i_startPC, ArmadaPC i_endPC, ArmadaPC i_effectiveStartPC, ArmadaPC i_effectiveEndPC)
     {
-      return behavior ? $"b.states[{i}]" : $"ss{i}";
+      startPC = i_startPC;
+      endPC = i_endPC;
+      effectiveStartPC = i_effectiveStartPC;
+      effectiveEndPC = i_effectiveEndPC;
     }
 
-    public static string GetCommonPathStepString(int i, bool behavior)
+    protected ArmadaPC startPC;
+    protected ArmadaPC endPC;
+    protected ArmadaPC effectiveStartPC;
+    protected ArmadaPC effectiveEndPC;
+
+    public ArmadaPC StartPC { get { return startPC; } }
+    public ArmadaPC EndPC { get { return endPC; } }
+    public ArmadaPC EffectiveStartPC { get { return effectiveStartPC; } }
+    public ArmadaPC EffectiveEndPC { get { return effectiveEndPC; } }
+
+    public virtual string ProcName { get; }
+    public virtual string Constructor { get; }
+    public virtual string Callee { get { return null; } }
+
+    public virtual bool CanFollow(StraightlineState state) { return false; }
+  }
+
+  class CHLPathEffectNormal : CHLPathEffect
+  {
+    public CHLPathEffectNormal(ArmadaPC i_startPC, ArmadaPC i_endPC) : base(i_startPC, i_endPC, i_startPC, i_endPC)
     {
-      return behavior ? $"b.trace[{i}]" : $"sstep{i}";
     }
 
-    public static string GetCommonPathSS(List<PCNode> states, bool ssAvailable)
+    public override string ProcName { get { return startPC.methodName; } }
+    public override string Constructor { get { return "CHLStepEffectNormal()"; } }
+
+    public override bool CanFollow(StraightlineState state) { return state is StraightlineStateYielded; }
+  }
+
+  class CHLPathEffectReturn : CHLPathEffect
+  {
+    public CHLPathEffectReturn(ArmadaPC i_startPC, ArmadaPC i_endPC, ArmadaPC i_effectiveStartPC)
+      : base(i_startPC, i_endPC, i_effectiveStartPC, i_endPC)
     {
-      return ssAvailable ? "ss" : $"b.states[{states.Count-1}]";
     }
 
-    public static string GetCommonPathRequiresString(ArmadaSymbolTable symbols, string methodName, List<PCNode> states, List<StepDescriptor> steps,
-                                                     Dictionary<ArmadaPC, int> visitedLoops, bool behavior, bool useVisitedLoops, bool ssAvailable)
+    public string Returner { get { return startPC.methodName; } }
+    public override string ProcName { get { return endPC.methodName; } }
+    public override string Constructor { get { return "CHLStepEffectReturn()"; } }
+
+    public override bool CanFollow(StraightlineState state) { return state is StraightlineStateEnsured; }
+  }
+
+  class CHLPathEffectCall : CHLPathEffect
+  {
+    public CHLPathEffectCall(ArmadaPC i_startPC, ArmadaPC i_endPC, ArmadaPC i_effectiveEndPC)
+      : base(i_startPC, i_endPC, i_startPC, i_effectiveEndPC)
     {
-      string str = "";
-      int i;
-      for (i = 0; i < steps.Count; ++i) {
-        var step = steps.ElementAt(i);
-        var typ = step.GetStraightlineStepTypeAsString();
-        str += $"requires {GetCommonPathStepString(i, behavior)}.StraightlineStep{typ}?\n";
-        if (typ == "Normal") {
-          str += $"requires {GetCommonPathStepString(i, behavior)}.step.Armada_TraceEntry_{step.Next.NameSuffix}?\n";
-        }
-        else if (typ == "Call") {
-          str += $"requires {GetCommonPathStepString(i, behavior)}.call_step.Armada_TraceEntry_{step.Next.NameSuffix}?\n";
-        }
-        else if (typ == "Loop") {
-          str += $"requires {GetCommonPathStepString(i, behavior)}.guard_step.Armada_TraceEntry_{step.Next.NameSuffix}?\n";
-        }
-      }
-      for (i = 0; i < states.Count; ++i) {
-        str += $"requires tid in {GetCommonPathStateString(i, behavior)}.state.s.threads\n";
-      }
-      for (i = 0; i < states.Count; ++i) {
-        var node = states.ElementAt(i);
-        str += $"requires {GetCommonPathStateString(i, behavior)}.state.s.threads[tid].pc.{node.PC}?\n";
-      }
-      if (useVisitedLoops) {
-        var ss = GetCommonPathSS(states, ssAvailable);
-        foreach (var p in visitedLoops) {
-          if (p.Value < 0) {
-            str += $"requires L.{p.Key} !in {ss}.visited_loops\n";
-          }
-          else {
-            str += $"requires L.{p.Key} in {ss}.visited_loops\n";
-            str += $"requires {ss}.visited_loops[L.{p.Key}] == {GetCommonPathStateString(p.Value, behavior)}.state\n";
-          }
-        }
-      }
-      return str;
     }
+
+    public override string Callee { get { return endPC.methodName; } }
+    public override string ProcName { get { return startPC.methodName; } }
+    public override string Constructor { get { return $"CHLStepEffectCall(LProcName_{endPC.methodName})"; } }
+
+    public override bool CanFollow(StraightlineState state) { return state is StraightlineStateYielded; }
+  }
+
+  class CHLPathEffectReturnThenCall : CHLPathEffect
+  {
+    public CHLPathEffectReturnThenCall(ArmadaPC i_startPC, ArmadaPC i_endPC, ArmadaPC i_effectiveStartPC, ArmadaPC i_effectiveEndPC)
+      : base(i_startPC, i_endPC, i_effectiveStartPC, i_effectiveEndPC)
+    {
+    }
+
+    public string Returner { get { return startPC.methodName; } }
+    public override string Callee { get { return endPC.methodName; } }
+    public override string ProcName { get { return effectiveStartPC.methodName; } }
+    public override string Constructor { get { return $"CHLStepEffectReturnThenCall(LProcName_{endPC.methodName})"; } }
+
+    public override bool CanFollow(StraightlineState state) { return state is StraightlineStateEnsured; }
+  }
+
+  class CHLPathEffectActorless : CHLPathEffect
+  {
+    public CHLPathEffectActorless() : base(null, null, null, null)
+    {
+    }
+
+    public override string ProcName { get { return "main"; } }
+    public override string Constructor { get { return "CHLStepEffectActorless()"; } }
+  }
+
+  class CHLPathEffectExit : CHLPathEffect
+  {
+    public CHLPathEffectExit(ArmadaPC i_startPC) : base(i_startPC, null, i_startPC, null)
+    {
+    }
+
+    public override string ProcName { get { return startPC.methodName; } }
+    public override string Constructor { get { return "CHLStepEffectExit()"; } }
+
+    public override bool CanFollow(StraightlineState state) { return state is StraightlineStateYielded; }
+  }
+
+  class CHLPathEffectStop : CHLPathEffect
+  {
+    public CHLPathEffectStop(ArmadaPC i_startPC) : base(i_startPC, null, null, null)
+    {
+    }
+
+    public override string ProcName { get { return startPC.methodName; } }
+    public override string Constructor { get { return "CHLStepEffectStop()"; } }
+
+    public override bool CanFollow(StraightlineState state) { return false; }
   }
 
   public class AssumeIntroProofGenerator : AbstractProofGenerator
   {
-    public abstract class PathLemmaGenerator
-    {
-      protected ProofGenerationParams pgp;
-      protected string pathName;
-      protected string methodName;
-      protected List<PCNode> states;
-      protected List<StepDescriptor> steps;
-      protected Dictionary<ArmadaPC, int> visitedLoops;
-      protected List<bool> branches;
-
-      public PathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName, List<PCNode> i_states,
-                                List<StepDescriptor> i_steps, Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-      {
-        pgp = i_pgp;
-        pathName = i_pathName;
-        methodName = i_methodName;
-        states = i_states;
-        steps = i_steps;
-        visitedLoops = i_visitedLoops;
-        branches = i_branches;
-      }
-
-      protected abstract string GetLemmaType();
-
-      protected virtual List<string> GetExtraFormals() { return new List<string>(); }
-
-      protected virtual List<string> GetExtraInvocationParameters() { return new List<string>(); }
-
-      protected virtual bool UseVisitedLoops { get { return false; } }
-
-      protected virtual string GetExtraRequires() { return ""; }
-
-      protected abstract string GetEnsures(bool behavior);
-
-      public void GenerateLemmas()
-      {
-        GeneratePathLemma();
-        GeneratePathBehaviorLemma();
-      }
-
-      protected virtual string GetPathLemmaBody()
-      {
-        return "";
-      }
-
-      public virtual void GeneratePathLemma()
-      {
-        var lemmaType = GetLemmaType();
-        var lemmaName = $"lemma_{lemmaType}PathLemma_" + pathName;
-        var procName = "LProcName_" + methodName;
-        var str = "lemma " + lemmaName + "(";
-        var lemmaParams = new List<string> { "cr:CHLRequest", "tid:Armada_ThreadHandle", "ss:SState" };
-        lemmaParams.AddRange(Enumerable.Range(0, states.Count).Select(n => $"ss{n}:SState"));
-        lemmaParams.AddRange(Enumerable.Range(0, steps.Count).Select(n => $"sstep{n}:SStep"));
-        lemmaParams.AddRange(GetExtraFormals());
-        int i;
-        str += String.Join(", ", lemmaParams);
-        str += ")\n";
-        str += "requires cr == GetConcurrentHoareLogicRequest()\n";
-        str += $"requires ss == ss{states.Count-1}\n";
-        str += $"requires ss.state.s.stop_reason.Armada_NotStopped?\n";
-        str += $"requires StraightlineSpecInit(cr, ss0, tid, {procName})\n";
-        for (i = 0; i < steps.Count; ++i) {
-          str += $"requires StraightlineSpecNext(cr, ss{i}, ss{i+1}, sstep{i}, tid, {procName})\n";
-        }
-        str += AssumeIntroHelpers.GetCommonPathRequiresString(pgp.symbolsLow, methodName, states, steps, visitedLoops, false, UseVisitedLoops, true);
-        str += GetExtraRequires();
-        str += GetEnsures(false);
-        str += "{\n";
-        str += GetPathLemmaBody();
-        str += "}\n";
-        pgp.AddLemma(str, "path_" + pathName);
-      }
-
-      public void GeneratePathBehaviorLemma()
-      {
-        var lemmaType = GetLemmaType();
-        var lemmaName = $"lemma_{lemmaType}PathBehaviorLemma_" + pathName;
-        var procName = "LProcName_" + methodName;
-        var lemmaParams = new List<string> { "cr:CHLRequest", "b:AnnotatedBehavior<SState, SStep>", "tid:Armada_ThreadHandle", "ss:SState" };
-        lemmaParams.AddRange(GetExtraFormals());
-        var str = "lemma " + lemmaName + "(" + String.Join(", ", lemmaParams) + ")\n";
-        str += "requires cr == GetConcurrentHoareLogicRequest()\n";
-        str += $"requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, {procName}))\n";
-        str += $"requires |b.states| == {states.Count}\n";
-        str += $"requires ss == b.states[{states.Count-1}]\n";
-        str += "requires ss.state.s.stop_reason.Armada_NotStopped?\n";
-        str += AssumeIntroHelpers.GetCommonPathRequiresString(pgp.symbolsLow, methodName, states, steps, visitedLoops, true, UseVisitedLoops, true);
-        str += GetExtraRequires();
-        str += GetEnsures(true);
-        str += "{";
-        str += $"  var sspec := GetStraightlineSpec(cr, tid, {procName});\n";
-        for (int i = 0; i < steps.Count; ++i) {
-          str += $@"
-            var n{i} := {i};
-            assert ActionTuple(b.states[n{i}], b.states[n{i}+1], b.trace[n{i}]) in sspec.next;
-            assert StraightlineSpecNext(cr, b.states[n{i}], b.states[n{i}+1], b.trace[n{i}], tid, {procName});
-          ";
-        }
-        var callParams = new List<string> { "cr", "tid", "ss" };
-        callParams.AddRange(Enumerable.Range(0, states.Count).Select(n => $"b.states[{n}]"));
-        callParams.AddRange(Enumerable.Range(0, steps.Count).Select(n => $"b.trace[{n}]"));
-        callParams.AddRange(GetExtraInvocationParameters());
-        var callParamsJoined = String.Join(", ", callParams);
-        str += $"  lemma_{lemmaType}PathLemma_{AssumeIntroProofGenerator.GetPathName(methodName, states, branches)}({callParamsJoined});\n";
-        str += "}";
-        pgp.AddLemma(str, "path_" + pathName);
-      }
-    }
-
-    public class SpecificGlobalInvariantPathLemmaGenerator : PathLemmaGenerator
-    {
-      private string invariantName;
-      private string invariantFullPath;
-
-      public SpecificGlobalInvariantPathLemmaGenerator(string i_invariantName, string i_invariantFullPath,
-                                                       ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                       List<PCNode> i_states,
-                                                       List<StepDescriptor> i_steps, Dictionary<ArmadaPC, int> i_visitedLoops,
-                                                       List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        invariantName = i_invariantName;
-        invariantFullPath = i_invariantFullPath;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "SpecificGlobalInv_" + invariantName + "_";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return $"ensures {invariantFullPath}(s')\n";
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-          requires s'.s.stop_reason.Armada_NotStopped?
-        ";
-      }
-    }
-
-    public class SpecificLocalInvariantPathLemmaGenerator : PathLemmaGenerator
-    {
-      private string invariantName;
-
-      public SpecificLocalInvariantPathLemmaGenerator(string i_invariantName, ProofGenerationParams i_pgp, string i_pathName,
-                                                      string i_methodName, List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                      Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        invariantName = i_invariantName;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "SpecificLocalInv_" + invariantName + "_";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return $"ensures {invariantName}(ss.state, tid)\n";
-      }
-    }
-
-    public class SpecificYieldPredicatePathLemmaGenerator : PathLemmaGenerator
-    {
-      private string predicateName;
-      private string predicateFullPath;
-
-      public SpecificYieldPredicatePathLemmaGenerator(string i_predicateName, string i_predicateFullPath,
-                                                      ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                      List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                      Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        predicateName = i_predicateName;
-        predicateFullPath = i_predicateFullPath;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "SpecificYieldPredicateForOtherActor_" + predicateName + "_";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "other_tid:Armada_ThreadHandle", "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return $"ensures {predicateFullPath}(ss.state, s', other_tid)\n";
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-          requires tid != other_tid
-          requires s'.s.stop_reason.Armada_NotStopped?
-          requires other_tid in ss.state.s.threads
-        ";
-      }
-    }
-
-    public class GlobalInvariantsPathLemmaGenerator : PathLemmaGenerator
-    {
-      private Dictionary<string, string> globalInvariantNames;
-
-      public GlobalInvariantsPathLemmaGenerator(Dictionary<string, string> i_globalInvariantNames,
-                                                ProofGenerationParams i_pgp, string i_pathName, string i_methodName, List<PCNode> i_states,
-                                                List<StepDescriptor> i_steps, Dictionary<ArmadaPC, int> i_visitedLoops,
-                                                List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        globalInvariantNames = i_globalInvariantNames;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "GlobalInvariants";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures cr.global_inv(s')\n";
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-        ";
-      }
-
-      protected override string GetPathLemmaBody()
-      {
-        string str = "if s'.s.stop_reason.Armada_NotStopped? {";
-        var callParams = new List<string> { "cr", "tid", "ss" };
-        callParams.AddRange(Enumerable.Range(0, states.Count).Select(n => $"ss{n}"));
-        callParams.AddRange(Enumerable.Range(0, steps.Count).Select(n => $"sstep{n}"));
-        callParams.Add("s'");
-        callParams.Add("step");
-        var callParamsJoined = String.Join(", ", callParams);
-        var pathName = AssumeIntroProofGenerator.GetPathName(methodName, states, branches);
-        foreach (var globalInvariantPair in globalInvariantNames)
-        {
-          str += $"  lemma_SpecificGlobalInv_{globalInvariantPair.Key}_PathLemma_{pathName}({callParamsJoined});\n";
-        }
-        str += "}";
-        return str;
-      }
-
-      public override void GeneratePathLemma()
-      {
-        foreach (var globalInvariantPair in globalInvariantNames)
-        {
-          var specificGlobalInvariantGenerator =
-            new SpecificGlobalInvariantPathLemmaGenerator(globalInvariantPair.Key, globalInvariantPair.Value,
-                                                          pgp, pathName, methodName, states, steps, visitedLoops,
-                                                          branches);
-          specificGlobalInvariantGenerator.GeneratePathLemma();
-        }
-
-        base.GeneratePathLemma();
-      }
-
-      protected override List<string> GetExtraInvocationParameters()
-      {
-        return new List<string> { "s'", "step" };
-      }
-    }
-
-    public class LocalInvariantsPathLemmaGenerator : PathLemmaGenerator
-    {
-      private List<string> localInvariantNames;
-
-      public LocalInvariantsPathLemmaGenerator(List<string> i_localInvariantNames,
-                                               ProofGenerationParams i_pgp, string i_pathName, string i_methodName, List<PCNode> i_states,
-                                               List<StepDescriptor> i_steps, Dictionary<ArmadaPC, int> i_visitedLoops,
-                                               List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        localInvariantNames = i_localInvariantNames;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "LocalInvariants";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures cr.local_inv(ss.state, tid)\n";
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return "requires tid in cr.actor_info(ss.state)\n";
-      }
-
-      protected override string GetPathLemmaBody()
-      {
-        string str = "";
-        var callParams = new List<string> { "cr", "tid", "ss" };
-        callParams.AddRange(Enumerable.Range(0, states.Count).Select(n => $"ss{n}"));
-        callParams.AddRange(Enumerable.Range(0, steps.Count).Select(n => $"sstep{n}"));
-        var callParamsJoined = String.Join(", ", callParams);
-        var pathName = AssumeIntroProofGenerator.GetPathName(methodName, states, branches);
-        foreach (var localInvariantName in localInvariantNames)
-        {
-          str += $"  lemma_SpecificLocalInv_{localInvariantName}_PathLemma_{pathName}({callParamsJoined});\n";
-        }
-        return str;
-      }
-
-      public override void GeneratePathLemma()
-      {
-        foreach (var localInvariantName in localInvariantNames)
-        {
-          var specificLocalInvariantGenerator =
-            new SpecificLocalInvariantPathLemmaGenerator(localInvariantName, pgp, pathName, methodName, states,
-                                                         steps, visitedLoops, branches);
-          specificLocalInvariantGenerator.GeneratePathLemma();
-        }
-
-        base.GeneratePathLemma();
-      }
-    }
-
-    public class EnablementConditionsPathLemmaGenerator : PathLemmaGenerator
-    {
-      public EnablementConditionsPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                    List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                    Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "EnablementConditions";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override List<string> GetExtraInvocationParameters()
-      {
-        return new List<string> { "s'", "step" };
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ss.started
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures cr.enablement_condition(ss.state, tid)\n";
-      }
-
-      protected override string GetPathLemmaBody()
-      {
-        return @"
-          lemma_StoreBufferAppendHasEffectOfAppendedEntryAlways_L();
-          lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
-        ";
-      }
-    }
-
-    public class PreconditionsForCallsPathLemmaGenerator : PathLemmaGenerator
-    {
-      public PreconditionsForCallsPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                     List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                     Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "PreconditionsForCalls";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override List<string> GetExtraInvocationParameters()
-      {
-        return new List<string> { "s'", "step" };
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ss.started
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-          requires tid in cr.actor_info(ss.state)
-          requires tid in cr.actor_info(s')
-          requires var pc := cr.actor_info(ss.state)[tid].pc; cr.pc_type(pc).CallSite?
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return $@"
-          ensures cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[tid].pc), s', tid)
-        ";
-      }
-    }
-
-    public class PreconditionsForForksPathLemmaGenerator : PathLemmaGenerator
-    {
-      public PreconditionsForForksPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                     List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                     Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "PreconditionsForForks";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "other_tid:Armada_ThreadHandle", "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override List<string> GetExtraInvocationParameters()
-      {
-        return new List<string> { "other_tid", "s'", "step" };
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ss.started
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-          requires tid in cr.actor_info(ss.state)
-          requires tid in cr.actor_info(s')
-          requires other_tid !in cr.actor_info(ss.state)
-          requires other_tid in cr.actor_info(s')
-          requires var pc := cr.actor_info(ss.state)[tid].pc; cr.pc_type(pc).ForkSite?
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return $@"
-          ensures cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[other_tid].pc), s', other_tid)
-        ";
-      }
-    }
-
-    public class PostconditionsPathLemmaGenerator : PathLemmaGenerator
-    {
-      public PostconditionsPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName, List<PCNode> i_states,
-                                              List<StepDescriptor> i_steps, Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "Postconditions";
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return $@"
-          requires tid in cr.actor_info(ss.state)
-          requires var pc := cr.actor_info(ss.state)[tid].pc; cr.pc_type(pc).ReturnSite?
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        string initialState = (behavior ? "b.states[0]" : "ss0");
-        return $"ensures cr.ensures_clauses(LProcName_{methodName}, {initialState}.state, ss.state, tid)\n";
-      }
-    }
-
-    public class LoopModifiesClausesOnEntryPathLemmaGenerator : PathLemmaGenerator
-    {
-      public LoopModifiesClausesOnEntryPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                          List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                          Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "LoopModifiesClausesOnEntry";
-      }
-
-      protected override bool UseVisitedLoops { get { return true; } }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires tid in cr.actor_info(ss.state)
-          requires var pc := cr.actor_info(ss.state)[tid].pc;
-                   cr.pc_type(pc).LoopHead? && pc in cr.loop_modifies_clauses && pc !in ss.visited_loops
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures var pc := cr.actor_info(ss.state)[tid].pc; cr.loop_modifies_clauses[pc](ss.state, ss.state, tid)\n";
-      }
-    }
-
-    public class LoopModifiesClausesOnJumpBackPathLemmaGenerator : PathLemmaGenerator
-    {
-      public LoopModifiesClausesOnJumpBackPathLemmaGenerator(ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                             List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                             Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "LoopModifiesClausesOnJumpBack";
-      }
-
-      protected override bool UseVisitedLoops { get { return true; } }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires tid in cr.actor_info(ss.state)
-          requires var pc := cr.actor_info(ss.state)[tid].pc;
-                   cr.pc_type(pc).LoopHead? && pc in cr.loop_modifies_clauses && pc in ss.visited_loops
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures var pc := cr.actor_info(ss.state)[tid].pc; cr.loop_modifies_clauses[pc](ss.visited_loops[pc], ss.state, tid)\n";
-      }
-    }
-
-    public class YieldPredicateForOtherActorPathLemmaGenerator : PathLemmaGenerator
-    {
-      private Dictionary<string, string> yieldPredicateNames;
-
-      public YieldPredicateForOtherActorPathLemmaGenerator(Dictionary<string, string> i_yieldPredicateNames,
-                                                           ProofGenerationParams i_pgp, string i_pathName, string i_methodName,
-                                                           List<PCNode> i_states, List<StepDescriptor> i_steps,
-                                                           Dictionary<ArmadaPC, int> i_visitedLoops, List<bool> i_branches)
-        : base(i_pgp, i_pathName, i_methodName, i_states, i_steps, i_visitedLoops, i_branches)
-      {
-        yieldPredicateNames = i_yieldPredicateNames;
-      }
-
-      protected override string GetLemmaType()
-      {
-        return "YieldPredicateForOtherActor";
-      }
-
-      protected override List<string> GetExtraFormals()
-      {
-        return new List<string> { "other_tid:Armada_ThreadHandle", "s':LPlusState", "step:L.Armada_TraceEntry" };
-      }
-
-      protected override List<string> GetExtraInvocationParameters()
-      {
-        return new List<string> { "other_tid", "s'", "step" };
-      }
-
-      protected override string GetExtraRequires()
-      {
-        return @"
-          requires ss.started
-          requires ActionTuple(ss.state, s', step) in cr.spec.next
-          requires cr.idmap(step).Some?
-          requires cr.idmap(step).v == tid
-          requires tid != other_tid
-        ";
-      }
-
-      protected override string GetEnsures(bool behavior)
-      {
-        return "ensures cr.yield_pred(ss.state, s', other_tid)\n";
-      }
-
-      protected override string GetPathLemmaBody()
-      {
-        string str = @"
-          var s := ss.state;
-          if s'.s.stop_reason.Armada_NotStopped? {
-            assert s.s.stop_reason.Armada_NotStopped?;
-          }
-          if other_tid in s.s.threads {
-            assert other_tid in s'.s.threads;
-            assert s'.s.threads[other_tid].pc == s.s.threads[other_tid].pc;
-            assert s'.s.threads[other_tid].stack == s.s.threads[other_tid].stack;
-          }
-          if s'.s.stop_reason.Armada_NotStopped? && other_tid in s.s.threads {
-        ";
-        var callParams = new List<string> { "cr", "tid", "ss" };
-        callParams.AddRange(Enumerable.Range(0, states.Count).Select(n => $"ss{n}"));
-        callParams.AddRange(Enumerable.Range(0, steps.Count).Select(n => $"sstep{n}"));
-        callParams.Add("other_tid");
-        callParams.Add("s'");
-        callParams.Add("step");
-        var callParamsJoined = String.Join(", ", callParams);
-        var pathName = AssumeIntroProofGenerator.GetPathName(methodName, states, branches);
-        foreach (var yieldPredicatePair in yieldPredicateNames)
-        {
-          str += $"  lemma_SpecificYieldPredicateForOtherActor_{yieldPredicatePair.Key}_PathLemma_{pathName}({callParamsJoined});\n";
-        }
-        str += "}";
-        return str;
-      }
-
-      public override void GeneratePathLemma()
-      {
-        foreach (var yieldPredicatePair in yieldPredicateNames)
-        {
-          var specificYieldPredicateGenerator =
-            new SpecificYieldPredicatePathLemmaGenerator(yieldPredicatePair.Key, yieldPredicatePair.Value,
-                                                         pgp, pathName, methodName, states, steps, visitedLoops, branches);
-          specificYieldPredicateGenerator.GeneratePathLemma();
-        }
-
-        base.GeneratePathLemma();
-      }
-    }
-
-    public class AssumeIntroPCNodeVisitor : IPCNodeVisitor
-    {
-      public readonly AssumeIntroProofGenerator proofGenerator;
-
-      public AssumeIntroPCNodeVisitor(AssumeIntroProofGenerator i_proofGenerator)
-      {
-        proofGenerator = i_proofGenerator;
-      }
-
-      public void Visit(string methodName, List<PCNode> states, List<StepDescriptor> steps,
-                        Dictionary<ArmadaPC, int> visitedLoops, List<bool> branches)
-      {
-        var pathName = AssumeIntroProofGenerator.GetPathName(methodName, states, branches);
-        proofGenerator.GeneratePathProofFile(pathName);
-        proofGenerator.GeneratePerPathLemma(pathName, methodName, states, steps, visitedLoops, branches);
-        proofGenerator.GeneratePathPrefixLemma(pathName, methodName, states, steps, visitedLoops, branches);
-      }
-    }
-
     private AssumeIntroStrategyDecl strategy;
+    private List<ArmadaPC> lpcs;
     private Dictionary<string, string> globalInvariantNames;
     private Dictionary<string, string> yieldPredicateNames;
-    private Dictionary<ArmadaPC, List<string>> localInvariantNames;
+    private Dictionary<string, List<string>> extraPreconditionsForMethod;
+    private Dictionary<string, List<string>> extraPostconditionsForMethod;
+    private Dictionary<ArmadaPC, List<string>> extraLoopModifiesClausesForPC;
+    private Dictionary<ArmadaPC, List<string>> extraLocalInvariantClausesForPC;
+    private HashSet<ArmadaPC> lExtraRecurrentPCs, hExtraRecurrentPCs;
     private List<string> methodsWithPostconditions;
-    private List<ArmadaPC> loopHeads;
+    private HashSet<ArmadaPC> loopHeads;
     private HashSet<ArmadaPC> pcsWithEnablingConditions;
-    private ProofFile pathPrefixFile;
-    private ProofFile defsFile;
+    private HashSet<ArmadaPC> pcsWithLocalInvariants;
+    private ProofFile pcstackFile;
+    private ProofFile sbdFile;
+    private ProofFile exhaustiveFile;
+    private Dictionary<string, ArmadaPC> returnPCForMethod;
+    private Dictionary<AtomicPath, CHLPathEffect> pathEffectMap;
+    private Dictionary<ArmadaPC, List<AtomicPath>> pathsStartingAtPC;
+    private List<StraightlineBehavior> straightlineBehaviorDescriptors;
+    private Dictionary<string, StraightlineBehavior> emptyStraightlineBehaviorForMethod;
+    private List<StraightlineBehavior> sbdsEndingNormal, sbdsEndingEnsured, sbdsEndingYielded;
+    private Dictionary<string, List<string>> preconditionsForMethod;
 
     public AssumeIntroProofGenerator(ProofGenerationParams i_pgp, AssumeIntroStrategyDecl i_strategy)
       : base(i_pgp)
     {
       strategy = i_strategy;
+      lpcs = new List<ArmadaPC>();
+      i_pgp.symbolsLow.AllMethods.AppendAllPCs(lpcs);
       globalInvariantNames = new Dictionary<string, string>();
       yieldPredicateNames = new Dictionary<string, string>();
-      localInvariantNames = new Dictionary<ArmadaPC, List<string>>();
+      extraPreconditionsForMethod = new Dictionary<string, List<string>>();
+      extraPostconditionsForMethod = new Dictionary<string, List<string>>();
+      extraLoopModifiesClausesForPC = new Dictionary<ArmadaPC, List<string>>();
+      extraLocalInvariantClausesForPC = new Dictionary<ArmadaPC, List<string>>();
       methodsWithPostconditions = new List<string>();
-      loopHeads = new List<ArmadaPC>();
+      loopHeads = new HashSet<ArmadaPC>();
       pcsWithEnablingConditions = new HashSet<ArmadaPC>();
-      pathPrefixFile = null;
+      pcsWithLocalInvariants = new HashSet<ArmadaPC>();
+      returnPCForMethod = new Dictionary<string, ArmadaPC>();
+      pathEffectMap = new Dictionary<AtomicPath, CHLPathEffect>();
+      pathsStartingAtPC = new Dictionary<ArmadaPC, List<AtomicPath>>();
+      straightlineBehaviorDescriptors = new List<StraightlineBehavior>();
+      emptyStraightlineBehaviorForMethod = new Dictionary<string, StraightlineBehavior>();
+      sbdsEndingEnsured = new List<StraightlineBehavior>();
+      sbdsEndingYielded = new List<StraightlineBehavior>();
+      sbdsEndingNormal = new List<StraightlineBehavior>();
+      preconditionsForMethod = new Dictionary<string, List<string>>();
     }
 
     public override void GenerateProof()
@@ -788,24 +207,60 @@ namespace Microsoft.Armada
         return;
       }
 
+      if (!CheckForBackwardGotos())
+      {
+        return;
+      }
+
       AddIncludesAndImports();
       MakeTrivialPCMap();
+      CreateExtraRecurrentPCs();
+      CreateReturnPCForMethod();
       GenerateNextRoutineMap();
+      DeterminePCsWithEnablingConditions();
       GenerateProofGivenMap();
     }
 
     private void GenerateProofGivenMap()
     {
       GenerateProofHeader();
+      GenerateCustomCHLClauses();
+      ParseProgram();
+      GenerateAtomicSpecs(true, lExtraRecurrentPCs, hExtraRecurrentPCs);
+      CreatePathEffectMap();
+      CreateStoppingPathsStartingAtPC();
+      GeneratePathPCStackEffectLemmas();
+      CreateStraightlineBehaviors();
+      GenerateStraightlineBehaviorDescriptors();
+      GenerateStraightlineBehaviorDescriptorExhaustiveLemmas();
+      GenerateStraightlineBehaviorDescriptorContinuationLemmas();
+      GenerateStraightlineBehaviorDescriptorEnumerationLemmas();
       GenerateStateAbstractionFunctions_LH();
-      GenerateConvertTraceEntry_LH();
+      GenerateConvertStep_LH();
+      GenerateConvertAtomicPath_LH();
       GenerateConcurrentHoareLogicRequest();
       GenerateLocalViewCommutativityLemmas();
       GenerateGenericStoreBufferLemmas_L();
-      GenerateLemmasAboutGetNextState();
       GenerateProofThatCHLRequestIsValid();
       GenerateLemmasForAssumeIntroProof();
       GenerateFinalProof();
+    }
+
+    private void CreateExtraRecurrentPCs()
+    {
+      lExtraRecurrentPCs = new HashSet<ArmadaPC>();
+      foreach (var pc in pgp.symbolsLow.EnumeratePotentialRecurrentPCs()) {
+        if (pgp.symbolsLow.IsNonyieldingPC(pc)) {
+          lExtraRecurrentPCs.Add(pc);
+        }
+      }
+
+      hExtraRecurrentPCs = new HashSet<ArmadaPC>();
+      foreach (var pc in pgp.symbolsHigh.EnumeratePotentialRecurrentPCs()) {
+        if (pgp.symbolsHigh.IsNonyieldingPC(pc)) {
+          hExtraRecurrentPCs.Add(pc);
+        }
+      }
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -816,164 +271,133 @@ namespace Microsoft.Armada
     {
       base.AddIncludesAndImports();
 
-      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/ConcurrentHoareLogic.i.dfy");
+      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogic.i.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/sets.i.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy");
+      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaLemmas.i.dfy");
 
       pgp.MainProof.AddImport("InvariantsModule");
       pgp.MainProof.AddImport("ConcurrentHoareLogicSpecModule");
-      pgp.MainProof.AddImport("ConcurrentHoareLogicModule");
+      pgp.MainProof.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      pgp.MainProof.AddImport("AtomicConcurrentHoareLogicModule");
       pgp.MainProof.AddImport("util_option_s");
       pgp.MainProof.AddImport("util_collections_seqs_s");
       pgp.MainProof.AddImport("util_collections_seqs_i");
       pgp.MainProof.AddImport("util_collections_sets_i");
       pgp.MainProof.AddImport("util_collections_maps_i");
+      pgp.MainProof.AddImport("GenericArmadaSpecModule");
+      pgp.MainProof.AddImport("GenericArmadaLemmasModule");
 
-      pgp.MainProof.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaLemmas.i.dfy",
-                                     "GenericArmadaLemmasModule");
+      pgp.proofFiles.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy",
+                                "defs");
+      pgp.proofFiles.AddImport("ConcurrentHoareLogicSpecModule", null, "defs");
+      pgp.proofFiles.AddImport("AtomicConcurrentHoareLogicSpecModule", null, "defs");
     }
 
     ////////////////////////////////////////////////////////////////////////
     /// PC Info
     ////////////////////////////////////////////////////////////////////////
 
-    private void GeneratePCToProc()
+    private void CreateReturnPCForMethod()
     {
-      string str = @"
-        function PCToProc(pc:L.Armada_PC) : LProcName
-        {
-          match pc
-      ";
-      var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
-      foreach (var pc in pcs)
-      {
-        str += $"    case {pc} => LProcName_{pc.methodName}";
-      }
-      str += "}";
-      pgp.AddFunction(str, "defs");
+      returnPCForMethod = pgp.symbolsLow.MethodNames.ToDictionary(
+        methodName => methodName,
+        methodName => pgp.symbolsLow.AllMethods.LookupMethod(methodName).ReturnPC
+      );
     }
 
-    private void GenerateIsEntryPoint()
+    private CHLPathEffect GetCHLPathEffect(AtomicPath atomicPath)
     {
-      string str = @"
-        predicate IsEntryPoint(pc:L.Armada_PC)
-        {
-          match pc
-      ";
-      var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
-      foreach (var pc in pcs)
-      {
-        str += $"    case {pc} => ";
-        if (pc.instructionCount == 0)
-        {
-          str += "true\n";
+      if (atomicPath.Stopping) {
+        return new CHLPathEffectStop(atomicPath.StartPC);
+      }
+      if (atomicPath.Tau) {
+        return new CHLPathEffectActorless();
+      }
+
+      // Because all entry points and return sites of methods are considered yield or recurrent
+      // points, a path can only return (or exit) as its first routine and can only call as its last
+      // routine.  So, those are the only routines we need to look at to tell whether a path calls
+      // or returns.
+
+      var firstRoutine = atomicPath.NextRoutines[0];
+      var lastRoutine = atomicPath.LastNextRoutine;
+
+      if (firstRoutine.nextType == NextType.TerminateThread) {
+        return new CHLPathEffectExit(lastRoutine.startPC);
+      }
+      else if (firstRoutine.nextType == NextType.TerminateProcess) {
+        return new CHLPathEffectStop(lastRoutine.startPC);
+      }
+      else if (firstRoutine.nextType == NextType.Return) {
+        var effectiveStartPC = firstRoutine.endPC;
+        if (lastRoutine.nextType == NextType.Call) {
+          var effectiveEndPC = ((ArmadaCallStatement)lastRoutine.armadaStatement).EndPC;
+          return new CHLPathEffectReturnThenCall(atomicPath.StartPC, atomicPath.EndPC, effectiveStartPC, effectiveEndPC);
         }
-        else
-        {
-          str += "false\n";
+        else {
+          return new CHLPathEffectReturn(atomicPath.StartPC, atomicPath.EndPC, effectiveStartPC);
         }
       }
-      str += "}\n";
-      pgp.AddPredicate(str, "defs");
+      else if (lastRoutine.nextType == NextType.Call) {
+        var effectiveEndPC = ((ArmadaCallStatement)lastRoutine.armadaStatement).EndPC;
+        return new CHLPathEffectCall(atomicPath.StartPC, atomicPath.EndPC, effectiveEndPC);
+      }
+
+      // There were no returns or calls, so this path just has a normal effect.
+
+      return new CHLPathEffectNormal(atomicPath.StartPC, atomicPath.EndPC);
     }
 
-    enum PCType { Normal, Call, Fork, Return, LoopHead }
-
-    private void GeneratePCType()
+    private void CreatePathEffectMap()
     {
-      var pcType = new Dictionary<ArmadaPC, PCType>();
-
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
+      foreach (var atomicPath in lAtomic.AtomicPaths)
       {
-        switch (nextRoutine.nextType)
-        {
-          case NextType.Call:
-            {
-              pcType[nextRoutine.pc] = PCType.Call;
+        var effect = GetCHLPathEffect(atomicPath);
+        pathEffectMap[atomicPath] = effect;
+      }
+    }
+
+    private void CreateStoppingPathsStartingAtPC()
+    {
+      foreach (var pc in lpcs)
+      {
+        pathsStartingAtPC[pc] = new List<AtomicPath>();
+      }
+      foreach (var atomicPath in lAtomic.AtomicPaths.Where(ap => !ap.Tau))
+      {
+        pathsStartingAtPC[atomicPath.StartPC].Add(atomicPath);
+      }
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// Static checks
+    ////////////////////////////////////////////////////////////////////////
+
+    private bool CheckForBackwardGotos()
+    {
+      var allMethodsInfo = pgp.symbolsLow.AllMethods;
+      foreach (var methodName in allMethodsInfo.AllMethodNames) {
+        var methodInfo = allMethodsInfo.LookupMethod(methodName);
+        if (methodInfo.method.Body != null) {
+          foreach (var stmt in methodInfo.ParsedBody) {
+            if (stmt is ArmadaGotoStatement) {
+              var startPC = stmt.StartPC;
+              var s = (GotoStmt)(stmt.Stmt);
+              var targetPC = pgp.symbolsLow.GetPCForMethodAndLabel(methodInfo.method.Name + "_" + s.Target);
+              if (targetPC == null || targetPC.instructionCount <= startPC.instructionCount) {
+                AH.PrintError(pgp.prog, s.Tok, $"Only forward gotos are supported by assume-intro proofs");
+                return false;
+              }
             }
-            break;
-
-          case NextType.CreateThread:
-            pcType[nextRoutine.pc] = PCType.Fork;
-            break;
-
-          case NextType.Update:
-          case NextType.Malloc:
-          case NextType.Calloc:
-          case NextType.IfTrue:
-          case NextType.IfFalse:
-          case NextType.JumpPastElse:
-          case NextType.WhileTrue:
-          case NextType.WhileFalse:
-          case NextType.WhileEnd:
-          case NextType.WhileBreak:
-          case NextType.WhileContinue:
-          case NextType.Assert:
-          case NextType.Somehow:
-          case NextType.Join:
-          case NextType.ExternStart:
-          case NextType.ExternContinue:
-          case NextType.ExternEnd:
-            pcType[nextRoutine.pc] = PCType.Normal;
-            break;
-
-          case NextType.Return:
-          case NextType.Terminate:
-          case NextType.Tau:
-            break;
+          }
         }
       }
 
-      foreach (var pc in loopHeads) {
-        pcType[pc] = PCType.LoopHead;
-      }
-
-      foreach (var methodName in pgp.symbolsLow.MethodNames)
-      {
-        var methodInfo = pgp.symbolsLow.AllMethods.LookupMethod(methodName);
-        foreach (var returnPC in methodInfo.ReturnPCs)
-        {
-          pcType[returnPC] = PCType.Return;
-        }
-      }
-
-      string str = @"
-        function GetPCType(pc:L.Armada_PC) : PCType<L.Armada_PC>
-        {
-          match pc
-      ";
-      var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
-      foreach (var pc in pcs)
-      {
-        str += $"      case {pc} => ";
-        switch (pcType[pc])
-        {
-          case PCType.Normal:
-            str += "NormalPC";
-            break;
-          case PCType.Call:
-            str += "CallSite";
-            break;
-          case PCType.Fork:
-            str += "ForkSite";
-            break;
-          case PCType.Return:
-            str += "ReturnSite";
-            break;
-          case PCType.LoopHead:
-            str += "LoopHead";
-            break;
-        }
-        str += "\n";
-      }
-      str += "}";
-      pgp.AddFunction(str, "defs");
+      return true;
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -982,100 +406,197 @@ namespace Microsoft.Armada
 
     private void GenerateConcurrentHoareLogicRequest()
     {
-      defsFile = pgp.proofFiles.CreateAuxiliaryProofFile("defs");
-      defsFile.IncludeAndImportGeneratedFile("specs");
-      defsFile.IncludeAndImportGeneratedFile("convert");
-      defsFile.IncludeAndImportGeneratedFile("invariants");
-      defsFile.IncludeAndImportGeneratedFile("utility");
-      defsFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/ConcurrentHoareLogic.i.dfy");
-      defsFile.AddImport("ConcurrentHoareLogicSpecModule");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
-      defsFile.AddImport("util_collections_seqs_s");
-      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("defs");
-
-      var lplusstate = AH.ReferToType("LPlusState");
-      var handle = AH.ReferToType("Armada_ThreadHandle");
-      var lstep = AH.ReferToType("L.Armada_TraceEntry");
-      var lpc = AH.ReferToType("L.Armada_PC");
-      var lproc = AH.ReferToType("LProcName");
-      var chlrequest = AH.MakeGenericTypeSpecific("ConcurrentHoareLogicRequest", new List<Type> { lplusstate, handle, lstep, lpc, lproc });
-      defsFile.AddTypeSynonymDecl("CHLRequest", chlrequest);
-      var straightlineState = AH.MakeGenericTypeSpecific("StraightlineState", new List<Type> { lplusstate, lpc });
-      defsFile.AddTypeSynonymDecl("SState", straightlineState);
-      var straightlineStep = AH.MakeGenericTypeSpecific("StraightlineStep", new List<Type> { lplusstate, lstep });
-      defsFile.AddTypeSynonymDecl("SStep", straightlineStep);
-
-      var datatypeCtors = new List<DatatypeCtor>();
-      foreach (var methodName in pgp.symbolsLow.MethodNames)
-      {
-        datatypeCtors.Add(AH.MakeDatatypeCtor($"LProcName_{methodName}", new List<Formal>()));
-      }
-      defsFile.AddDatatypeDecl("LProcName", datatypeCtors);
-
       string str;
 
-      str = @"
-        function MapStepToThread(step:L.Armada_TraceEntry) : Option<Armada_ThreadHandle>
-        {
-          if step.Armada_TraceEntry_Tau? then None else Some(step.tid)
-        }
+      str = "datatype LProcName = ";
+      str += String.Join(" | ", pgp.symbolsLow.MethodNames.Select(methodName => $"LProcName_{methodName}"));
+      pgp.AddDatatype(str, "defs");
+
+      str = $@"
+        type CHLRequest = ConcurrentHoareLogicRequest<LPlusState, Armada_ThreadHandle, PathAndTid<LAtomic_Path>, L.Armada_PC, LProcName>
       ";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = @"
+        type AtomicCHLRequest = AtomicConcurrentHoareLogicRequest<LPlusState, LAtomic_Path, L.Armada_PC, LProcName,
+                                                                  H.Armada_TotalState, HAtomic_Path, H.Armada_PC>
+      ";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = "type LAtomicStraightlineState = StraightlineState<LPlusState, L.Armada_PC>";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = "type LAtomicStraightlineStep = StraightlineStep<PathAndTid<LAtomic_Path>, L.Armada_PC, LProcName>";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = "type LAtomicStraightlineBehavior = AnnotatedBehavior<LAtomicStraightlineState, LAtomicStraightlineStep>";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = "type LAtomicStraightlineBehaviorSpec = AnnotatedBehaviorSpec<LAtomicStraightlineState, LAtomicStraightlineStep>";
+      pgp.AddTypeSynonym(str, "defs");
+
+      str = @"
+        function PCToProc(pc:L.Armada_PC) : LProcName
+        {
+          match pc
+      ";
+      foreach (var pc in lpcs)
+      {
+        str += $"    case {pc} => LProcName_{pc.methodName}";
+      }
+      str += "}";
       pgp.AddFunction(str, "defs");
 
       str = @"
-        function GetThreadPCStack(t:L.Armada_Thread) : PCStack<L.Armada_PC>
+        predicate StateOK(s:LPlusState)
         {
-          PCStack(t.pc, MapSeqToSeq(t.stack, (e:L.Armada_ExtendedFrame) => e.return_pc))
-        }
-      ";
-      pgp.AddFunction(str, "defs");
-
-      str = @"
-        function ActorInfo(s:LPlusState) : imap<Armada_ThreadHandle, PCStack<L.Armada_PC>>
-        {
-          imap tid | tid in s.s.threads :: GetThreadPCStack(s.s.threads[tid])
-        }
-      ";
-      pgp.AddFunction(str, "defs");
-
-      GenerateLOneStepSpec(true);
-      GeneratePCToProc();
-      GenerateIsEntryPoint();
-      ParseProgram();
-      GeneratePCType();
-      GenerateGlobalInvariant();
-      GenerateLocalInvariant();
-      GenerateEnablementCondition();
-      GenerateYieldPredicate();
-      GenerateRequiresClauses();
-      GenerateEnsuresClauses();
-      GenerateInvariantProof(pgp);
-
-      str = @"
-        predicate GenericLoopModifiesClause(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
-        {
-          && (s'.s.stop_reason.Armada_NotStopped? ==> s.s.stop_reason.Armada_NotStopped?)
-          && (s'.s.stop_reason.Armada_NotStopped? && tid in s.s.threads && tid in s'.s.threads ==>
-                s'.s.threads[tid].stack == s.s.threads[tid].stack)
+          s.s.stop_reason.Armada_NotStopped?
         }
       ";
       pgp.AddPredicate(str, "defs");
 
-      var mapLiteral = string.Join(", ", loopHeads.Select(pc => $"L.{pc} := LoopInvariant_{pc}"));
-      str = $@"
-        function GetLoopModifiesClauses() : map<L.Armada_PC, (LPlusState, LPlusState, Armada_ThreadHandle)->bool>
-        {{
-          map [{mapLiteral}]
-        }}
+      str = @"
+        function GetCHLSpec() : AnnotatedBehaviorSpec<LPlusState, PathAndTid<LAtomic_Path>>
+        {
+          var asf := LAtomic_GetSpecFunctions();
+          AnnotatedBehaviorSpec(iset s | asf.init(s),
+                                iset s, s', path, tid | asf.path_valid(s, path, tid) && s' == asf.path_next(s, path, tid)
+                                                      :: ActionTuple(s, s', PathAndTid(path, tid)))
+        }
       ";
       pgp.AddFunction(str, "defs");
 
       str = @"
+        function PathAndTidToTid(path_and_tid:PathAndTid<LAtomic_Path>) : Option<Armada_ThreadHandle>
+        {
+          if path_and_tid.path.LAtomic_Path_Tau? then None else Some(path_and_tid.tid)
+        }
+      ";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function GetThreadPCStack(s:LPlusState, tid:Armada_ThreadHandle) : Option<PCStack<L.Armada_PC, LProcName>>
+        {
+          if tid in s.s.threads then
+            var t := s.s.threads[tid];
+            Some(PCStack(t.pc, MapSeqToSeq(t.stack, (e:L.Armada_ExtendedFrame) => PCToProc(e.return_pc))))
+          else
+            None
+        }
+      ";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function PathToProc(path: LAtomic_Path) : LProcName
+        {
+          match path
+      ";
+      str += String.Concat(lAtomic.AtomicPaths.Select(path => $@"
+            case LAtomic_Path_{path.Name}(_) => LProcName_{pathEffectMap[path].ProcName}
+      "));
+      str += "}";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function PathAndTidToProc(path_and_tid: PathAndTid<LAtomic_Path>) : LProcName
+        {
+          PathToProc(path_and_tid.path)
+        }
+      ";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function PathToEffect(path: LAtomic_Path) : CHLStepEffect<LProcName>
+        {
+          match path
+      ";
+      str += String.Concat(lAtomic.AtomicPaths.Select(path => $@"
+            case LAtomic_Path_{path.Name}(_) => {pathEffectMap[path].Constructor}
+      "));
+      str += "}";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function PathAndTidToEffect(path_and_tid: PathAndTid<LAtomic_Path>) : CHLStepEffect<LProcName>
+        {
+          PathToEffect(path_and_tid.path)
+        }
+      ";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        predicate IsEntryPoint(pc: L.Armada_PC)
+        {
+      ";
+      str += String.Join(" || ", lpcs.Where(pc => pc.instructionCount == 0).Select(pc => $"pc.{pc}?"));
+      str += "}";
+      pgp.AddPredicate(str, "defs");
+
+      str = @"
+        predicate IsLoopHead(pc: L.Armada_PC)
+        {
+      ";
+      str += AH.CombineStringsWithOr(loopHeads.Select(pc => $"pc.{pc}?"));
+      str += "}";
+      pgp.AddPredicate(str, "defs");
+
+      str = @"
+        predicate IsReturnSite(pc: L.Armada_PC)
+        {
+      ";
+      str += String.Join(" || ", returnPCForMethod.Select(e => $"pc.{e.Value}?"));
+      str += "}";
+      pgp.AddPredicate(str, "defs");
+
+      str = @"
+        predicate ThreadAtReturnSite(s: LPlusState, tid: Armada_ThreadHandle, proc: LProcName)
+        {
+          && tid in s.s.threads
+          && var pc := s.s.threads[tid].pc;
+          && IsReturnSite(pc)
+          && PCToProc(pc) == proc
+        }
+      ";
+      pgp.AddPredicate(str, "defs");
+
+      GenerateGlobalInvariant();
+      GenerateLocalInv();
+      GenerateYieldPredicate();
+      GenerateRequiresClauses();
+      GenerateEnsuresClauses();
+
+      GenerateInvariantProof(pgp);
+
+      var mapLiteral = string.Join(", ", loopHeads.Select(pc => $"L.{pc} := LoopModifies_{pc}"));
+      str = @"
+        predicate LoopModifiesClauses(pc:L.Armada_PC, s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+        {
+          && s.config == s'.config
+          && match pc
+      ";
+      str += String.Concat(loopHeads.Select(pc => $"case {pc} => LoopModifies_{pc}(s, s', tid)\n"));
+      str += @"
+            case _ => false
+        }
+      ";
+      pgp.AddPredicate(str, "defs");
+
+      str = @"
         function GetConcurrentHoareLogicRequest() : CHLRequest
         {
-          ConcurrentHoareLogicRequest(GetLOneStepSpec(), MapStepToThread, ActorInfo, PCToProc, IsEntryPoint, GetPCType, InductiveInv, GlobalInv, LocalInv, EnablementCondition, YieldPredicate, RequiresClauses, EnsuresClauses, GetLoopModifiesClauses())
+          ConcurrentHoareLogicRequest(GetCHLSpec(), PathAndTidToTid, PathAndTidToProc, GetThreadPCStack,
+                                      StateOK, PCToProc, IsEntryPoint, IsLoopHead,
+                                      IsReturnSite, PathAndTidToEffect, InductiveInv, GlobalInv, LocalInv,
+                                      YieldPredicate, RequiresClauses, EnsuresClauses, LoopModifiesClauses)
+        }
+      ";
+      pgp.AddFunction(str, "defs");
+
+      str = @"
+        function GetAtomicConcurrentHoareLogicRequest() : AtomicCHLRequest
+        {
+          AtomicConcurrentHoareLogicRequest(GetConcurrentHoareLogicRequest(), LAtomic_GetSpecFunctions(), HAtomic_GetSpecFunctions(),
+                                            GetLPlusHRefinementRelation(), ConvertTotalState_LPlusH, ConvertAtomicPath_LH, ConvertPC_LH)
         }
       ";
       pgp.AddFunction(str, "defs");
@@ -1087,75 +608,51 @@ namespace Microsoft.Armada
       {
         var methodInfo = pgp.symbolsHigh.AllMethods.LookupMethod(methodName);
         var method = methodInfo.method;
-        TurnRequirementsIntoLocalPredicates(method);
+        TurnRequirementsIntoLocalPredicates(pgp.symbolsLow, method);
         CreatePostconditionsPredicate(method);
         if (method.Body is null)
         {
           // PC 1 corresponds to the head of the loop that repeatedly checks for the postcondition
           var pc = new ArmadaPC(pgp.symbolsLow, methodName, 1);
           loopHeads.Add(pc);
-          ProcessWhileStatementInvariants(pc, new List<MaybeFreeExpression>());
+          ProcessWhileStatementInvariants(pc, new List<MaybeFreeExpression>(), new List<Expression>());
         }
         else
         {
           foreach (var stmt in methodInfo.ParsedBody) {
             if (stmt is ArmadaWhileStatement) {
               var s = (ArmadaWhileStatement)stmt;
+              var ws = (WhileStmt)s.Stmt;
               var lowPC = s.StartPC.CloneWithNewSymbolTable(pgp.symbolsLow);
               loopHeads.Add(lowPC);
-              ProcessWhileStatementInvariants(lowPC, ((WhileStmt)s.Stmt).Invariants);
+              ProcessWhileStatementInvariants(lowPC, ws.Invariants, ws.Ens);
             }
           }
         }
       }
     }
 
-    private List<Formal> GetFormalsForLocalPredicate()
-    {
-      return new List<Formal> { AH.MakeFormal("s", "LPlusState"), AH.MakeFormal("tid", "Armada_ThreadHandle") };
-    }
-    private List<Formal> GetFormalsForLocalTwoStatePredicate()
-    {
-      return new List<Formal> { AH.MakeFormal("s", "LPlusState"), AH.MakeFormal("s'", "LPlusState"), AH.MakeFormal("tid", "Armada_ThreadHandle") };
-    }
-
     private string CreateStackCorrectAtStartPredicate(Method method)
     {
       var stackInvName = $"StackCorrectAtStart_{method.Name}";
-      var splus = AH.MakeNameSegment("s", "LPlusState");
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-      var s = AH.MakeExprDotName(splus, "s", "LState");
 
       // predicate {stackInvName}(s:LPlusState, tid:Armada_ThreadHandle)
       // {
-      //   s.s.stop_reason.Armada_NotStopped? ==>
-      //     && tid in s.s.threads
-      //     && s.s.threads[tid].top.Armada_StackFrame_{method.Name}?
-      //     && s.s.threads[tid].pc.{initialPC}?
-      //     && <for each initialized variable, that variable is initialized correctly>
+      //   && tid in s.s.threads
+      //   && s.s.threads[tid].top.Armada_StackFrame_{method.Name}?
+      //   && s.s.threads[tid].pc.{initialPC}?
+      //   && <for each initialized variable, that variable's initialization doesn't crash>
       // }
 
-      var preds = new List<Expression>();
-
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      preds.Add(tid_in_threads);
-
-      var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      var top = AH.MakeExprDotName(thread, "top", AH.MakeStackFrameType());
-      var method_running = AH.MakeExprDotName(top, $"Armada_StackFrame_{method.Name}?", new BoolType());
-      preds.Add(method_running);
-
-      var pc = AH.MakeExprDotName(thread, "pc", "L.Armada_PC");
       var initialPC = new ArmadaPC(pgp.symbolsLow, method.Name, 0);
-      var pc_correct = AH.MakeExprDotName(pc, $"{initialPC}?", new BoolType());
-      preds.Add(pc_correct);
+      var preds = new List<string>{ "tid in s.s.threads", $"s.s.threads[tid].top.Armada_StackFrame_{method.Name}?",
+                                    $"s.s.threads[tid].pc.{initialPC}?" };
 
       var smst = pgp.symbolsLow.GetMethodSymbolTable(method.Name);
       foreach (var v in smst.AllVariablesInOrder.Where(v => v.InitialValue != null))
       {
         var failureReporter = new SimpleFailureReporter(pgp.prog);
-        var context = new RequiresResolutionContext(s, tid, method.Name, pgp.symbolsLow, failureReporter, "L");
+        var context = new RequiresResolutionContext("s.s", "tid", method.Name, pgp.symbolsLow, failureReporter, "L");
         var ty = pgp.symbolsLow.FlattenType(v.ty);
         var lhsRVal = v.GetRValue(v.InitialValue.tok, context);
         var rhsRVal = context.ResolveAsRValue(v.InitialValue);
@@ -1163,135 +660,80 @@ namespace Microsoft.Armada
           preds.Add(rhsRVal.UndefinedBehaviorAvoidance.Expr);
         }
 
-        preds.Add(AH.MakeEqExpr(lhsRVal.Val, rhsRVal.Val));
+        preds.Add($"({lhsRVal.Val}) == ({rhsRVal.Val})");
       }
 
-      var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-      var s_not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-      var body = AH.MakeImpliesExpr(s_not_stopped, AH.CombineExpressionsWithAnd(preds));
-      var formals = new List<Formal> { AH.MakeFormal("s", "LPlusState"), AH.MakeFormal("tid", "Armada_ThreadHandle") };
-      var pred = AH.MakePredicate(stackInvName, formals, body);
-
-      pgp.AddDefaultClassDecl(pred, "defs");
+      var str = $@"
+        predicate {stackInvName}(s: LPlusState, tid: Armada_ThreadHandle)
+        {{
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(str, "defs");
       return stackInvName;
     }
 
-    private void TurnRequirementsIntoLocalPredicates(Method method)
+    private void TurnRequirementsIntoLocalPredicates(ArmadaSymbolTable symbols, Method method)
     {
       var preconditionNames = new List<string>();
+      preconditionsForMethod[method.Name] = preconditionNames;
 
       var stackInvName = CreateStackCorrectAtStartPredicate(method);
-      preconditionNames.Add(stackInvName);
-
-      var splus = AH.MakeNameSegment("s", "LPlusState");
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-      var s = AH.MakeExprDotName(splus, "s", "LState");
-      var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-      var s_not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      var top = AH.MakeExprDotName(thread, "top", AH.MakeStackFrameType());
-      var method_running = AH.MakeExprDotName(top, $"Armada_StackFrame_{method.Name}?", new BoolType());
-      var conditions = AH.CombineExpressionsWithAnd(new List<Expression> { s_not_stopped, tid_in_threads, method_running });
-
-      var formals = GetFormalsForLocalPredicate();
+      if (extraPreconditionsForMethod.ContainsKey(method.Name)) {
+        preconditionNames.AddRange(extraPreconditionsForMethod[method.Name]);
+      }
 
       int reqCount = 0;
       foreach (var req in method.Req)
       {
-        // predicate Precondition_{reqCount}_{method.Name}(s:LPlusState, tid:Armada_ThreadHandle)
+        // predicate Precondition_{reqCount}_{method.Name}(s: LPlusState, tid: Armada_ThreadHandle)
+        //   requires tid in s.s.threads && s.s.threads[tid].top.Armada_StackFrame_{method.Name}?
         // {
-        //   s.s.stop_reason.Armada_NotStopped? && tid in s.s.threads && s.s.threads[tid].top.Armada_StackFrame_{method.Name}?
-        //     ==> <things that prevent requires clause expression from crashing> && <requires clause>
+        //   <things that prevent requires clause expression from crashing> && <requires clause>
         // }
 
         reqCount++;
         var reqName = $"Precondition_{reqCount}_{method.Name}";
         var failureReporter = new SimpleFailureReporter(pgp.prog);
-        var context = new RequiresResolutionContext(s, tid, method.Name, pgp.symbolsLow, failureReporter, "L");
+        var context = new RequiresResolutionContext("s.s", "tid", method.Name, pgp.symbolsLow, failureReporter, "L");
         if (!failureReporter.Valid) {
           reqCount--;
           continue;
         }
         var rvalue = context.ResolveAsRValue(req.E);
-        var e = rvalue.CanCauseUndefinedBehavior ? AH.MakeAndExpr(rvalue.UndefinedBehaviorAvoidance.Expr, rvalue.Val) : rvalue.Val;
-        e = AH.MakeImpliesExpr(conditions, e);
-        var fn = AH.MakePredicate(reqName, formals, e);
-        pgp.AddDefaultClassDecl(fn, "defs");
+        var body = rvalue.CanCauseUndefinedBehavior ? $"({rvalue.UndefinedBehaviorAvoidance.Expr}) && ({rvalue.Val})" : rvalue.Val;
+
+        var fn = $@"
+          predicate {reqName}(s: LPlusState, tid: Armada_ThreadHandle)
+            requires tid in s.s.threads && s.s.threads[tid].top.Armada_StackFrame_{method.Name}?
+          {{
+            {body}
+          }}
+        ";
+        pgp.AddPredicate(fn, "defs");
         preconditionNames.Add(reqName);
       }
 
-      var ultimatePredName = $"Preconditions_{method.Name}";
-      string str = $"predicate {ultimatePredName}(s:LPlusState, tid:Armada_ThreadHandle) {{\n";
-      bool first = true;
-      foreach (var preconditionName in preconditionNames)
-      {
-        if (!first) { str += "&& "; }
-        str += $"{preconditionName}(s, tid)\n";
-        first = false;
-      }
-      str += "}";
+      string str = $@"
+        predicate Preconditions_{method.Name}(s:LPlusState, tid:Armada_ThreadHandle)
+        {{
+          {stackInvName}(s, tid)
+      ";
+      str += String.Concat(preconditionNames.Select(name => $" && {name}(s, tid)"));
+      str += "}\n";
       pgp.AddPredicate(str, "defs");
-    }
-
-    private Expression GetExpressionIndicatingThreadExistsInBothStates(Expression s, Expression s_prime, Expression tid)
-    {
-      var clauses = new List<Expression>();
-
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      var threads_prime = AH.MakeExprDotName(s_prime, "threads", AH.MakeThreadsType());
-      var tid_in_threads_prime = AH.MakeInExpr(tid, threads_prime);
-
-      return AH.MakeAndExpr(tid_in_threads, tid_in_threads_prime);
-    }
-
-    private Expression GetExpressionIndicatingThreadIsInMethodInBothStates(Expression s, Expression s_prime, Expression tid,
-                                                                           string methodName)
-    {
-      var clauses = new List<Expression>();
-
-      var s_prime_stop_reason = AH.MakeExprDotName(s_prime, "stop_reason", "Armada_StopReason");
-      var s_prime_not_stopped = AH.MakeExprDotName(s_prime_stop_reason, "Armada_NotStopped?", new BoolType());
-      clauses.Add(s_prime_not_stopped);
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      clauses.Add(tid_in_threads);
-      var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      var top = AH.MakeExprDotName(thread, "top", "Armada_StackFrame");
-      var thread_running_method = AH.MakeExprDotName(top, $"Armada_StackFrame_{methodName}?", new BoolType());
-      clauses.Add(thread_running_method);
-      var threads_prime = AH.MakeExprDotName(s_prime, "threads", AH.MakeThreadsType());
-      var tid_in_threads_prime = AH.MakeInExpr(tid, threads_prime);
-      clauses.Add(tid_in_threads_prime);
-      var thread_prime = AH.MakeSeqSelectExpr(threads_prime, tid, "Armada_Thread");
-      var top_prime = AH.MakeExprDotName(thread_prime, "top", "Armada_StackFrame");
-      var thread_prime_running_method = AH.MakeExprDotName(top_prime, $"Armada_StackFrame_{methodName}?", new BoolType());
-      clauses.Add(thread_prime_running_method);
-
-      return AH.CombineExpressionsWithAnd(clauses);
     }
 
     private void CreatePostconditionsPredicate(Method method)
     {
-      var splus = AH.MakeNameSegment("s", "LPlusState");
-      var splus_prime = AH.MakeNameSegment("s'", "LPlusState");
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-      var s = AH.MakeExprDotName(splus, "s", "LState");
-      var s_prime = AH.MakeExprDotName(splus_prime, "s", "LState");
-
-      var clauses = new List<Expression>();
-
-      // Add a clause indicating that the stack hasn't changed
-
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      var stack = AH.MakeExprDotName(thread, "stack", AH.MakeStackType());
-      var threads_prime = AH.MakeExprDotName(s_prime, "threads", AH.MakeThreadsType());
-      var thread_prime = AH.MakeSeqSelectExpr(threads_prime, tid, "Armada_Thread");
-      var stack_prime = AH.MakeExprDotName(thread_prime, "stack", AH.MakeStackType());
-      clauses.Add(AH.MakeEqExpr(stack_prime, stack));
+      var clauses = new List<string> {
+        "s.config == s'.config",
+        "tid in s.s.threads",
+        $"s.s.threads[tid].top.Armada_StackFrame_{method.Name}?",
+        "tid in s'.s.threads",
+        $"s'.s.threads[tid].top.Armada_StackFrame_{method.Name}?",
+        "s'.s.threads[tid].stack == s.s.threads[tid].stack"     // Include a clause indicating that the stack hasn't changed
+      };
 
       // For each ensures clause, add a clause
 
@@ -1299,7 +741,7 @@ namespace Microsoft.Armada
         foreach (var ens in method.Ens)
         {
           var failureReporter = new SimpleFailureReporter(pgp.prog);
-          var context = new EnsuresResolutionContext(s, s_prime, tid, method.Name, pgp.symbolsLow, failureReporter, "L");
+          var context = new EnsuresResolutionContext("s.s", "s'.s", "tid", method.Name, pgp.symbolsLow, failureReporter, "L");
           if (!failureReporter.Valid) {
             continue;
           }
@@ -1312,154 +754,181 @@ namespace Microsoft.Armada
         }
       }
 
+      // For each extra CHL postcondition, add a clause
+
+      if (extraPostconditionsForMethod.ContainsKey(method.Name)) {
+        foreach (var postconditionName in extraPostconditionsForMethod[method.Name]) {
+          clauses.Add($"{postconditionName}(s, s', tid)");
+        }
+      }
+      foreach (var topDecl in pgp.MainProof.Module.TopLevelDecls) {
+        if (topDecl is CHLYieldPredicateArmadaProofDecl d) {
+          if (method.Name == "main") {
+            continue;
+          }
+          if (Attributes.FindExpressions(d.Attributes, "excludeMethod")?
+              .Any(expr => (expr as NameSegment).Name == method.Name) ?? false) {
+            continue;
+          }
+          if (Attributes.Contains(d.Attributes, "excludeAll")) {
+            continue;
+          }
+          var ypKey = d.YieldPredicateName;
+          if (d.Code != null || pgp.symbolsLow.YieldPredicates.ContainsKey(ypKey)) {
+            var pred = $"UserYP_{ypKey}(s, s', tid)";
+            clauses.Add(pred);
+          }
+          else {
+            AH.PrintError(pgp.prog, d.tok, $"No yield predicate named {ypKey} found among the yield predicates");
+            continue;
+          }
+        }
+      }
+
       // Create a post-condition two-state function out of the collected clauses
 
-      var fnName = $"Postconditions_{method.Name}";
-      var body = AH.CombineExpressionsWithAnd(clauses);
-      var thread_in_method_in_both_states = GetExpressionIndicatingThreadIsInMethodInBothStates(s, s_prime, tid, method.Name);
-      body = AH.MakeImpliesExpr(thread_in_method_in_both_states, body);
-      var fn = AH.MakeFunction(fnName, GetFormalsForLocalTwoStatePredicate(), body);
-      pgp.AddDefaultClassDecl(fn, "defs");
+      var fn = $@"
+        predicate Postconditions_{method.Name}(s: LPlusState, s': LPlusState, tid: Armada_ThreadHandle)
+        {{
+          {AH.CombineStringsWithAnd(clauses)}
+        }}
+      ";
+      pgp.AddPredicate(fn, "defs");
     }
 
-    private void ProcessWhileStatementInvariants(ArmadaPC pc, List<MaybeFreeExpression> invariants)
+    private void ProcessWhileStatementInvariants(ArmadaPC pc, List<MaybeFreeExpression> invariants, List<Expression> ens)
     {
-      var splus = AH.MakeNameSegment("s", "LPlusState");
-      var splus_prime = AH.MakeNameSegment("s'", "LPlusState");
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-
-      var s = AH.MakeExprDotName(splus, "s", "LState");
-      var s_prime = AH.MakeExprDotName(splus_prime, "s", "LState");
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var threads_prime = AH.MakeExprDotName(s_prime, "threads", AH.MakeThreadsType());
-      var thread = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      var thread_prime = AH.MakeSeqSelectExpr(threads_prime, tid, "Armada_Thread");
-      var top = AH.MakeExprDotName(thread, "top", AH.MakeStackFrameType());
-      var top_prime = AH.MakeExprDotName(thread_prime, "top", AH.MakeStackFrameType());
-      var stack = AH.MakeExprDotName(thread, "stack", AH.MakeStackType());
-      var stack_prime = AH.MakeExprDotName(thread_prime, "stack", AH.MakeStackType());
-      var method_running = AH.MakeExprDotName(top, $"Armada_StackFrame_{pc.methodName}?", new BoolType());
-      var method_running_prime = AH.MakeExprDotName(top_prime, $"Armada_StackFrame_{pc.methodName}?", new BoolType());
-      var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-      var stop_reason_prime = AH.MakeExprDotName(s_prime, "stop_reason", "Armada_StopReason");
-      var not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-      var not_stopped_prime = AH.MakeExprDotName(stop_reason_prime, "Armada_NotStopped?", new BoolType());
-
-      // predicate LoopInvariant_{pc}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+      // predicate LoopModifies_{pc}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
       // {
-      //   s'.s.stop_reason.Armada_NotStopped? ==>
-      //     && s.s.stop_reason.Armada_NotStopped?
-      //     && tid in s.s.threads
-      //     && tid in s'.s.threads
-      //     && s.s.threads.top.Armada_StackFrame_{pc.methodName}?
-      //     && s'.s.threads.top.Armada_StackFrame_{pc.methodName}?
-      //     && s'.s.threads[tid].stack == s.s.threads[tid].stack
-      //     && <Input and ExternOld variables unchanged>
-      //     && <custom loop invariants>
+      //   && tid in s.s.threads
+      //   && tid in s'.s.threads
+      //   && s.s.threads[tid].top.Armada_StackFrame_{pc.methodName}?
+      //   && s'.s.threads[tid].top.Armada_StackFrame_{pc.methodName}?
+      //   && s'.s.threads[tid].pc.{pc}?
+      //   && s'.s.threads[tid].stack == s.s.threads[tid].stack
+      //   && <Input and ExternOld variables unchanged>
+      //   && <custom loop invariants>
       // }
 
-      var preds = new List<Expression>();
-      preds.Add(not_stopped);
-      preds.Add(AH.MakeInExpr(tid, threads));
-      preds.Add(AH.MakeInExpr(tid, threads_prime));
-      preds.Add(method_running);
-      preds.Add(method_running_prime);
-      preds.Add(AH.MakeEqExpr(stack_prime, stack));
+      var preds = new List<string> {
+        "tid in s.s.threads",
+        "tid in s'.s.threads",
+        $"s.s.threads[tid].top.Armada_StackFrame_{pc.methodName}?",
+        $"s'.s.threads[tid].top.Armada_StackFrame_{pc.methodName}?",
+        $"s'.s.threads[tid].pc.{pc}?",
+        "s'.s.threads[tid].stack == s.s.threads[tid].stack"
+      };
 
       var smst = pgp.symbolsLow.GetMethodSymbolTable(pc.methodName);
       foreach (var v in smst.AllVariablesInOrder.Where(v => v.varType == ArmadaVarType.Input || v.varType == ArmadaVarType.ExternOld))
       {
-        var v_cur = AH.MakeExprDotName(top, $"{pc.methodName}'{v.name}", v.ty);
-        var v_next = AH.MakeExprDotName(top_prime, $"{pc.methodName}'{v.name}", v.ty);
-        preds.Add(AH.MakeEqExpr(v_cur, v_next));
+        preds.Add($"s.s.threads[tid].top.{pc.methodName}.{v.name} == s'.s.threads[tid].top.{pc.methodName}.{v.name}");
       }
 
-      foreach (var inv in invariants)
+      var failureReporter = new SimpleFailureReporter(pgp.prog);
+      var ensContext = new EnsuresResolutionContext("s.s", "s'.s", "tid", pc.methodName, pgp.symbolsLow, failureReporter, "L");
+      foreach (var clause in ens)
       {
-        var failureReporter = new SimpleFailureReporter(pgp.prog);
-        var context = new EnsuresResolutionContext(s, s_prime, tid, pc.methodName, pgp.symbolsLow, failureReporter, "L");
-        if (!failureReporter.Valid) {
-          continue;
-        }
-        var rvalue = context.ResolveAsRValue(inv.E);
-        var e = rvalue.CanCauseUndefinedBehavior ? AH.MakeAndExpr(rvalue.UndefinedBehaviorAvoidance.Expr, rvalue.Val) : rvalue.Val;
+        var rvalue = ensContext.ResolveAsRValue(clause);
+        var e = rvalue.CanCauseUndefinedBehavior ? $"({rvalue.UndefinedBehaviorAvoidance.Expr}) && ({rvalue.Val})" : rvalue.Val;
         preds.Add(e);
       }
 
-      var body = AH.MakeImpliesExpr(not_stopped_prime, AH.CombineExpressionsWithAnd(preds));
-      var fn = AH.MakePredicate($"LoopInvariant_{pc}", GetFormalsForLocalTwoStatePredicate(), body);
-      pgp.AddDefaultClassDecl(fn, "defs");
-    }
-
-    private void GenerateLocalInvariant()
-    {
-      // predicate LocalInv(s:LPlusState, tid:Armada_ThreadHandle)
-      // {
-      //   s.s.stop_reason.Armada_NotStopped? && tid in s.s.threads ==>
-      //     match s.s.threads[tid].pc
-      //       case Armada_PC_main_0 => true
-      //       case Armada_PC_main_1 => LocalInvariant_1_Armada_PC_main_1(s, tid) && LocalInvariant_2_Armada_PC_main_1(s, tid)
-      //       ...
-      // }
-
-      var str = @"
-        predicate LocalInv(s:LPlusState, tid:Armada_ThreadHandle)
-        {
-          s.s.stop_reason.Armada_NotStopped? && tid in s.s.threads ==>
-            match s.s.threads[tid].pc
-      ";
-      var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
-      foreach (var pc in pcs)
-      {
-        str += $"    case {pc} => ";
-        if (localInvariantNames.ContainsKey(pc) && localInvariantNames[pc].Any()) {
-          str += String.Join(" && ", localInvariantNames[pc].Select(name => name + "(s, tid)"));
+      if (extraLoopModifiesClausesForPC.ContainsKey(pc)) {
+        foreach (var clauseName in extraLoopModifiesClausesForPC[pc]) {
+          preds.Add($"{clauseName}(s, s', tid)");
         }
-        else {
-          str += "true";
-        }
-        str += "\n";
       }
-      str += "}";
-      pgp.AddPredicate(str, "defs");
+
+      foreach (var topDecl in pgp.MainProof.Module.TopLevelDecls) {
+        if (topDecl is CHLYieldPredicateArmadaProofDecl d) {
+          if (Attributes.FindExpressions(d.Attributes, "excludeLoop")?
+              .Any(expr => (expr as NameSegment).Name == pc.methodName + "_" + pc.Name) ?? false) {
+            continue;
+          }
+          if (Attributes.Contains(d.Attributes, "excludeAll")) {
+            continue;
+          }
+          var ypKey = d.YieldPredicateName;
+          if (d.Code != null || pgp.symbolsLow.YieldPredicates.ContainsKey(ypKey)) {
+            preds.Add($"UserYP_{ypKey}(s, s', tid)");
+          }
+          else {
+            AH.PrintError(pgp.prog, d.tok, $"No yield predicate named {ypKey} found among the yield predicates");
+            continue;
+          }
+        }
+      }
+
+      var fn = $@"
+        predicate LoopModifies_{pc}(s: LPlusState, s': LPlusState, tid: Armada_ThreadHandle)
+        {{
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(fn, "defs");
     }
 
-    private void GenerateEnablementCondition()
+    private void DeterminePCsWithEnablingConditions()
     {
-      // predicate EnablementCondition(s:LPlusState, tid:Armada_ThreadHandle)
-      // {
-      //   s.s.stop_reason.Armada_NotStopped? && tid in s.s.threads ==>
-      //     match s.s.threads[tid].pc
-      //       case {pc} => H.Armada_EnablingConditions_{pc}(ConvertTotalState_LPlusH(s), tid)
-      //       ...
-      //       <others> => true
-      // }
-
-      var str = @"
-        predicate EnablementCondition(s:LPlusState, tid:Armada_ThreadHandle)
-        {
-          s.s.stop_reason.Armada_NotStopped? && tid in s.s.threads ==>
-            match s.s.threads[tid].pc
-      ";
-      var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
-      foreach (var pc in pcs)
+      foreach (var pc in lpcs)
       {
         var methodInfo = pgp.symbolsHigh.AllMethods.LookupMethod(pc.methodName);
-        var collector = methodInfo.GetEnablingConstraintCollector(pc);
-        if (collector == null || collector.Empty)
+        var collector = methodInfo.GetEnablingConstraintCollector(pcMap[pc]);
+        if (collector != null && !collector.Empty)
         {
-          str += $"    case {pc} => true\n";
-        }
-        else
-        {
-          str += $"    case {pc} => H.Armada_EnablingConditions_{pc}(ConvertTotalState_LPlusH(s), tid)\n";
           pcsWithEnablingConditions.Add(pc);
+          pcsWithLocalInvariants.Add(pc);
         }
       }
+    }
+
+    private void GenerateLocalInv()
+    {
+      string str;
+
+      str = @"
+        predicate PCHasLocalInvariant(pc:L.Armada_PC)
+        {
+      ";
+      str += AH.CombineStringsWithOr(pcsWithLocalInvariants.Select(pc => $"pc.{pc}?"));
       str += "}";
       pgp.AddPredicate(str, "defs");
+
+      if (pcsWithLocalInvariants.Any()) {
+        str = @"
+          predicate LocalInv(s:LPlusState, tid:Armada_ThreadHandle)
+          {
+            tid in s.s.threads ==>
+              H.Armada_UniversalStepConstraint(ConvertTotalState_LPlusH(s), tid) &&
+              var t := s.s.threads[tid];
+              PCHasLocalInvariant(t.pc) && InductiveInv(s) ==>
+                match t.pc
+        ";
+        foreach (var pc in pcsWithLocalInvariants) {
+          str += $"case {pc} => t.top.Armada_StackFrame_{pc.methodName}?";
+          if (pcsWithEnablingConditions.Contains(pc)) {
+            str += $" && H.Armada_EnablingConditions_{pcMap[pc]}(ConvertTotalState_LPlusH(s), tid)";
+          }
+          if (extraLocalInvariantClausesForPC.ContainsKey(pc)) {
+            foreach (var fnName in extraLocalInvariantClausesForPC[pc]) {
+              str += $" && {fnName}(s, tid)";
+            }
+          }
+          str += "\n";
+        }
+        str += "}\n";
+        pgp.AddPredicate(str, "defs");
+      }
+      else {
+        str = @"
+          predicate LocalInv(s:LPlusState, tid:Armada_ThreadHandle)
+          {
+            tid in s.s.threads ==> PCHasLocalInvariant(s.s.threads[tid].pc)
+          }
+        ";
+        pgp.AddPredicate(str, "defs");
+      }
     }
 
     private void GenerateGlobalInvariant()
@@ -1477,8 +946,13 @@ namespace Microsoft.Armada
           if (d.Code != null) {
             invName = $"UserInv_{invKey}";
             str = $@"
-              predicate {invName}(s:LPlusState)
+              predicate {invName}(s: LPlusState)
+                requires InductiveInv(s)
               {{
+                var threads := s.s.threads;
+                var globals := s.s.mem.globals;
+                var ghosts := s.s.ghosts;
+                var tid_init := s.config.tid_init;
                 { d.Code }
               }}
             ";
@@ -1488,9 +962,9 @@ namespace Microsoft.Armada
             var inv = userInvariants[invKey];
             invName = $"UserInv_{invKey}";
             str = $@"
-              predicate {invName}(splus:LPlusState)
+              predicate {invName}(s: LPlusState)
               {{
-                L.{inv.TranslatedName}(splus.s)
+                L.{inv.TranslatedName}(s.s)
               }}
               ";
             pgp.AddPredicate(str, "defs");
@@ -1500,21 +974,146 @@ namespace Microsoft.Armada
             continue;
           }
           globalInvariantNames[invKey] = invName;
-          allInvClauses += $"  && {invName}(splus)\n";
+          allInvClauses += $"  && {invName}(s)\n";
         }
       }
 
-      if (allInvClauses.Length == 0) {
-        allInvClauses = "true";
-      }
+      var body = (allInvClauses.Length == 0) ? "true" : $"InductiveInv(s) ==> {allInvClauses}";
 
       str = $@"
-        predicate GlobalInv(splus:LPlusState)
+        predicate GlobalInv(s: LPlusState)
         {{
-          {allInvClauses}
+          var threads := s.s.threads;
+          var globals := s.s.mem.globals;
+          var ghosts := s.s.ghosts;
+          var tid_init := s.config.tid_init;
+          {body}
         }}
       ";
       pgp.AddPredicate(str, "defs");
+    }
+
+    private void GenerateCustomCHLClauses()
+    {
+      string str;
+      foreach (var topDecl in pgp.MainProof.Module.TopLevelDecls) {
+        if (topDecl is CHLLocalInvariantArmadaProofDecl) {
+          var d = (CHLLocalInvariantArmadaProofDecl)topDecl;
+          var pc = pgp.symbolsLow.GetPCForMethodAndLabel(d.PCName);
+          if (pc == null) {
+            AH.PrintError(pgp.prog, $"Could not find PC corresponding to CHL local invariant clause with specified label {d.PCName}");
+          }
+          var methodName = pc.methodName;
+          var fnName = $"UserLocalInvariant_{methodName}_{pc.Name}_{d.ClauseName}";
+          str = $@"
+            predicate {fnName}(s:LPlusState, tid:Armada_ThreadHandle)
+              requires tid in s.s.threads
+              requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
+              requires InductiveInv(s)
+            {{
+              var threads := s.s.threads;
+              var globals := s.s.mem.globals;
+              var ghosts := s.s.ghosts;
+              var tid_init := s.config.tid_init;
+              { d.Code }
+            }}
+          ";
+          pgp.AddPredicate(str, "defs");
+          pcsWithLocalInvariants.Add(pc);
+          if (!extraLocalInvariantClausesForPC.ContainsKey(pc)) {
+            extraLocalInvariantClausesForPC[pc] = new List<string>{ fnName };
+          }
+          else {
+            extraLocalInvariantClausesForPC[pc].Add(fnName);
+          }
+        }
+        else if (topDecl is CHLPreconditionArmadaProofDecl) {
+          var d = (CHLPreconditionArmadaProofDecl)topDecl;
+          var methodName = d.MethodName;
+          var preconditionName = $"UserPrecondition_{methodName}_{d.PreconditionName}";
+          str = $@"
+            predicate {preconditionName}(s:LPlusState, tid:Armada_ThreadHandle)
+              requires tid in s.s.threads
+              requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
+            {{
+              var threads := s.s.threads;
+              var globals := s.s.mem.globals;
+              var ghosts := s.s.ghosts;
+              var tid_init := s.config.tid_init;
+              { d.Code }
+            }}
+          ";
+          pgp.AddPredicate(str, "defs");
+          if (!extraPreconditionsForMethod.ContainsKey(methodName)) {
+            extraPreconditionsForMethod[methodName] = new List<string>{ preconditionName };
+          }
+          else {
+            extraPreconditionsForMethod[methodName].Add(preconditionName);
+          }
+        }
+        else if (topDecl is CHLPostconditionArmadaProofDecl) {
+          var d = (CHLPostconditionArmadaProofDecl)topDecl;
+          var methodName = d.MethodName;
+          var postconditionName = $"UserPostcondition_{methodName}_{d.PostconditionName}";
+          str = $@"
+            predicate {postconditionName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+              requires tid in s.s.threads
+              requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
+              requires tid in s'.s.threads
+              requires s'.s.threads[tid].top.Armada_StackFrame_{methodName}?
+            {{
+              var threads := s.s.threads;
+              var globals := s.s.mem.globals;
+              var ghosts := s.s.ghosts;
+              var tid_init := s.config.tid_init;
+              var threads' := s'.s.threads;
+              var globals' := s'.s.mem.globals;
+              var ghosts' := s'.s.ghosts;
+              { d.Code }
+            }}
+          ";
+          pgp.AddPredicate(str, "defs");
+          if (!extraPostconditionsForMethod.ContainsKey(methodName)) {
+            extraPostconditionsForMethod[methodName] = new List<string>{ postconditionName };
+          }
+          else {
+            extraPostconditionsForMethod[methodName].Add(postconditionName);
+          }
+        }
+        else if (topDecl is CHLLoopModifiesClauseArmadaProofDecl) {
+          var d = (CHLLoopModifiesClauseArmadaProofDecl)topDecl;
+          var pc = pgp.symbolsLow.GetPCForMethodAndLabel(d.PCName);
+          if (pc == null) {
+            AH.PrintError(pgp.prog, $"Could not find PC corresponding to CHL loop modifies clause with specified label {d.PCName}");
+          }
+          var methodName = pc.methodName;
+          var fnName = $"UserLoopModifies_{methodName}_{pc.Name}_{d.ClauseName}";
+          str = $@"
+            predicate {fnName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+              requires tid in s.s.threads
+              requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
+              requires tid in s'.s.threads
+              requires s'.s.threads[tid].top.Armada_StackFrame_{methodName}?
+            {{
+              var threads := s.s.threads;
+              var globals := s.s.mem.globals;
+              var ghosts := s.s.ghosts;
+              var tid_init := s.config.tid_init;
+              var threads' := s'.s.threads;
+              var globals' := s'.s.mem.globals;
+              var ghosts' := s'.s.ghosts;
+              { d.Code }
+            }}
+          ";
+          pgp.AddPredicate(str, "defs");
+          if (!extraLoopModifiesClausesForPC.ContainsKey(pc)) {
+            extraLoopModifiesClausesForPC[pc] = new List<string>{ fnName };
+          }
+          else {
+            extraLoopModifiesClausesForPC[pc].Add(fnName);
+          }
+        }
+      }
     }
 
     private void GenerateYieldPredicate()
@@ -1534,6 +1133,13 @@ namespace Microsoft.Armada
             str = $@"
               predicate {ypName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
               {{
+                var threads := s.s.threads;
+                var globals := s.s.mem.globals;
+                var ghosts := s.s.ghosts;
+                var tid_init := s.config.tid_init;
+                var threads' := s'.s.threads;
+                var globals' := s'.s.mem.globals;
+                var ghosts' := s'.s.ghosts;
                 {d.Code}
               }}
             ";
@@ -1558,21 +1164,26 @@ namespace Microsoft.Armada
           allYieldClauses += $"  && {ypName}(s, s', tid)\n";
         }
       }
-      if (allYieldClauses.Length == 0) {
-        allYieldClauses = "true";
-      }
+
+      str = @"
+        predicate YieldPredicateBasic(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+        {
+          && tid in s.s.threads
+          && tid in s'.s.threads
+          && s'.s.threads[tid].pc == s.s.threads[tid].pc
+          && s'.s.threads[tid].top == s.s.threads[tid].top
+          && s'.s.threads[tid].stack == s.s.threads[tid].stack
+          && s'.config == s.config
+          && s'.s.stop_reason.Armada_NotStopped?
+        }
+      ";
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate YieldPredicate(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
         {{
-            && (s'.s.stop_reason.Armada_NotStopped? ==> s.s.stop_reason.Armada_NotStopped?)
-            && (tid in s.s.threads ==>
-                  && tid in s'.s.threads
-                  && s'.s.threads[tid].pc == s.s.threads[tid].pc
-                  && s'.s.threads[tid].top == s.s.threads[tid].top
-                  && s'.s.threads[tid].stack == s.s.threads[tid].stack)
-            && (s'.s.stop_reason.Armada_NotStopped? && tid in s.s.threads && L.Armada_IsNonyieldingPC(s.s.threads[tid].pc) ==> s' == s)
-            && (s'.s.stop_reason.Armada_NotStopped? && tid in s.s.threads ==> {allYieldClauses})
+          YieldPredicateBasic(s, s', tid)
+          {allYieldClauses}
         }}
       ";
       pgp.AddPredicate(str, "defs");
@@ -1608,249 +1219,368 @@ namespace Microsoft.Armada
       pgp.AddPredicate(str, "defs");
     }
 
+    private void GeneratePathPCStackEffectLemmas()
+    {
+      pcstackFile = pgp.proofFiles.CreateAuxiliaryProofFile("pcstack");
+      pcstackFile.IncludeAndImportGeneratedFile("specs");
+      pcstackFile.IncludeAndImportGeneratedFile("pceffect");
+      pcstackFile.IncludeAndImportGeneratedFile("revelations");
+      pcstackFile.IncludeAndImportGeneratedFile("latomic");
+      pcstackFile.IncludeAndImportGeneratedFile("defs");
+      pcstackFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      pcstackFile.AddImport("ConcurrentHoareLogicSpecModule");
+      pcstackFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      pcstackFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      pcstackFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
+      pcstackFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
+      pcstackFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("pcstack");
+
+      string str;
+      var pr = new PathPrinter(lAtomic);
+      foreach (var atomicPath in lAtomic.AtomicPaths)
+      {
+        str = $@"
+          lemma lemma_LAtomic_PathHasPCStackEffect_{atomicPath.Name}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle
+            )
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires path.LAtomic_Path_{atomicPath.Name}?
+            ensures  tid in s.s.threads
+            ensures  s.s.stop_reason.Armada_NotStopped?
+            ensures  s'.config == s.config
+        ";
+
+        // What PC it starts at
+
+        if (!atomicPath.Tau) {
+          str += $"ensures  s.s.threads[tid].pc.{atomicPath.StartPC}?\n";
+        }
+
+        // What constraints there are on the initial stack
+
+        var effect = pathEffectMap[atomicPath];
+        if (effect is CHLPathEffectReturn) {
+          var reffect = (CHLPathEffectReturn)effect;
+          str += $@"
+            ensures |s.s.threads[tid].stack| > 0
+            ensures s.s.threads[tid].stack[0].return_pc.{reffect.EffectiveStartPC}?
+          ";
+        }
+        else if (effect is CHLPathEffectReturnThenCall) {
+          var rceffect = (CHLPathEffectReturnThenCall)effect;
+          str += $@"
+            ensures |s.s.threads[tid].stack| > 0
+            ensures s.s.threads[tid].stack[0].return_pc.{rceffect.EffectiveStartPC}?
+          ";
+        }
+        else if (effect is CHLPathEffectExit) {
+          str += "ensures |s.s.threads[tid].stack| == 0\n";
+        }
+
+        // Constraints on the subsequent PC and stack
+
+        if (atomicPath.Stopping) {
+          str += "ensures !s'.s.stop_reason.Armada_NotStopped?\n";
+        }
+        else {
+          str += "ensures s'.s.stop_reason.Armada_NotStopped?\n";
+
+          // Constraints on the subsequent PC
+
+          if (atomicPath.Tau) {
+            str += "ensures tid in s'.s.threads\n";
+          }
+          else if (atomicPath.EndPC == null) {
+            str += $"ensures tid !in s'.s.threads\n";
+          }
+          else {
+            str += $@"
+              ensures tid in s'.s.threads
+              ensures s'.s.threads[tid].pc.{atomicPath.EndPC}?
+            ";
+          }
+
+          // Constraints on the subsequent stack
+
+          if (effect is CHLPathEffectNormal) {
+            str += "ensures s'.s.threads[tid].stack == s.s.threads[tid].stack\n";
+          }
+          else if (effect is CHLPathEffectCall) {
+            var ceffect = (CHLPathEffectCall)effect;
+            str += $@"
+              ensures |s'.s.threads[tid].stack| > 0
+              ensures s'.s.threads[tid].stack[0].return_pc.{ceffect.EffectiveEndPC}?
+              ensures s'.s.threads[tid].stack[1..] == s.s.threads[tid].stack
+            ";
+          }
+          else if (effect is CHLPathEffectReturn) {
+            str += $@"
+              ensures s'.s.threads[tid].stack == s.s.threads[tid].stack[1..]
+            ";
+          }
+          else if (effect is CHLPathEffectReturnThenCall) {
+            var rceffect = (CHLPathEffectReturnThenCall)effect;
+            str += $@"
+              ensures |s'.s.threads[tid].stack| > 0
+              ensures s'.s.threads[tid].stack[0].return_pc.{rceffect.EffectiveEndPC}?
+              ensures s'.s.threads[tid].stack[1..] == s.s.threads[tid].stack[1..]
+            ";
+          }
+          else if (effect is CHLPathEffectActorless) {
+            str += "ensures s'.s.threads[tid].stack == s.s.threads[tid].stack\n";
+          }
+        }
+
+        str += $@"
+          {{
+            { pr.GetOpenValidPathInvocation(atomicPath) }
+          }}
+        ";
+        pgp.AddLemma(str, "pcstack");
+      }
+
+      str = @"
+        lemma lemma_PathImpliesThreadRunning(
+          s: LPlusState,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle
+          )
+          ensures  var asf := LAtomic_GetSpecFunctions();
+                   asf.path_valid(s, path, tid) ==> asf.state_ok(s) && asf.get_thread_pc(s, tid).Some?
+        {
+          var asf := LAtomic_GetSpecFunctions();
+          if asf.path_valid(s, path, tid) {
+            var s' := asf.path_next(s, path, tid);
+            match path {
+      ";
+      str += String.Concat(lAtomic.AtomicPaths.Select(atomicPath => $@"
+            case LAtomic_Path_{atomicPath.Name}(_) =>
+              lemma_LAtomic_PathHasPCStackEffect_{atomicPath.Name}(s, s', path, tid);
+      "));
+      str += "} } }\n";
+      pgp.AddLemma(str, "pcstack");
+
+      str = @"
+        lemma lemma_PathLeavesConfigUnchanged(
+          s: LPlusState,
+          s': LPlusState,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle
+          )
+          requires LAtomic_NextPath(s, s', path, tid)
+          ensures  s'.config == s.config
+        {
+          match path {
+      ";
+      str += String.Concat(lAtomic.AtomicPaths.Select(atomicPath => $@"
+            case LAtomic_Path_{atomicPath.Name}(_) =>
+              lemma_LAtomic_PathHasPCStackEffect_{atomicPath.Name}(s, s', path, tid);
+      "));
+      str += "} }\n";
+      pgp.AddLemma(str, "pcstack");
+
+      str = @"
+        lemma lemma_CHLStepEffectsCorrect()
+          ensures  CHLStepEffectsCorrect(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, s', step | ActionTuple(s, s', step) in cr.spec.next
+            ensures CorrectCHLStepEffect(cr, s, s', step)
+          {
+            var path: LAtomic_Path := step.path;
+            var tid := step.tid;
+
+            match path {
+      ";
+      str += String.Concat(lAtomic.AtomicPaths.Select(p => $@"
+            case LAtomic_Path_{p.Name}(_) =>
+              lemma_LAtomic_PathHasPCStackEffect_{p.Name}(s, s', path, tid);
+      "));
+      str += "} } }\n";
+      pgp.AddLemma(str, "pcstack");
+
+      foreach (var pc in lpcs)
+      {
+        str = $@"
+          predicate PathPossibilitiesStartingAtPC_{pc}(path: LAtomic_Path)
+          {{
+        ";
+        str += AH.CombineStringsWithOr(pathsStartingAtPC[pc].Select(p => $"path.LAtomic_Path_{p.Name}?"));
+        str += "}";
+        pgp.AddPredicate(str, "pcstack");
+
+        str = $@"
+          lemma lemma_PathPossibilitiesStartingAtPC_{pc}(s: LPlusState, s': LPlusState, path: LAtomic_Path, tid: Armada_ThreadHandle)
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires !path.LAtomic_Path_Tau?
+            requires tid in s.s.threads
+            requires s.s.threads[tid].pc.{pc}?
+            ensures  PathPossibilitiesStartingAtPC_{pc}(path)
+          {{
+            match path {{
+        ";
+        str += String.Concat(lAtomic.AtomicPaths.Where(p => !p.Tau).Select(p => $@"
+            case LAtomic_Path_{p.Name}(_) =>
+              lemma_LAtomic_PathHasPCStackEffect_{p.Name}(s, s', path, tid);
+        "));
+        str += "} }";
+        pgp.AddLemma(str, "pcstack");
+      }
+
+      foreach (var methodName in pgp.symbolsLow.MethodNames)
+      {
+        str = $@"
+          predicate PathPossibilitiesReturningFrom_{methodName}(path: LAtomic_Path)
+          {{
+        ";
+        str += AH.CombineStringsWithOr(pathsStartingAtPC[returnPCForMethod[methodName]]
+                                       .Select(p => $"path.LAtomic_Path_{p.Name}?"));
+        str += "}";
+        pgp.AddPredicate(str, "pcstack");
+
+        str = $@"
+          lemma lemma_PathPossibilitiesReturningFrom_{methodName}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle
+            )
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires !path.LAtomic_Path_Tau?
+            requires tid in s.s.threads
+            requires IsReturnSite(s.s.threads[tid].pc)
+            requires PCToProc(s.s.threads[tid].pc).LProcName_{methodName}?
+            ensures  PathPossibilitiesReturningFrom_{methodName}(path)
+          {{
+            match path {{
+        ";
+        str += String.Concat(lAtomic.AtomicPaths.Where(p => !p.Tau).Select(p => $@"
+            case LAtomic_Path_{p.Name}(_) =>
+              lemma_LAtomic_PathHasPCStackEffect_{p.Name}(s, s', path, tid);
+        "));
+        str += "} }";
+        pgp.AddLemma(str, "pcstack");
+      }
+    }
+
     private void GenerateProofThatCHLRequestIsValid()
     {
-      GenerateSpecSatisfiesProgramControlFlowLemmas();
       GenerateGlobalInvLemmas();
       GenerateYieldPredicateLemmas();
       GenerateInitialInvariantLemmas();
-      GeneratePerPathLemmas();
-      GenerateIsValidConcurrentHoareLogicRequest();
+      GenerateStepsDontAffectOtherActorsLemmas();
+      GenerateForkedActorsStartAtEntryPointsWithEmptyStacks();
+      GenerateStraightlineBehaviorProofs();
     }
 
-    private void GenerateSpecSatisfiesProgramControlFlowLemmas()
+    private void GenerateStepsDontAffectOtherActorsLemmas()
     {
-      string str = @"
-        lemma lemma_SpecSatisfiesProgramControlFlowAtInitialization()
-          ensures forall s, actor ::
-                     && s in GetLOneStepSpec().init
-                     && actor in ActorInfo(s)
-                     ==> var PCStack(pc, stack) := ActorInfo(s)[actor];
-                         && IsEntryPoint(pc)
-                         && |stack| == 0
-        {
-        }
-      ";
-      pgp.AddLemma(str);
+      var othersFile = pgp.proofFiles.CreateAuxiliaryProofFile("others");
+      othersFile.IncludeAndImportGeneratedFile("specs");
+      othersFile.IncludeAndImportGeneratedFile("defs");
+      othersFile.IncludeAndImportGeneratedFile("revelations");
+      othersFile.IncludeAndImportGeneratedFile("latomic");
+      othersFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      othersFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaAtomic.i.dfy");
+      othersFile.AddImport("ConcurrentHoareLogicSpecModule");
+      othersFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      othersFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      othersFile.AddImport("util_collections_seqs_s");
+      othersFile.AddImport("GenericArmadaAtomicModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("others");
 
-      str = @"
-        lemma lemma_SpecSatisfiesProgramControlFlowAfterFork()
-          ensures forall s, s', step, forked_actor ::
-                    && ActionTuple(s, s', step) in GetLOneStepSpec().next
-                    && forked_actor !in ActorInfo(s)
-                    && forked_actor in ActorInfo(s')
-                    ==> && MapStepToThread(step).Some?
-                        && MapStepToThread(step).v in ActorInfo(s)
-                        && GetPCType(ActorInfo(s)[MapStepToThread(step).v].pc).ForkSite?
-                        && var PCStack(pc', stack') := ActorInfo(s')[forked_actor];
-                        && IsEntryPoint(pc')
-                        && |stack'| == 0
-        {
-        }
-      ";
-      pgp.AddLemma(str);
+      string postcondition = @"forall other_tid ::
+                               (other_tid != tid || asf.path_type(path).AtomicPathType_Tau?) && other_tid in s.s.threads ==>
+                               var s' := asf.path_next(s, path, tid);
+                               && other_tid in s'.s.threads
+                               && s'.s.threads[other_tid].pc == s.s.threads[other_tid].pc
+                               && s'.s.threads[other_tid].top == s.s.threads[other_tid].top
+                               && s'.s.threads[other_tid].stack == s.s.threads[other_tid].stack";
+      lAtomic.GeneratePerAtomicPathLemma("others",
+                                         "AtomicPathCantAffectOtherThreadsExceptViaFork",
+                                         atomicPath => true,
+                                         atomicPath => postcondition,
+                                         atomicPath => "");
+      lAtomic.GenerateOverallAtomicPathLemma("others",
+                                             "AtomicPathCantAffectOtherThreadsExceptViaFork",
+                                             "AtomicPathCantAffectOtherThreadsExceptViaFork",
+                                             postcondition,
+                                             ap => true);
 
-      str = @"
-        lemma lemma_SpecSatisfiesProgramControlFlowOtherActorsUnaffected()
-          ensures forall s, s', step, other_actor ::
-                    && ActionTuple(s, s', step) in GetLOneStepSpec().next
-                    && MapStepToThread(step) != Some(other_actor)
-                    && other_actor in ActorInfo(s)
-                    ==> && other_actor in ActorInfo(s')
-                        && ActorInfo(s')[other_actor] == ActorInfo(s)[other_actor]
-        {
-        }
+      string str = $@"
+        lemma lemma_StepsDontChangeOtherActorsExceptViaFork()
+          ensures StepsDontChangeOtherActorsExceptViaFork(GetConcurrentHoareLogicRequest())
+        {{
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, s', step, other_actor | StepsDontChangeOtherActorsExceptViaForkConditions(cr, s, s', step, other_actor)
+            ensures cr.get_actor_pc_stack(s', other_actor) == cr.get_actor_pc_stack(s, other_actor)
+          {{
+            var asf := LAtomic_GetSpecFunctions();
+            lemma_LAtomic_AtomicPathCantAffectOtherThreadsExceptViaFork(asf, s, step.path, step.tid);
+          }}
+        }}
       ";
-      pgp.AddLemma(str);
-
-      GenerateSpecSatisfiesProgramControlFlowEffectOnStack();
-
-      str = @"
-        lemma lemma_SpecSatisfiesProgramControlFlow()
-          ensures SpecSatisfiesProgramControlFlow(GetLOneStepSpec(), MapStepToThread, ActorInfo, PCToProc, IsEntryPoint, GetPCType)
-        {
-          lemma_SpecSatisfiesProgramControlFlowAtInitialization();
-          lemma_SpecSatisfiesProgramControlFlowAfterFork();
-          lemma_SpecSatisfiesProgramControlFlowOtherActorsUnaffected();
-          lemma_SpecSatisfiesProgramControlFlowEffectOnStack();
-        }
-      ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "others");
     }
 
-    private void GenerateSpecSatisfiesProgramControlFlowEffectOnStack()
+    private void GenerateForkedActorsStartAtEntryPointsWithEmptyStacks()
     {
-      string overallStr = @"
-        lemma lemma_SpecSatisfiesProgramControlFlowEffectOnStack()
-          ensures forall s, s', step ::
-                     && MapStepToThread(step).Some?
-                     && ActionTuple(s, s', step) in GetLOneStepSpec().next
-                     ==> var actor := MapStepToThread(step).v;
-                         && actor in ActorInfo(s)
-                         && var PCStack(pc, stack) := ActorInfo(s)[actor];
-                         && (|| (&& GetPCType(pc).CallSite?
-                               && actor in ActorInfo(s')
-                               && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                               && IsEntryPoint(pc')
-                               && |stack'| > 0
-                               && stack == stack'[1..]
-                               && PCToProc(stack'[0]) == PCToProc(pc)
-                               )
-                            || (&& GetPCType(pc).ReturnSite?
-                               && |stack| > 0
-                               && actor in ActorInfo(s')
-                               && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                               && pc' == stack[0]
-                               && stack' == stack[1..]
-                               )
-                            || (&& GetPCType(pc).ReturnSite?
-                               && |stack| == 0
-                               // If the stack is empty when we return, the thread exits, which we model as no longer being in ActorInfo
-                               && actor !in ActorInfo(s')
-                               )
-                            || (&& actor in ActorInfo(s')
-                               && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                               && PCToProc(pc') == PCToProc(pc)
-                               && stack' == stack
-                               )
-                            )
-        {
-          forall s, s', step |
-              && MapStepToThread(step).Some?
-              && ActionTuple(s, s', step) in GetLOneStepSpec().next
-              ensures var actor := MapStepToThread(step).v;
-                      && actor in ActorInfo(s)
-                      && var PCStack(pc, stack) := ActorInfo(s)[actor];
-                      && (|| (&& GetPCType(pc).CallSite?
-                            && actor in ActorInfo(s')
-                            && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                            && IsEntryPoint(pc')
-                            && |stack'| > 0
-                            && stack == stack'[1..]
-                            && PCToProc(stack'[0]) == PCToProc(pc)
-                            )
-                         || (&& GetPCType(pc).ReturnSite?
-                            && |stack| > 0
-                            && actor in ActorInfo(s')
-                            && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                            && pc' == stack[0]
-                            && stack' == stack[1..]
-                            )
-                         || (&& GetPCType(pc).ReturnSite?
-                            && |stack| == 0
-                            // If the stack is empty when we return, the thread exits, which we model as no longer being in ActorInfo
-                            && actor !in ActorInfo(s')
-                            )
-                         || (&& actor in ActorInfo(s')
-                            && var PCStack(pc', stack') := ActorInfo(s')[actor];
-                            && PCToProc(pc') == PCToProc(pc)
-                            && stack' == stack
-                            )
-                         )
-          {
-            var actor := MapStepToThread(step).v;
-            var PCStack(pc, stack) := ActorInfo(s)[actor];
+      var forkedStacksFile = pgp.proofFiles.CreateAuxiliaryProofFile("ForkedStack");
+      forkedStacksFile.IncludeAndImportGeneratedFile("specs");
+      forkedStacksFile.IncludeAndImportGeneratedFile("defs");
+      forkedStacksFile.IncludeAndImportGeneratedFile("revelations");
+      forkedStacksFile.IncludeAndImportGeneratedFile("latomic");
+      forkedStacksFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      forkedStacksFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaAtomic.i.dfy");
+      forkedStacksFile.AddImport("ConcurrentHoareLogicSpecModule");
+      forkedStacksFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      forkedStacksFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      forkedStacksFile.AddImport("util_collections_seqs_s");
+      forkedStacksFile.AddImport("GenericArmadaAtomicModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("ForkedStack");
 
-            match step
+      string str;
+
+      var postcondition = @"forall forked_tid :: forked_tid !in s.s.threads && forked_tid in asf.path_next(s, path, tid).s.threads ==>
+                        var cr := GetConcurrentHoareLogicRequest();
+                        var s' := asf.path_next(s, path, tid);
+                        && cr.step_to_actor(PathAndTid(path, tid)).Some?
+                        && !cr.step_to_effect(PathAndTid(path, tid)).CHLStepEffectExit?
+                        && var PCStack(pc', stack') := cr.get_actor_pc_stack(s', forked_tid).v;
+                        && cr.is_entry_point(pc')
+                        && |stack'| == 0";
+      lAtomic.GeneratePerAtomicPathLemma("ForkedStack",
+                                         "ForkedActorsStartAtEntryPointsWithEmptyStacks",
+                                         atomicPath => true,
+                                         atomicPath => postcondition,
+                                         atomicPath => "");
+      lAtomic.GenerateOverallAtomicPathLemma("ForkedStack",
+                                             "ForkedActorsStartAtEntryPointsWithEmptyStacks",
+                                             "ForkedActorsStartAtEntryPointsWithEmptyStacks",
+                                             postcondition,
+                                             atomicPath => true);
+      str = $@"
+        lemma lemma_ForkedActorsStartAtEntryPointsWithEmptyStacks()
+          ensures ForkedActorsStartAtEntryPointsWithEmptyStacks(GetConcurrentHoareLogicRequest())
+        {{
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, s', step, forked_actor | ForkedActorsStartAtEntryPointsWithEmptyStacksConditions(cr, s, s', step, forked_actor)
+            ensures cr.step_to_actor(step).Some?
+            ensures !cr.step_to_effect(step).CHLStepEffectExit?
+            ensures var PCStack(pc', stack') := cr.get_actor_pc_stack(s', forked_actor).v;
+                    && cr.is_entry_point(pc')
+                    && |stack'| == 0
+          {{
+            var asf := LAtomic_GetSpecFunctions();
+            lemma_LAtomic_ForkedActorsStartAtEntryPointsWithEmptyStacks(asf, s, step.path, step.tid);
+          }}
+        }}
       ";
-
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines)
-      {
-        var nextRoutineName = nextRoutine.NameSuffix;
-        var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        overallStr += $@"
-            case Armada_TraceEntry_{nextRoutineName}(_{lstep_params}) =>
-              lemma_SpecSatisfiesProgramControlFlowEffectOnStack_{nextRoutineName}(s, s', step, actor, pc, stack);
-        ";
-
-        string str = $@"
-                lemma lemma_SpecSatisfiesProgramControlFlowEffectOnStack_{nextRoutineName}(
-                  s:LPlusState,
-                  s':LPlusState,
-                  step:L.Armada_TraceEntry,
-                  actor:Armada_ThreadHandle,
-                  pc:L.Armada_PC,
-                  stack:seq<L.Armada_PC>
-                  )
-                  requires ActionTuple(s, s', step) in GetLOneStepSpec().next
-                  requires step.Armada_TraceEntry_{nextRoutineName}?
-                  requires MapStepToThread(step).Some?
-                  requires actor == MapStepToThread(step).v
-                  requires actor in ActorInfo(s)
-                  requires PCStack(pc, stack) == ActorInfo(s)[actor]
-        ";
-
-        switch (nextRoutine.nextType)
-        {
-          case NextType.Call:
-            {
-              str += $@"
-                  ensures  pc.{nextRoutine.pc}?
-                  ensures  GetPCType(pc).CallSite?
-                  ensures  actor in ActorInfo(s')
-                  ensures  var PCStack(pc', stack') := ActorInfo(s')[actor];
-                           || (&& IsEntryPoint(pc') // normal case
-                               && |stack'| > 0
-                               && stack == stack'[1..]
-                               && PCToProc(stack'[0]) == PCToProc(pc))
-                           || (&& PCToProc(pc') == PCToProc(pc) // crash case
-                               && stack' == stack)
-                {{
-                  assert LPlus_NextOneStep(s, s', step);
-                }}
-              ";
-            }
-            break;
-
-          case NextType.Return:
-            {
-              var calleeName = GetCalleeNameForCallStmt(nextRoutine.stmt);
-              str += $@"
-                  ensures  GetPCType(pc).ReturnSite?
-                  ensures  |stack| > 0
-                  ensures  actor in ActorInfo(s')
-                  ensures  var PCStack(pc', stack') := ActorInfo(s')[actor];
-                           || (&& pc' == stack[0] // normal case
-                               && stack' == stack[1..])
-                           || (&& PCToProc(pc') == PCToProc(pc) // crash case
-                               && stack' == stack)
-                {{
-                  assert LPlus_NextOneStep(s, s', step);
-                }}
-              ";
-            }
-            break;
-
-          case NextType.Terminate:
-            {
-              str += $@"
-                  ensures  GetPCType(pc).ReturnSite?
-                  ensures  |stack| == 0
-                  ensures  actor !in ActorInfo(s')
-                {{
-                  assert LPlus_NextOneStep(s, s', step);
-                }}
-              ";
-            }
-            break;
-
-          default:
-            {
-              str += @"
-                ensures  actor in ActorInfo(s')
-                ensures  var PCStack(pc', stack') := ActorInfo(s')[actor]; PCToProc(pc') == PCToProc(pc) && stack' == stack
-              {
-                assert LPlus_NextOneStep(s, s', step);
-              }
-              ";
-            }
-            break;
-        }
-        pgp.AddLemma(str);
-      }
-
-      overallStr += "          }\n}";
-      pgp.AddLemma(overallStr);
+      pgp.AddLemma(str, "ForkedStack");
     }
 
     private void GenerateGlobalInvLemmas()
@@ -1858,43 +1588,51 @@ namespace Microsoft.Armada
       string str;
       string lemmaInvocations = "";
 
+      var pr = new PathPrinter(lAtomic);
       foreach (var globalInvariantPair in globalInvariantNames)
       {
         str = $@"
-          lemma lemma_ActorlessActionsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(
-            s:LPlusState,
-            s':LPlusState,
-            step:L.Armada_TraceEntry
+          lemma lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle
             )
-            requires step.Armada_TraceEntry_Tau?
+            requires path.LAtomic_Path_Tau?
             requires InductiveInv(s)
             requires GlobalInv(s)
-            requires LPlus_NextOneStep(s, s', step)
-            requires L.Armada_Next_Tau(s.s, s'.s, step.tid)
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires InductiveInv(s')
             ensures  {globalInvariantPair.Value}(s')
           {{
+            { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
         lemmaInvocations += $@"
-          lemma_ActorlessActionsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(s, s', step);
+          lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(s, s', path, tid);
         ";
       }
 
       str = $@"
-        lemma lemma_ActorlessActionsMaintainGlobalInv(
-          s:LPlusState,
-          s':LPlusState,
-          step:L.Armada_TraceEntry
+        lemma lemma_ActorlessStepsMaintainGlobalInv(
+          s: LPlusState,
+          s': LPlusState,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle
           )
-          requires step.Armada_TraceEntry_Tau?
+          requires path.LAtomic_Path_Tau?
           requires InductiveInv(s)
           requires GlobalInv(s)
-          requires LPlus_NextOneStep(s, s', step)
-          requires L.Armada_Next_Tau(s.s, s'.s, step.tid)
+          requires LAtomic_NextPath(s, s', path, tid)
           ensures  GlobalInv(s')
+          ensures  s'.s.stop_reason.Armada_NotStopped?
         {{
-          { lemmaInvocations }
+          if InductiveInv(s') {{
+            { lemmaInvocations }
+          }}
+          lemma_LAtomic_PathHasPCStackEffect_Tau(s, s', path, tid);
         }}
       ";
       pgp.AddLemma(str);
@@ -1903,6 +1641,8 @@ namespace Microsoft.Armada
     private void GenerateYieldPredicateLemmas()
     {
       string str;
+
+      var pr = new PathPrinter(lAtomic);
 
       foreach (var yieldPredicatePair in yieldPredicateNames)
       {
@@ -1920,14 +1660,21 @@ namespace Microsoft.Armada
         pgp.AddLemma(str);
 
         str = $@"
-          lemma lemma_YieldPredicateTransitive_{yieldPredicateName}(s1:LPlusState, s2:LPlusState, s3:LPlusState, actor:Armada_ThreadHandle)
-            requires s2.s.stop_reason.Armada_NotStopped?
-            requires s3.s.stop_reason.Armada_NotStopped?
+          lemma lemma_YieldPredicateTransitive_{yieldPredicateName}(
+            s1: LPlusState,
+            s2: LPlusState,
+            s3: LPlusState,
+            actor: Armada_ThreadHandle
+            )
+            requires InductiveInv(s1)
+            requires GlobalInv(s1)
+            requires InductiveInv(s2)
+            requires GlobalInv(s2)
             requires actor in s1.s.threads
             requires actor in s2.s.threads
             requires actor in s3.s.threads
-            requires {fullyQualifiedYPName}(s1, s2, actor)
-            requires {fullyQualifiedYPName}(s2, s3, actor)
+            requires YieldPredicate(s1, s2, actor)
+            requires YieldPredicate(s2, s3, actor)
             ensures  {fullyQualifiedYPName}(s1, s3, actor)
           {{
           }}
@@ -1935,16 +1682,22 @@ namespace Microsoft.Armada
         pgp.AddLemma(str);
 
         str = $@"
-          lemma lemma_ActorlessActionsMaintainYieldPredicate_{yieldPredicateName}(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry,
-                                                                                  actor:Armada_ThreadHandle)
-            requires step.Armada_TraceEntry_Tau?
+          lemma lemma_ActorlessStepsMaintainYieldPredicate_{yieldPredicateName}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            actor: Armada_ThreadHandle
+            )
+            requires path.LAtomic_Path_Tau?
             requires InductiveInv(s)
             requires GlobalInv(s)
-            requires LPlus_NextOneStep(s, s', step)
-            requires L.Armada_Next_Tau(s.s, s'.s, step.tid)
+            requires LAtomic_NextPath(s, s', path, tid)
             requires GlobalInv(s')
             ensures  {fullyQualifiedYPName}(s, s', actor)
           {{
+            { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
@@ -1952,19 +1705,18 @@ namespace Microsoft.Armada
 
       str = @"
         lemma lemma_YieldPredicateReflexive()
-          ensures YieldPredicateReflexive(YieldPredicate);
+          ensures YieldPredicateReflexive(GetConcurrentHoareLogicRequest())
         {
-          forall s, actor
-            ensures YieldPredicate(s, s, actor)
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, actor {:trigger cr.yield_pred(s, s, actor)} | cr.state_ok(s) && cr.get_actor_pc_stack(s, actor).Some?
+            ensures cr.yield_pred(s, s, actor)
           {
-            if s.s.stop_reason.Armada_NotStopped? && actor in s.s.threads {
       ";
       foreach (var yieldPredicateName in yieldPredicateNames.Keys)
       {
-        str += $"        lemma_YieldPredicateReflexive_{yieldPredicateName}(s, actor);";
+        str += $"lemma_YieldPredicateReflexive_{yieldPredicateName}(s, actor);\n";
       }
       str += @"
-            }
           }
         }
       ";
@@ -1972,12 +1724,18 @@ namespace Microsoft.Armada
 
       str = @"
         lemma lemma_YieldPredicateTransitive()
-          ensures YieldPredicateTransitive(YieldPredicate);
+          ensures YieldPredicateTransitive(GetConcurrentHoareLogicRequest())
         {
-          forall s1, s2, s3, actor | YieldPredicate(s1, s2, actor) && YieldPredicate(s2, s3, actor)
+          forall s1, s2, s3, actor |
+            && InductiveInv(s1)
+            && GlobalInv(s1)
+            && InductiveInv(s2)
+            && GlobalInv(s2)
+            && YieldPredicate(s1, s2, actor)
+            && YieldPredicate(s2, s3, actor)
             ensures YieldPredicate(s1, s3, actor)
           {
-            if s2.s.stop_reason.Armada_NotStopped? && s3.s.stop_reason.Armada_NotStopped? && actor in s1.s.threads && actor in s2.s.threads && actor in s3.s.threads {
+            if actor in s1.s.threads && actor in s2.s.threads && actor in s3.s.threads {
       ";
       foreach (var yieldPredicateName in yieldPredicateNames.Keys)
       {
@@ -1990,43 +1748,33 @@ namespace Microsoft.Armada
       ";
       pgp.AddLemma(str);
 
-      str = @"
-        lemma lemma_YieldPredicateDoesntAffectActorInfo()
-          ensures YieldPredicateDoesntAffectActorInfo(ActorInfo, YieldPredicate);
-        {
-          forall s, s', actor | actor in ActorInfo(s) && YieldPredicate(s, s', actor)
-            ensures actor in ActorInfo(s')
-            ensures ActorInfo(s')[actor] == ActorInfo(s)[actor]
-          {
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_ActorlessActionsMaintainYieldPredicateAndGlobalInvariant(cr:CHLRequest)
-          requires cr == GetConcurrentHoareLogicRequest()
-          ensures ActorlessActionsMaintainYieldPredicateAndGlobalInvariant(cr)
-        {
-          forall s, s', step, actor
-            | && cr.established_inv(s)
-              && cr.global_inv(s)
-              && ActionTuple(s, s', step) in cr.spec.next
-              && cr.idmap(step).None?
+      str = $@"
+        lemma lemma_ActorlessStepsMaintainYieldPredicateAndGlobalInvariant()
+          ensures ActorlessStepsMaintainYieldPredicateAndGlobalInvariant(GetConcurrentHoareLogicRequest())
+        {{
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, s', step, actor | ActorlessStepsMaintainYieldPredicateAndGlobalInvariantConditions(cr, s, s', step, actor)
             ensures YieldPredicate(s, s', actor)
             ensures GlobalInv(s')
-          {
-            assert step.Armada_TraceEntry_Tau?;
+            ensures s'.s.stop_reason.Armada_NotStopped?
+          {{
+            var path: LAtomic_Path := step.path;
+            var tid := step.tid;
+
+            assert path.LAtomic_Path_Tau?;
+
+            { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+            ProofCustomizationGoesHere();
+
             assert InductiveInv(s);
             assert GlobalInv(s);
-            assert LPlus_NextOneStep(s, s', step);
-            assert L.Armada_Next_Tau(s.s, s'.s, step.tid);
-            lemma_ActorlessActionsMaintainGlobalInv(s, s', step);
+            assert LAtomic_NextPath(s, s', step.path, step.tid);
+            lemma_ActorlessStepsMaintainGlobalInv(s, s', step.path, step.tid);
       ";
       foreach (var yieldPredicateName in yieldPredicateNames.Keys)
       {
         str += $@"
-            lemma_ActorlessActionsMaintainYieldPredicate_{yieldPredicateName}(s, s', step, actor);
+            lemma_ActorlessStepsMaintainYieldPredicate_{yieldPredicateName}(s, s', step.path, step.tid, actor);
         ";
       }
       str += @"
@@ -2056,7 +1804,7 @@ namespace Microsoft.Armada
       }
 
       str = $@"
-        lemma lemma_GlobalInvariantSatisfiedInitially(s:LPlusState)
+        lemma lemma_GlobalInvariantSatisfiedInInitialState(s:LPlusState)
           requires LPlus_Init(s)
           ensures  GlobalInv(s)
         {{
@@ -2066,39 +1814,11 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       body = "";
-      var initialPC = new ArmadaPC(pgp.symbolsLow, "main", 0);
-      if (localInvariantNames.ContainsKey(initialPC)) {
-        foreach (var localInvariantName in localInvariantNames[initialPC])
-        {
-          str = $@"
-            lemma lemma_LocalInvariantSatisfiedInitially_{localInvariantName}(s:LPlusState, tid:Armada_ThreadHandle)
-              requires LPlus_Init(s)
-              requires tid in ActorInfo(s)
-              ensures  {localInvariantName}(s, tid)
-            {{
-            }}
-          ";
-          pgp.AddLemma(str);
-
-          body += $"lemma_LocalInvariantSatisfiedInitially_{localInvariantName}(s, tid);\n";
-        }
-      }
-
-      str = $@"
-        lemma lemma_LocalInvariantSatisfiedInitially(s:LPlusState, tid:Armada_ThreadHandle)
-          requires LPlus_Init(s)
-          requires tid in ActorInfo(s)
-          ensures  LocalInv(s, tid)
-        {{
-          {body}
-        }}
-      ";
-      pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_RequiresClausesSatisfiedInitially(s:LPlusState, tid:Armada_ThreadHandle)
+        lemma lemma_RequiresClausesSatisfiedInInitialState(s:LPlusState, tid:Armada_ThreadHandle)
           requires LPlus_Init(s)
-          requires tid in ActorInfo(s)
+          requires tid in s.s.threads
           ensures  RequiresClauses(LProcName_main, s, tid)
         {
           assert Preconditions_main(s, tid);
@@ -2107,22 +1827,29 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_DesiredInvariantsSatisfiedInitially(cr:CHLRequest)
-          requires cr == GetConcurrentHoareLogicRequest()
-          ensures  DesiredInvariantsSatisfiedInitially(cr)
+        lemma lemma_GlobalInvariantSatisfiedInitially()
+          ensures  GlobalInvariantSatisfiedInitially(GetConcurrentHoareLogicRequest())
         {
+          var cr := GetConcurrentHoareLogicRequest();
           forall s | s in cr.spec.init
             ensures cr.global_inv(s)
           {
-            lemma_GlobalInvariantSatisfiedInitially(s);
+            lemma_GlobalInvariantSatisfiedInInitialState(s);
           }
-          forall s, actor | s in cr.spec.init && actor in cr.actor_info(s)
-            ensures cr.local_inv(s, actor)
-            ensures cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s)[actor].pc), s, actor)
+       }
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_RequiresClausesSatisfiedInitially()
+          ensures  RequiresClausesSatisfiedInitially(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, actor | RequiresClausesSatisfiedInitiallyConditions(cr, s, actor)
+            ensures cr.requires_clauses(cr.pc_to_proc(cr.get_actor_pc_stack(s, actor).v.pc), s, actor)
           {
-            lemma_LocalInvariantSatisfiedInitially(s, actor);
-            lemma_RequiresClausesSatisfiedInitially(s, actor);
-            assert cr.pc_to_proc(cr.actor_info(s)[actor].pc) == LProcName_main;
+            lemma_RequiresClausesSatisfiedInInitialState(s, actor);
+            assert cr.pc_to_proc(cr.get_actor_pc_stack(s, actor).v.pc) == LProcName_main;
           }
         }
       ";
@@ -2133,808 +1860,2362 @@ namespace Microsoft.Armada
     {
       string str;
 
+      var pr = new PathPrinter(lAtomic);
+
       str = @"
-        lemma lemma_InductiveInvIsInvariantOfOneStepSpec()
-          ensures IsInvariantPredicateOfSpec(InductiveInv, GetLOneStepSpec())
+        lemma lemma_IsInvariantPredicateOfSpec()
+          ensures IsInvariantPredicateOfSpec(InductiveInv, GetCHLSpec())
         {
-          var spec := GetLOneStepSpec();
+          var inv := InductiveInv;
+          var spec := GetCHLSpec();
+
           forall s | s in spec.init
-            ensures InductiveInv(s)
+            ensures inv(s)
           {
             lemma_InitImpliesInductiveInv(s);
           }
-          forall s, s', step | InductiveInv(s) && ActionTuple(s, s', step) in spec.next
-            ensures InductiveInv(s')
+
+          forall s, s', step | inv(s) && ActionTuple(s, s', step) in spec.next
+            ensures inv(s')
           {
-            lemma_NextOneStepMaintainsInductiveInv(s, s', step);
+            lemma_AtomicPathMaintainsInductiveInv(s, s', step.path, step.tid);
           }
-          lemma_EstablishInvariantPredicatePure(InductiveInv, spec);
+
+          lemma_EstablishInvariantPredicatePure(inv, spec);
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_IsValidConcurrentHoareLogicRequest(cr:CHLRequest)
-          requires cr == GetConcurrentHoareLogicRequest()
-          ensures  IsValidConcurrentHoareLogicRequest(cr)
+        lemma lemma_LoopHeadsArentReturnSites()
+          ensures LoopHeadsArentReturnSites(IsLoopHead, IsReturnSite)
         {
-          lemma_InductiveInvIsInvariantOfOneStepSpec();
-          lemma_SpecSatisfiesProgramControlFlow();
+        }
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_ActorsBeginAtEntryPointsWithEmptyStacks()
+          ensures ActorsBeginAtEntryPointsWithEmptyStacks(GetConcurrentHoareLogicRequest())
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+
+      str = $@"
+        lemma lemma_ActorlessStepsDontChangeActors()
+          ensures ActorlessStepsDontChangeActors(GetConcurrentHoareLogicRequest())
+        {{
+          var cr := GetConcurrentHoareLogicRequest();
+          forall s, s', step, actor {{:trigger ActorlessStepsDontChangeActorsConditions(cr, s, s', step, actor)}}
+            | ActorlessStepsDontChangeActorsConditions(cr, s, s', step, actor)
+            ensures cr.get_actor_pc_stack(s', actor) == cr.get_actor_pc_stack(s, actor)
+          {{
+            var path: LAtomic_Path := step.path;
+            var tid := step.tid;
+
+            { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
+          }}
+        }}
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_IsValidConcurrentHoareLogicRequest()
+          ensures  IsValidConcurrentHoareLogicRequest(GetConcurrentHoareLogicRequest())
+        {
+          lemma_IsInvariantPredicateOfSpec();
+          lemma_LoopHeadsArentReturnSites();
           lemma_YieldPredicateReflexive();
           lemma_YieldPredicateTransitive();
-          lemma_YieldPredicateDoesntAffectActorInfo();
-          lemma_ActorlessActionsMaintainYieldPredicateAndGlobalInvariant(cr);
-          lemma_DesiredInvariantsSatisfiedInitially(cr);
-          lemma_StraightlineSpecRequirements(cr);
+          lemma_ActorsBeginAtEntryPointsWithEmptyStacks();
+          lemma_GlobalInvariantSatisfiedInitially();
+          lemma_RequiresClausesSatisfiedInitially();
+          lemma_ActorlessStepsDontChangeActors();
+          lemma_ActorlessStepsMaintainYieldPredicateAndGlobalInvariant();
+          lemma_CHLStepEffectsCorrect();
+          lemma_ForkedActorsStartAtEntryPointsWithEmptyStacks();
+          lemma_StepsDontChangeOtherActorsExceptViaFork();
+          lemma_StraightlineBehaviorsSatisfyGlobalInvariant();
+          lemma_StraightlineBehaviorsSatisfyLocalInvariant();
+          lemma_StraightlineBehaviorsSatisfyPreconditionsForCalls();
+          lemma_StraightlineBehaviorsSatisfyPreconditionsForForks();
+          lemma_StraightlineBehaviorsSatisfyPostconditions();
+          lemma_StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry();
+          lemma_StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack();
+          lemma_StraightlineBehaviorsSatisfyYieldPredicate();
         }
         ";
       pgp.AddLemma(str);
     }
 
-    private void GeneratePathLemmasForAllMethods()
+    private void AddAllSuffixesOfStraightlineBehavior(StraightlineBehavior behavior)
     {
-      var visitor = new AssumeIntroPCNodeVisitor(this);
-      foreach (var methodName in pgp.symbolsLow.MethodNames) {
-        var methodInfo = pgp.symbolsLow.AllMethods.LookupMethod(methodName);
-        PCGraph.Visit(pgp.symbolsLow, methodInfo, visitor);
+      straightlineBehaviorDescriptors.Add(behavior);
+      if (behavior.LastState is StraightlineStateNormal) {
+        sbdsEndingNormal.Add(behavior);
+      }
+      if (behavior.LastState is StraightlineStateYielded) {
+        sbdsEndingYielded.Add(behavior);
+      }
+      if (behavior.LastState is StraightlineStateEnsured) {
+        sbdsEndingEnsured.Add(behavior);
+      }
+      foreach (var successorStep in behavior.LastState.GetSuccessorSteps(pathsStartingAtPC, loopHeads,
+                                                                         pathEffectMap, returnPCForMethod, pcsWithLocalInvariants)) {
+        var extension = new StraightlineBehavior(behavior, successorStep);
+        AddAllSuffixesOfStraightlineBehavior(extension);
       }
     }
 
-    private static string GetPathName(string methodName, List<PCNode> states, List<bool> branches)
+    private void CreateStraightlineBehaviors()
     {
-      if (states.Count == 1) {
-        return methodName + "_Prestart";
-      }
-      else {
-        var finalPC = states[states.Count-1].PC;
-        if (branches.Count == 0) {
-          return methodName + "_" + finalPC.Name;
-        }
-        else {
-          return methodName + "_" + String.Join("", branches.Select(b => b ? "T" : "F")) + "_" + finalPC.Name;
-        }
+      foreach (var methodName in pgp.symbolsLow.MethodNames)
+      {
+        var entryPoint = new ArmadaPC(pgp.symbolsLow, methodName, 0);
+        var behavior = new StraightlineBehavior(entryPoint);
+        emptyStraightlineBehaviorForMethod[methodName] = behavior;
+        AddAllSuffixesOfStraightlineBehavior(behavior);
       }
     }
 
-    private void GeneratePathProofFile(string pathName)
+    private void GenerateStraightlineBehaviorDescriptors()
     {
-      string fileName = "path_" + pathName;
-      var proofFile = pgp.proofFiles.CreateAuxiliaryProofFile(fileName);
-      proofFile.IncludeAndImportGeneratedFile("specs");
-      proofFile.IncludeAndImportGeneratedFile("defs");
-      proofFile.IncludeAndImportGeneratedFile("utility");
-      proofFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/ConcurrentHoareLogic.i.dfy");
-      proofFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
-      proofFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy", "util_collections_seqs_s");
-      proofFile.AddImport("ConcurrentHoareLogicSpecModule");
+      sbdFile = pgp.proofFiles.CreateAuxiliaryProofFile("sbd");
+      sbdFile.IncludeAndImportGeneratedFile("specs");
+      sbdFile.IncludeAndImportGeneratedFile("defs");
+      sbdFile.IncludeAndImportGeneratedFile("revelations");
+      sbdFile.IncludeAndImportGeneratedFile("latomic");
+      sbdFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      sbdFile.AddImport("ConcurrentHoareLogicSpecModule");
+      sbdFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      sbdFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      sbdFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("sbd");
 
-      pathPrefixFile.IncludeAndImportGeneratedFile(fileName);
-    }
-
-    private void GeneratePerPathLemma(string pathName, string methodName, List<PCNode> states, List<StepDescriptor> steps,
-                                      Dictionary<ArmadaPC, int> visitedLoops, List<bool> branches)
-    {
-      PathLemmaGenerator g;
-
-      var lemmaName = "lemma_PathBehaviorLemma_" + pathName;
-      var procName = "LProcName_" + methodName;
-      var str = "lemma " + lemmaName + "(cr:CHLRequest, b:AnnotatedBehavior<SState, SStep>, tid:Armada_ThreadHandle, ss:SState)\n";
-      str += "requires cr == GetConcurrentHoareLogicRequest()\n";
-      str += $"requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, {procName}))\n";
-      str += $"requires |b.states| == {states.Count}\n";
-      str += $"requires ss == b.states[{states.Count-1}]\n";
-      str += "requires ss.state.s.stop_reason.Armada_NotStopped?\n";
-      str += AssumeIntroHelpers.GetCommonPathRequiresString(pgp.symbolsLow, methodName, states, steps, visitedLoops, true, true, true);
-      str += $"ensures StraightlineBehaviorSatisfiesAllConditions(cr, b, tid, LProcName_{methodName})\n";
-      str += "{";
-      str += "var pc := cr.actor_info(ss.state)[tid].pc;\n";
-
-      g = new GlobalInvariantsPathLemmaGenerator(globalInvariantNames, pgp, pathName, methodName, states, steps, visitedLoops, branches);
-      g.GenerateLemmas();
-
-      var ss = states[states.Count-1];
-      var pc = ss.PC;
-
-      str += $@"
-        forall s', step |
-          && ActionTuple(ss.state, s', step) in cr.spec.next
-          && cr.idmap(step).Some?
-          && cr.idmap(step).v == tid
-          ensures cr.global_inv(s')
-        {{
-          lemma_GlobalInvariantsPathBehaviorLemma_{pathName}(cr, b, tid, ss, s', step);
-        }}
-      ";
-
-      str += $@"
-        forall s', step |
-          && ss.started
-          && ActionTuple(ss.state, s', step) in cr.spec.next
-          && cr.idmap(step).Some?
-          && cr.idmap(step).v == tid
-          ensures cr.enablement_condition(ss.state, tid)
-        {{
-      ";
-      if (pcsWithEnablingConditions.Contains(pc)) {
-        g = new EnablementConditionsPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-        g.GenerateLemmas();
-        str += $"          lemma_EnablementConditionsPathBehaviorLemma_{pathName}(cr, b, tid, ss, s', step);\n";
-      }
-      else {
-        str += "          assert EnablementCondition(ss.state, tid);\n";
-      }
-      str += "}\n";
-
-      if (localInvariantNames.ContainsKey(pc)) {
-        g = new LocalInvariantsPathLemmaGenerator(localInvariantNames[pc], pgp, pathName, methodName, states,
-                                                  steps, visitedLoops, branches);
-        g.GenerateLemmas();
-        str += $"  lemma_LocalInvariantsPathBehaviorLemma_{pathName}(cr, b, tid, ss);\n";
-      }
-      else {
-        str += "  assert LocalInv(ss.state, tid);\n";
-      }
-
-      str += @"
-        forall s', step |
-          && ss.started
-          && ActionTuple(ss.state, s', step) in cr.spec.next
-          && cr.idmap(step).Some?
-          && cr.idmap(step).v == tid
-          && tid in cr.actor_info(ss.state)
-          && tid in cr.actor_info(s')
-          && cr.pc_type(pc).CallSite?
-          ensures cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[tid].pc), s', tid)
-        {
-      ";
-
-      if (ss is NormalPCNode && ((NormalPCNode)ss).Next != null && ((NormalPCNode)ss).Next.nextType == NextType.Call) {
-        g = new PreconditionsForCallsPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-        g.GenerateLemmas();
-        str += $"    lemma_PreconditionsForCallsPathBehaviorLemma_{pathName}(cr, b, tid, ss, s', step);\n";
-      }
-      else {
-        str += "    assert !cr.pc_type(pc).CallSite?;\n";
-      }
-      str += "}\n";
-
-      str += @"
-        forall other_tid, s', step |
-          && ss.started
-          && ActionTuple(ss.state, s', step) in cr.spec.next
-          && cr.idmap(step).Some?
-          && cr.idmap(step).v == tid
-          && tid in cr.actor_info(ss.state)
-          && tid in cr.actor_info(s')
-          && other_tid !in cr.actor_info(ss.state)
-          && other_tid in cr.actor_info(s')
-          && cr.pc_type(pc).ForkSite?
-          ensures cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[other_tid].pc), s', other_tid)
-        {
-      ";
-      if (ss is NormalPCNode && ((NormalPCNode)ss).Next != null && ((NormalPCNode)ss).Next.nextType == NextType.CreateThread) {
-        g = new PreconditionsForForksPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-        g.GenerateLemmas();
-        str += $"    lemma_PreconditionsForForksPathBehaviorLemma_{pathName}(cr, b, tid, ss, other_tid, s', step);\n";
-      }
-      else {
-        str += "    assert !cr.pc_type(pc).ForkSite?;\n";
-      }
-      str += "}\n";
-
-      str += @"
-        if ss.started && tid in cr.actor_info(ss.state) && cr.pc_type(pc).ReturnSite? {
-      ";
-      if (ss is ReturningPCNode) {
-        g = new PostconditionsPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-        g.GenerateLemmas();
-        str += $"lemma_PostconditionsPathBehaviorLemma_{pathName}(cr, b, tid, ss);\n";
-        str += $"assert last(b.states) == b.states[{states.Count - 1}];\n";
-      }
-      else if (ss is StartingPCNode) {
-        str += "assert !ss.started;\n";
-      }
-      else {
-        str += "assert !cr.pc_type(pc).ReturnSite?;\n";
-      }
-      str += "}\n";
-
-      str += @"
-          if && tid in cr.actor_info(ss.state)
-             && cr.pc_type(pc).LoopHead?
-             && pc in cr.loop_modifies_clauses {
-      ";
-      if (loopHeads.Contains(ss.PC)) {
-        if (visitedLoops.ContainsKey(ss.PC) && visitedLoops[ss.PC] >= 0) {
-          g = new LoopModifiesClausesOnJumpBackPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-          g.GenerateLemmas();
-
-          str += $@"
-             assert pc in ss.visited_loops;
-             lemma_LoopModifiesClausesOnJumpBackPathBehaviorLemma_{pathName}(cr, b, tid, ss);
-          ";
-        }
-        else {
-          g = new LoopModifiesClausesOnEntryPathLemmaGenerator(pgp, pathName, methodName, states, steps, visitedLoops, branches);
-          g.GenerateLemmas();
-
-          str += $@"
-             assert pc !in ss.visited_loops;
-             lemma_LoopModifiesClausesOnEntryPathBehaviorLemma_{pathName}(cr, b, tid, ss);
-          ";
-        }
-      }
-      else {
-        str += "assert false;\n";
-      }
-      str += "}\n";
-
-      g = new YieldPredicateForOtherActorPathLemmaGenerator(yieldPredicateNames, pgp, pathName, methodName, states, steps,
-                                                            visitedLoops, branches);
-      g.GenerateLemmas();
-
-      str += $@"
-        forall other_tid, s', step |
-          && ss.started
-          && ActionTuple(ss.state, s', step) in cr.spec.next
-          && cr.idmap(step).Some?
-          && cr.idmap(step).v == tid
-          && tid != other_tid
-          ensures cr.yield_pred(ss.state, s', other_tid)
-        {{
-          lemma_YieldPredicateForOtherActorPathBehaviorLemma_{pathName}(cr, b, tid, ss, other_tid, s', step);
-        }}
-      ";
-
-      str += "}";
-      pgp.AddLemma(str, "path_" + pathName);
-    }
-
-    private void GeneratePathPrefixLemma(string pathName, string methodName, List<PCNode> states, List<StepDescriptor> steps,
-                                         Dictionary<ArmadaPC, int> visitedLoops, List<bool> branches)
-    {
-      var lemmaName = "lemma_PathPrefixLemma_" + pathName;
-      var procName = "LProcName_" + methodName;
-      var str = "lemma " + lemmaName + "(cr:CHLRequest, b:AnnotatedBehavior<SState, SStep>, tid:Armada_ThreadHandle)\n";
-      str += "requires cr == GetConcurrentHoareLogicRequest()\n";
-      str += $"requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, {procName}))\n";
-      str += $"requires |b.states| >= {states.Count}\n";
-      str += "requires last(b.states).state.s.stop_reason.Armada_NotStopped?\n";
-      str += AssumeIntroHelpers.GetCommonPathRequiresString(pgp.symbolsLow, methodName, states, steps, visitedLoops, true, true, false);
-      str += $"ensures  StraightlineBehaviorSatisfiesAllConditions(cr, b, tid, {procName})\n";
-      str += "{\n";
-      str += $"  var ss := b.states[{states.Count-1}];\n";
-      str += $"  lemma_IfFinalSStateOKThenAnySStateOK(cr, b, tid, {procName}, {states.Count-1});\n";
-      str += "  assert ss.state.s.stop_reason.Armada_NotStopped?;\n";
-
-      str += $"  if |b.states| == {states.Count} {{\n";
-      str += $"    lemma_PathBehaviorLemma_{pathName}(cr, b, tid, ss);\n";
-      str += "    return;\n";
-      str += "  }\n";
-
-      str += $"  var sstep := b.trace[{steps.Count}];\n";
-      str += $"  var ss' := b.states[{states.Count}];\n";
-      str += $"  var sspec := GetStraightlineSpec(cr, tid, {procName});\n";
-
-      str += $"  lemma_IfFinalSStateOKThenAnySStateOK(cr, b, tid, {procName}, {states.Count});\n";
-      str += "  assert ss'.state.s.stop_reason.Armada_NotStopped?;\n";
-
-      str += $"  var i := {states.Count-1};\n";
-      str += $"  assert ActionTuple(b.states[i], b.states[i+1], b.trace[i]) in sspec.next;\n";
-      str += $"  assert StraightlineSpecNext(cr, ss, ss', sstep, tid, {procName});\n";
-      str += $"  lemma_AllButFirstSStateOfBehaviorStarted(cr, b, tid, {procName}, {states.Count-1});\n";
-
-      var lastState = states[states.Count - 1];
-      if (lastState is ReturningPCNode) {
-        str += "  assert tid in ss'.state.s.threads;\n";
-        str += "  var pc := ss'.state.s.threads[tid].pc;\n";
-        str += "  assert cr.pc_type(pc).ReturnSite?;\n";
-        str += "  assert false;\n";
-      }
-      else if (lastState is LoopRestartPCNode) {
-        str += "  assert tid in ss'.state.s.threads;\n";
-        str += "  var pc := ss'.state.s.threads[tid].pc;\n";
-        str += "  assert pc in ss'.visited_loops;\n";
-        str += "  assert false;\n";
-      }
-      else if (lastState is NormalPCNode || lastState is StartingPCNode) {
-        var successor = (lastState is NormalPCNode) ? ((NormalPCNode)lastState).Successor : ((StartingPCNode)lastState).Successor;
-        str += "  assert tid in ss'.state.s.threads;\n";
-        str += "  var pc := ss'.state.s.threads[tid].pc;\n";
-        str += $"  assert pc.{successor.PC}?;\n";
-        var extendedStates = new List<PCNode>(states);
-        extendedStates.Add(successor);
-        var extendedPathName = GetPathName(methodName, extendedStates, branches);
-        str += $"  lemma_PathPrefixLemma_{extendedPathName}(cr, b, tid);\n";
-      }
-      else if (lastState is IfPCNode || lastState is WhilePCNode) {
-        var successorWhenTrue = (lastState is IfPCNode) ? ((IfPCNode)lastState).SuccessorWhenTrue : ((WhilePCNode)lastState).SuccessorWhenTrue;
-        var successorWhenFalse = (lastState is IfPCNode) ? ((IfPCNode)lastState).SuccessorWhenFalse : ((WhilePCNode)lastState).SuccessorWhenFalse;
-
-        var extendedStatesWhenTrue = new List<PCNode>(states);
-        extendedStatesWhenTrue.Add(successorWhenTrue);
-        var extendedStatesWhenFalse = new List<PCNode>(states);
-        extendedStatesWhenFalse.Add(successorWhenFalse);
-        var extendedBranchesWhenTrue = new List<bool>(branches);
-        extendedBranchesWhenTrue.Add(true);
-        var extendedBranchesWhenFalse = new List<bool>(branches);
-        extendedBranchesWhenFalse.Add(false);
-        var extendedPathNameWhenTrue = GetPathName(methodName, extendedStatesWhenTrue, extendedBranchesWhenTrue);
-        var extendedPathNameWhenFalse = GetPathName(methodName, extendedStatesWhenFalse, extendedBranchesWhenFalse);
-
-        str += "  assert tid in ss'.state.s.threads;\n";
-        str += "  var pc := ss'.state.s.threads[tid].pc;\n";
-        str += $"  if pc.{successorWhenTrue.PC}? {{\n";
-        str += $"    lemma_PathPrefixLemma_{extendedPathNameWhenTrue}(cr, b, tid);\n";
-        str += "  }\n";
-        str += "  else {\n";
-        str += $"    assert pc.{successorWhenFalse.PC}?;\n";
-        str += $"    lemma_PathPrefixLemma_{extendedPathNameWhenFalse}(cr, b, tid);\n";
-        str += "  }\n";
-      }
-
-      str += "}\n";
-      pgp.AddLemma(str, "pathprefix");
-    }
-
-    private void GeneratePerPathLemmas()
-    {
-      pathPrefixFile = pgp.proofFiles.CreateAuxiliaryProofFile("pathprefix");
-      pathPrefixFile.IncludeAndImportGeneratedFile("specs");
-      pathPrefixFile.IncludeAndImportGeneratedFile("defs");
-      pathPrefixFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/ConcurrentHoareLogic.i.dfy");
-      pathPrefixFile.AddImport("ConcurrentHoareLogicSpecModule");
-      pathPrefixFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy",
-                                      "util_collections_seqs_s");
-      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("pathprefix");
-      GenerateFinalStraightlineLemmas();
-      GenerateStraightlineBehaviorPredicates();
-      GenerateStraightlineBehaviorLemmas();
-      GeneratePathLemmasForAllMethods();
-    }
-
-    private void GenerateStraightlineBehaviorPredicates()
-    {
       string str;
 
-      str = @"
-        predicate StraightlineBehaviorSatisfiesGlobalInvariants(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          forall s', step ::
-              (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-              && var s := last(b.states).state;
-              && ActionTuple(s, s', step) in cr.spec.next
-              && cr.idmap(step).Some?
-              && cr.idmap(step).v == actor
-              )
-              ==> cr.global_inv(s')
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
+      str = "datatype StraightlineBehaviorDescriptor = ";
+      str += String.Join(" | ", straightlineBehaviorDescriptors.Select(sb => $"SBD_{sb.Name}"));
+      pgp.AddDatatype(str, "sbd");
 
-      str = @"
-        predicate StraightlineBehaviorSatisfiesLocalInvariants(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                               actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc)) ==> cr.local_inv(last(b.states).state, actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
+      var extractorSTrace = new ExtractorSTrace("strace", "proc");
+      foreach (var sbd in straightlineBehaviorDescriptors)
+      {
+        str = $@"
+          predicate StraightlineBehaviorSatisfiesDescriptor_{sbd.Name}(strace:seq<LAtomicStraightlineStep>, proc:LProcName)
+          {{
+        ";
+        str += String.Join(" && ", sbd.GetSatisfiesDescriptorClauses(extractorSTrace));
+        str += "}";
+        pgp.AddPredicate(str, "sbd");
 
-      str = @"
-        predicate StraightlineBehaviorSatisfiesEnablementConditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                    actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          forall s', step ::
-              (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-               && last(b.states).started
-               && var s := last(b.states).state;
-               && ActionTuple(s, s', step) in cr.spec.next
-               && cr.idmap(step).Some?
-               && cr.idmap(step).v == actor
-              )
-              ==> cr.enablement_condition(last(b.states).state, actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesPreconditionsForCalls(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                     actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          forall s', step ::
-              (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-               && last(b.states).started
-               && var s := last(b.states).state;
-               && ActionTuple(s, s', step) in cr.spec.next
-               && cr.idmap(step).Some?
-               && cr.idmap(step).v == actor
-               && actor in cr.actor_info(s)
-               && actor in cr.actor_info(s')
-               && var pc := cr.actor_info(s)[actor].pc;
-               && cr.pc_type(pc).CallSite?
-              )
-              ==> cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[actor].pc), s', actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesPreconditionsForForks(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                     actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          forall other_actor, s', step ::
-              (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-               && last(b.states).started
-               && var s := last(b.states).state;
-               && ActionTuple(s, s', step) in cr.spec.next
-               && cr.idmap(step).Some?
-               && cr.idmap(step).v == actor
-               && actor in cr.actor_info(s)
-               && actor in cr.actor_info(s')
-               && other_actor !in cr.actor_info(s)
-               && other_actor in cr.actor_info(s')
-               && var pc := cr.actor_info(s)[actor].pc;
-               && cr.pc_type(pc).ForkSite?
-               )
-               ==> cr.requires_clauses(cr.pc_to_proc(cr.actor_info(s')[other_actor].pc), s', other_actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesPostconditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                              actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-           && last(b.states).started
-           && var s := last(b.states).state;
-           && actor in cr.actor_info(s)
-           && var pc := cr.actor_info(s)[actor].pc;
-           && cr.pc_type(pc).ReturnSite?
-           )
-           ==> cr.ensures_clauses(proc, b.states[0].state, last(b.states).state, actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                          actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-           && var s := last(b.states).state;
-           && actor in cr.actor_info(s)
-           && var pc := cr.actor_info(s)[actor].pc;
-           && cr.pc_type(pc).LoopHead?
-           && pc in cr.loop_modifies_clauses
-           && pc !in last(b.states).visited_loops
-           )
-           ==> var s := last(b.states).state;
-               var pc := cr.actor_info(s)[actor].pc;
-               cr.loop_modifies_clauses[pc](s, s, actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                             actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-           && var s := last(b.states).state;
-           && actor in cr.actor_info(s)
-           && var pc := cr.actor_info(s)[actor].pc;
-           && cr.pc_type(pc).LoopHead?
-           && pc in cr.loop_modifies_clauses
-           && pc in last(b.states).visited_loops
-           )
-           ==> var s := last(b.states).state;
-               var pc := cr.actor_info(s)[actor].pc;
-               cr.loop_modifies_clauses[pc](last(b.states).visited_loops[pc], s, actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesYieldPredicateForOtherActor(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                           actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          forall other_actor, s', step ::
-              (&& AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-               && last(b.states).started
-               && var s := last(b.states).state;
-               && ActionTuple(s, s', step) in cr.spec.next
-               && cr.idmap(step).Some?
-               && cr.idmap(step).v == actor
-               && actor != other_actor)
-              ==> cr.yield_pred(last(b.states).state, s', other_actor)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-
-      str = @"
-        predicate StraightlineBehaviorSatisfiesAllConditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                             actor:Armada_ThreadHandle, proc:LProcName)
-        {
-          && StraightlineBehaviorSatisfiesGlobalInvariants(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesLocalInvariants(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesEnablementConditions(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesPreconditionsForCalls(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesPreconditionsForForks(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesPostconditions(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack(cr, b, actor, proc)
-          && StraightlineBehaviorSatisfiesYieldPredicateForOtherActor(cr, b, actor, proc)
-        }
-      ";
-      pgp.AddPredicate(str, "defs");
-    }
-
-    private void GenerateStraightlineBehaviorLemmas()
-    {
-      string str;
-
-      str = @"
-        lemma lemma_IfFinalSStateOKThenAnySStateOK(cr: CHLRequest, b:AnnotatedBehavior<SState, SStep>, tid:Armada_ThreadHandle,
-                                                   proc:LProcName, i:int)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, proc))
-          requires last(b.states).state.s.stop_reason.Armada_NotStopped?
-          requires 0 <= i < |b.states|
-          ensures  b.states[i].state.s.stop_reason.Armada_NotStopped?
-          decreases |b.states| - i
-        {
-          if i == |b.states|-1 {
-              assert b.states[i].state.s.stop_reason.Armada_NotStopped?;
-              return;
-          }
-
-          var sspec := GetStraightlineSpec(cr, tid, proc);
-          assert ActionTuple(b.states[i], b.states[i+1], b.trace[i]) in sspec.next;
-          lemma_IfFinalSStateOKThenAnySStateOK(cr, b, tid, proc, i+1);
-          assert b.states[i+1].state.s.stop_reason.Armada_NotStopped?;
-          match b.trace[i]
-              case StraightlineStepStart() =>
-                  assert b.states[i].state.s.stop_reason.Armada_NotStopped?;
-              case StraightlineStepNormal(post_stmt_state, _) =>
-                  assert post_stmt_state.s.stop_reason.Armada_NotStopped?;
-                  assert b.states[i].state.s.stop_reason.Armada_NotStopped?;
-              case StraightlineStepCall(post_call_state, pre_return_state, post_return_state, _, _) =>
-                  assert post_return_state.s.stop_reason.Armada_NotStopped?;
-                  assert pre_return_state.s.stop_reason.Armada_NotStopped?;
-                  assert post_call_state.s.stop_reason.Armada_NotStopped?;
-                  assert b.states[i].state.s.stop_reason.Armada_NotStopped?;
-              case StraightlineStepLoop(post_loops_state, post_guard_state, _) =>
-                  assert post_guard_state.s.stop_reason.Armada_NotStopped?;
-                  assert post_loops_state.s.stop_reason.Armada_NotStopped?;
-                  assert b.states[i].state.s.stop_reason.Armada_NotStopped?;
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesGlobalInvariants(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                            actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesGlobalInvariants(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLocalInvariants(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                           actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesLocalInvariants(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesEnablementConditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                                actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesEnablementConditions(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPreconditionsForCalls(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                                 actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesPreconditionsForCalls(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPreconditionsForForks(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                                 actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesPreconditionsForForks(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPostconditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                          actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesPostconditions(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLoopModifiesClausesOnEntry(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                                      actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLoopModifiesClausesOnJumpBack(
-          cr: CHLRequest,
-          b: AnnotatedBehavior<SState, SStep>,
-          actor:Armada_ThreadHandle,
-          proc:LProcName
-          )
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesYieldPredicateForOtherActor(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                                       actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesYieldPredicateForOtherActor(cr, b, actor, proc);
-        {
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_IfFinalSStateNotOKThenBehaviorSatisfiesAllConditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                                         actor:Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, actor, proc))
-          requires !last(b.states).state.s.stop_reason.Armada_NotStopped?
-          ensures  StraightlineBehaviorSatisfiesAllConditions(cr, b, actor, proc);
-        {
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesGlobalInvariants(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLocalInvariants(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesEnablementConditions(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPreconditionsForCalls(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPreconditionsForForks(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesPostconditions(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLoopModifiesClausesOnEntry(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesLoopModifiesClausesOnJumpBack(cr, b, actor, proc);
-          lemma_IfFinalSStateNotOKThenBehaviorSatisfiesYieldPredicateForOtherActor(cr, b, actor, proc);
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_AllButFirstSStateOfBehaviorStarted(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>, tid: Armada_ThreadHandle,
-                                                       proc: LProcName, i:int)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, proc))
-          requires 0 <= i < |b.states|
-          ensures  b.states[i].started == (i > 0)
-        {
-          if i == 0 {
-              return;
-          }
-          var prev := i-1;
-          var sspec := GetStraightlineSpec(cr, tid, proc);
-          assert ActionTuple(b.states[prev], b.states[prev + 1], b.trace[prev]) in sspec.next;
-          assert StraightlineSpecNext(cr, b.states[prev], b.states[prev + 1], b.trace[prev], tid, proc);
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
-    }
-
-    private void GenerateFinalStraightlineLemmas()
-    {
-      string elseClauses = String.Join("", pgp.symbolsLow.MethodNames.Select(methodName => $@"
-        else if proc == LProcName_{methodName} {{
-          lemma_PathPrefixLemma_{methodName}_Prestart(cr, b, tid);
-        }}
-        "));
-      string str = $@"
-        lemma lemma_StraightlineBehaviorSatisfiesAllConditions(cr: CHLRequest, b: AnnotatedBehavior<SState, SStep>,
-                                                               tid: Armada_ThreadHandle, proc:LProcName)
-          requires cr == GetConcurrentHoareLogicRequest()
-          requires AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, proc))
-          ensures  StraightlineBehaviorSatisfiesAllConditions(cr, b, tid, proc)
-        {{
-          if !last(b.states).state.s.stop_reason.Armada_NotStopped? {{
-            lemma_IfFinalSStateNotOKThenBehaviorSatisfiesAllConditions(cr, b, tid, proc);
+        str = $@"
+          predicate StraightlineBehaviorFullySatisfiesDescriptor_{sbd.Name}(strace:seq<LAtomicStraightlineStep>, proc:LProcName)
+          {{
+            && |strace| == {sbd.NumSteps}
+            && StraightlineBehaviorSatisfiesDescriptor_{sbd.Name}(strace, proc)
           }}
-          {elseClauses}
-        }}
-      ";
-      pgp.AddLemma(str, "pathprefix");
+        ";
+        pgp.AddPredicate(str, "sbd");
+      }
 
       str = @"
-        lemma lemma_StraightlineSpecPreservesGlobalInvariantOnTermination(cr:CHLRequest)
-          requires cr == GetConcurrentHoareLogicRequest()
-          ensures  StraightlineSpecPreservesGlobalInvariantOnTermination(cr)
+        predicate StraightlineBehaviorFullySatisfiesDescriptor(strace:seq<LAtomicStraightlineStep>, proc:LProcName,
+                                                               sbd:StraightlineBehaviorDescriptor)
         {
-           forall s, s', step |
-             && cr.established_inv(s)
-             && cr.global_inv(s)
-             && ActionTuple(s, s', step) in cr.spec.next
-             && (forall any_actor :: any_actor !in cr.actor_info(s'))
-             ensures cr.global_inv(s')
-           {
-             assert step.tid !in cr.actor_info(s');
-             assert step.tid !in s'.s.threads;
-           }
-        }
+          match sbd
       ";
-      pgp.AddLemma(str, "pathprefix");
-
-      str = @"
-        lemma lemma_StraightlineSpecRequirements(cr: CHLRequest)
-          requires cr == GetConcurrentHoareLogicRequest()
-          ensures  StraightlineSpecRequirements(cr);
-        {
-          forall b, tid, proc | AnnotatedBehaviorSatisfiesSpec(b, GetStraightlineSpec(cr, tid, proc))
-            ensures StraightlineBehaviorSatisfiesAllConditions(cr, b, tid, proc)
-          {
-            lemma_StraightlineBehaviorSatisfiesAllConditions(cr, b, tid, proc);
-          }
-          lemma_StraightlineSpecPreservesGlobalInvariantOnTermination(cr);
-        }
-      ";
-      pgp.AddLemma(str, "pathprefix");
+      str += String.Concat(straightlineBehaviorDescriptors.Select(sbd => $@"
+        case SBD_{sbd.Name} => StraightlineBehaviorFullySatisfiesDescriptor_{sbd.Name}(strace, proc)
+      "));
+      str += "}\n";
+      pgp.AddPredicate(str, "sbd");
     }
 
-    private void GenerateStateRefinerSatisfiesRelationLemma()
+    private void GenerateStraightlineBehaviorDescriptorExhaustiveLemmas()
     {
-      string str = @"
-        lemma lemma_StateRefinerSatisfiesRelation(ls:LPlusState)
-          requires InductiveInv(ls)
-          requires GlobalInv(ls)
-          ensures  RefinementPair(ls, ConvertTotalState_LPlusH(ls)) in GetLPlusHRefinementRelation()
+      exhaustiveFile = pgp.proofFiles.CreateAuxiliaryProofFile("exhaustive");
+      exhaustiveFile.IncludeAndImportGeneratedFile("specs");
+      exhaustiveFile.IncludeAndImportGeneratedFile("defs");
+      exhaustiveFile.IncludeAndImportGeneratedFile("revelations");
+      exhaustiveFile.IncludeAndImportGeneratedFile("latomic");
+      exhaustiveFile.IncludeAndImportGeneratedFile("sbd");
+      exhaustiveFile.IncludeAndImportGeneratedFile("pcstack");
+      exhaustiveFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      exhaustiveFile.AddImport("ConcurrentHoareLogicSpecModule");
+      exhaustiveFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      exhaustiveFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      exhaustiveFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("exhaustive");
+
+      string str;
+
+      str = @"
+        function GetLAtomicStraightlineSpec(tid:Armada_ThreadHandle, proc:LProcName) : LAtomicStraightlineBehaviorSpec
         {
+          GetStraightlineSpec(GetConcurrentHoareLogicRequest(), tid, proc)
         }
       ";
-      pgp.AddLemma(str);
+      pgp.AddFunction(str, "exhaustive");
+
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+
+      foreach (var sbd in straightlineBehaviorDescriptors)
+      {
+        str = $@"
+          lemma lemma_StraightlineBehaviorEndProperties_{sbd.Name}(
+            sb:LAtomicStraightlineBehavior,
+            tid:Armada_ThreadHandle,
+            proc:LProcName
+            )
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+            requires StraightlineBehaviorSatisfiesDescriptor_{sbd.Name}(sb.trace, proc)
+            ensures  proc.LProcName_{sbd.MethodName}?
+        ";
+        foreach (var c in sbd.LastState.GetEndProperties(extractorSB))
+        {
+          str += $"ensures {c}\n";
+        }
+        str += "{\n";
+        str += sbd.GetProofOfEndProperties(extractorSB);
+        str += "}\n";
+        pgp.AddLemma(str, "exhaustive");
+      }
+
+      foreach (var sbd in straightlineBehaviorDescriptors)
+      {
+        str = $@"
+          lemma lemma_GetFullDescriptorForStraightlineBehavior_{sbd.Name}(
+            sb:LAtomicStraightlineBehavior,
+            tid:Armada_ThreadHandle,
+            proc:LProcName
+            ) returns (
+            sbd:StraightlineBehaviorDescriptor
+            )
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+            requires StraightlineBehaviorSatisfiesDescriptor_{sbd.Name}(sb.trace, proc)
+            ensures  StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, sbd)
+          {{
+            if |sb.trace| == {sbd.NumSteps} {{
+              sbd := SBD_{sbd.Name};
+              return;
+            }}
+        ";
+        foreach (var successor in sbd.Successors) {
+          str += $@"
+            if StraightlineBehaviorSatisfiesDescriptor_{successor.Name}(sb.trace, proc) {{
+              sbd := lemma_GetFullDescriptorForStraightlineBehavior_{successor.Name}(sb, tid, proc);
+              return;
+            }}
+          ";
+        }
+
+        str += $@"
+          lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+
+          var sspec := GetLAtomicStraightlineSpec(tid, proc);
+          assert ActionTuple(sb.states[{sbd.NumSteps}], sb.states[{sbd.NumSteps}+1], sb.trace[{sbd.NumSteps}]) in sspec.next;
+        ";
+        str += sbd.LastState.ProofOfLimitedNextSSteps(extractorSB);
+        str += "}";
+        pgp.AddLemma(str, "exhaustive");
+      }
+
+      str = $@"
+        lemma lemma_GetFullDescriptorForStraightlineBehavior(
+          sb:LAtomicStraightlineBehavior,
+          tid:Armada_ThreadHandle,
+          proc:LProcName
+          ) returns (
+          sbd:StraightlineBehaviorDescriptor
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          ensures  StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, sbd)
+        {{
+          match proc {{
+      ";
+      str += String.Concat(emptyStraightlineBehaviorForMethod.Select(item => $@"
+            case LProcName_{item.Key} =>
+              sbd := lemma_GetFullDescriptorForStraightlineBehavior_{item.Value.Name}(sb, tid, proc);
+      "));
+      str += "} }\n";
+      pgp.AddLemma(str, "exhaustive");
+    }
+
+    private void GenerateStraightlineBehaviorDescriptorEndLemma(string phase, IEnumerable<StraightlineBehavior> sbds)
+    {
+      string str;
+
+      str = $@"
+        predicate StraightlineBehaviorDescriptorEnds{phase}Possibilities(sbd:StraightlineBehaviorDescriptor)
+        {{
+      ";
+      str += AH.CombineStringsWithOr(sbds.Select(sbd => $"sbd.SBD_{sbd.Name}?"));
+      str += "}";
+      pgp.AddPredicate(str, "continuation");
+
+      str = $@"
+        lemma lemma_GetFullDescriptorForStraightlineBehaviorEnding{phase}(
+          sb:LAtomicStraightlineBehavior,
+          tid:Armada_ThreadHandle,
+          proc:LProcName
+          ) returns (
+          sbd:StraightlineBehaviorDescriptor
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          requires last(sb.states).aux.phase.StraightlinePhase{phase}?
+          ensures  StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, sbd)
+          ensures  StraightlineBehaviorDescriptorEnds{phase}Possibilities(sbd)
+        {{
+          sbd := lemma_GetFullDescriptorForStraightlineBehavior(sb, tid, proc);
+          match sbd {{
+      ";
+      str += String.Concat(straightlineBehaviorDescriptors.Select(sbd => $@"
+            case SBD_{sbd.Name} =>
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+      "));
+      str += "} }\n";
+      pgp.AddLemma(str, "continuation");
+    }
+
+    private void GenerateStraightlineBehaviorDescriptorContinuationLemmas()
+    {
+      var continuationFile = pgp.proofFiles.CreateAuxiliaryProofFile("continuation");
+      continuationFile.IncludeAndImportGeneratedFile("specs");
+      continuationFile.IncludeAndImportGeneratedFile("defs");
+      continuationFile.IncludeAndImportGeneratedFile("latomic");
+      continuationFile.IncludeAndImportGeneratedFile("sbd");
+      continuationFile.IncludeAndImportGeneratedFile("pcstack");
+      continuationFile.IncludeAndImportGeneratedFile("exhaustive");
+      continuationFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      continuationFile.AddImport("ConcurrentHoareLogicSpecModule");
+      continuationFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      continuationFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      continuationFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("continuation");
+
+      GenerateStraightlineBehaviorDescriptorEndLemma("Ensured", sbdsEndingEnsured);
+      GenerateStraightlineBehaviorDescriptorEndLemma("Yielded", sbdsEndingYielded);
+
+      string str;
+
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured))
+      {
+        str = $@"
+          predicate StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(path:LAtomic_Path)
+          {{
+        ";
+        str += AH.CombineStringsWithOr(sbd.PotentialSuccessorPaths
+                                          .Where(tup => tup.Item2.CanFollow(sbd.LastState))
+                                          .Select(tup => $"path.LAtomic_Path_{tup.Item1.Name}?"));
+        str += "}";
+        pgp.AddPredicate(str, "continuation");
+
+        str = $@"
+          lemma lemma_StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            tid: Armada_ThreadHandle,
+            proc: LProcName,
+            s': LPlusState,
+            path: LAtomic_Path
+            )
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires !path.LAtomic_Path_Tau?
+            requires !PathToEffect(path).CHLStepEffectStop?
+            requires var effect := PathToEffect(path);
+         ";
+        if (sbd.LastState is StraightlineStateEnsured) {
+          str += $"effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall?\n";
+        }
+        else {
+          str += $"!effect.CHLStepEffectReturn? && !effect.CHLStepEffectReturnThenCall?\n";
+        }
+        str += $@"
+            ensures  StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(path)
+          {{
+            var ss := last(sb.states);
+            assert ss == sb.states[{sbd.NumSteps}];
+            var s := sb.states[{sbd.NumSteps}].state;
+            assert s == ss.state;
+            lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+        ";
+        if (sbd.LastState is StraightlineStateEnsured) {
+          var callee = ((StraightlineStateEnsured) sbd.LastState).Callee;
+          str += $"lemma_PathPossibilitiesReturningFrom_{callee}(s, s', path, tid);\n";
+        }
+        else {
+          str += $"lemma_PathPossibilitiesStartingAtPC_{sbd.LastState.PC}(s, s', path, tid);\n";
+        }
+        str += String.Concat(sbd.PotentialSuccessorPaths.Where(tup => !tup.Item2.CanFollow(sbd.LastState)).Select(tup => $@"
+              if path.LAtomic_Path_{tup.Item1.Name}? {{
+                lemma_LAtomic_PathHasPCStackEffect_{tup.Item1.Name}(s, s', path, tid);
+                assert false;
+              }}
+          "));
+          str += "}\n";
+        pgp.AddLemma(str, "continuation");
+      }
+    }
+
+    private void GenerateStraightlineBehaviorDescriptorEnumerationLemmas()
+    {
+      var enumerationFile = pgp.proofFiles.CreateAuxiliaryProofFile("enumeration");
+      enumerationFile.IncludeAndImportGeneratedFile("specs");
+      enumerationFile.IncludeAndImportGeneratedFile("defs");
+      enumerationFile.IncludeAndImportGeneratedFile("latomic");
+      enumerationFile.IncludeAndImportGeneratedFile("invariants");
+      enumerationFile.IncludeAndImportGeneratedFile("sbd");
+      enumerationFile.IncludeAndImportGeneratedFile("pcstack");
+      enumerationFile.IncludeAndImportGeneratedFile("exhaustive");
+      enumerationFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      enumerationFile.AddImport("ConcurrentHoareLogicSpecModule");
+      enumerationFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      enumerationFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      enumerationFile.AddImport("util_collections_seqs_s");
+
+      string str;
+
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured).Concat(sbdsEndingNormal)) {
+        str = $@"
+          lemma lemma_EnumerateStraightlineBehaviorHelper_{sbd.Name}(
+            cr: CHLRequest,
+            sb: LAtomicStraightlineBehavior,
+            tid: Armada_ThreadHandle,
+            proc: LProcName
+            )
+            requires cr.spec == GetCHLSpec()
+            requires cr.step_to_actor == PathAndTidToTid
+            requires cr.step_to_proc == PathAndTidToProc
+            requires cr.get_actor_pc_stack == GetThreadPCStack
+            requires cr.state_ok == StateOK
+            requires cr.pc_to_proc == PCToProc
+            requires cr.is_entry_point == IsEntryPoint
+            requires cr.is_loop_head == IsLoopHead
+            requires cr.is_return_site == IsReturnSite
+            requires cr.step_to_effect == PathAndTidToEffect
+            requires proc.LProcName_{sbd.MethodName}?
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetStraightlineSpec(cr, tid, proc))
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+        ";
+        foreach (var s in sbd.GetEnumerationClauses(extractorSB, false /* expanded */, true /* crRelative */)) {
+          str += $"ensures {s}\n";
+        }
+        str += $@"
+          {{
+            var sspec := GetStraightlineSpec(cr, tid, proc);
+        ";
+        str += String.Concat(Enumerable.Range(0, sbd.NumSteps).Select(i => $@"
+            assert ActionTuple(sb.states[{i}], sb.states[{i}+1], sb.trace[{i}]) in sspec.next;
+        "));
+        str += "}\n";
+        pgp.AddLemma(str, "enumeration");
+
+        str = $@"
+          lemma lemma_EnumerateStraightlineBehavior_{sbd.Name}(
+            sb:LAtomicStraightlineBehavior,
+            tid:Armada_ThreadHandle,
+            proc:LProcName
+            )
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+        ";
+        foreach (var s in sbd.GetEnumerationClauses(extractorSB)) {
+          str += $"ensures {s}\n";
+        }
+        str += $@"
+          {{
+            assert proc.LProcName_{sbd.MethodName}?;
+            lemma_EnumerateStraightlineBehaviorHelper_{sbd.Name}(GetConcurrentHoareLogicRequest(), sb, tid, proc);
+          }}
+        ";
+        str += "}\n";
+        pgp.AddLemma(str, "enumeration");
+      }
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyGlobalInvariantProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("GlobalInvAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("GlobalInvAlways");
+
+      // If the global invariant is just "true", generate a very simple lemma:
+
+      if (!globalInvariantNames.Any()) {
+        str = @"
+          lemma lemma_StraightlineBehaviorsSatisfyGlobalInvariant()
+            ensures StraightlineBehaviorsSatisfyGlobalInvariant(GetConcurrentHoareLogicRequest())
+          {
+            var cr := GetConcurrentHoareLogicRequest();
+            forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')}
+              | StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')
+              ensures cr.global_inv(s')
+            {
+            }
+          }
+        ";
+        pgp.AddLemma(str, "GlobalInvAlways");
+
+        return;
+      }
+
+      // Otherwise, create two files for each global invariant, one to reason about all straightline behaviors
+      // and one to reason about specific straightline behaviors.
+
+      foreach (var item in globalInvariantNames)
+      {
+        var invName = item.Key;
+
+        var invFile = pgp.proofFiles.CreateAuxiliaryProofFile($"GlobalInv_{invName}");
+        invFile.IncludeAndImportGeneratedFile("specs");
+        invFile.IncludeAndImportGeneratedFile("defs");
+        invFile.IncludeAndImportGeneratedFile("revelations");
+        invFile.IncludeAndImportGeneratedFile("invariants");
+        invFile.IncludeAndImportGeneratedFile("latomic");
+        alwaysFile.IncludeAndImportGeneratedFile($"GlobalInv_{invName}");
+      }
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured))
+      {
+        foreach (var atomicPath in sbd.PotentialSuccessorPaths.Where(tup => tup.Item2.CanFollow(sbd.LastState))
+                                                              .Select(tup => tup.Item1))
+        {
+          var beyondEnd = new StraightlineStepBeyondEnd(sbd.NumSteps, atomicPath, pcsWithLocalInvariants.Contains(sbd.LastState.PC));
+          var sbdPlus = new StraightlineBehavior(sbd, beyondEnd);
+          var pathExpander = new PathExpander(sbdPlus);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+
+          var expandedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }
+                               .Concat(sbdPlus.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues =
+            String.Join(", ", new List<string>{ "tid" }
+                                .Concat(sbdPlus.GetStatesAndSteps(extractorEnumeration, false)));
+
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string> { "tid: Armada_ThreadHandle" }
+                               .Concat(sbdPlus.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues =
+            String.Join(", ", new List<string>{ "tid" }
+                                .Concat(sbd.GetStatesAndPaths(extractorSB, false))
+                                .Concat(new List<string>{ "path", "s'" }));
+
+          foreach (var kv in globalInvariantNames)
+          {
+            var invName = kv.Key;
+            var invPred = kv.Value;
+            str = $@"
+              lemma lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {expandedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires InductiveInv({extractorExpanded.State(sbd.NumSteps + 1)})
+                ensures  {invPred}({extractorExpanded.State(sbd.NumSteps + 1)})
+              {{
+                ProofCustomizationGoesHere();
+              }}
+            ";
+            pgp.AddLemma(str, $"GlobalInv_{invName}");
+
+            str = $@"
+              lemma lemma_EnumeratedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {enumeratedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorEnumeration, false).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires InductiveInv(s{sbd.NumSteps + 1})
+                ensures  {invPred}(s{sbd.NumSteps + 1})
+              {{
+                { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+                { extractorEnumeration.GetOpenValidPathInvocation(atomicPath, sbd.NumSteps) }
+                lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
+                  {expandedParamValues}
+                );
+              }}
+            ";
+            pgp.AddLemma(str, $"GlobalInv_{invName}");
+          }
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesGlobalInvariant_{sbd.Name}_Then_{atomicPath.Name}(
+              sb: LAtomicStraightlineBehavior,
+              path: LAtomic_Path,
+              tid: Armada_ThreadHandle,
+              s': LPlusState
+              )
+              requires path.LAtomic_Path_{atomicPath.Name}?
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+              requires LocalInv(last(sb.states).state, tid)
+              requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+              ensures  GlobalInv(s')
+            {{
+              var proc := LProcName_{sbd.MethodName};
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+              if InductiveInv(s') {{
+          ";
+          str += String.Concat(globalInvariantNames.Select(kv => kv.Key).Select(invName => $@"
+                lemma_EnumeratedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
+                  {enumeratedParamValues}
+                );
+          "));
+          str += "} }";
+          pgp.AddLemma(str, "GlobalInvAlways");
+        }
+
+        var optionalNot = (sbd.LastState is StraightlineStateYielded) ? "!" : "";
+        str = $@"
+          lemma lemma_StraightlineBehaviorSatisfiesGlobalInvariant_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            s': LPlusState
+            )
+            requires !path.LAtomic_Path_Tau?
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+            requires LocalInv(last(sb.states).state, tid)
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires !PathToEffect(path).CHLStepEffectStop?
+            requires var effect := PathToEffect(path);
+                     {optionalNot}(effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall?)
+            ensures  GlobalInv(s')
+          {{
+            lemma_StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(sb, tid, LProcName_{sbd.MethodName}, s', path);
+            match path {{
+        ";
+        foreach (var tup in sbd.PotentialSuccessorPaths)
+        {
+          var path = tup.Item1;
+          var effect = tup.Item2;
+          str += $"case LAtomic_Path_{path.Name}(_) =>\n";
+          if (tup.Item2.CanFollow(sbd.LastState)) {
+            str += $"lemma_StraightlineBehaviorSatisfiesGlobalInvariant_{sbd.Name}_Then_{path.Name}(sb, path, tid, s');\n";
+          }
+          else {
+            str += $"assert PathToEffect(path) == {effect.Constructor};\n assert false;\n";
+          }
+        }
+        str += "} }\n";
+        pgp.AddLemma(str, "GlobalInvAlways");
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesGlobalInvariant(
+          sb: LAtomicStraightlineBehavior,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          s': LPlusState
+          )
+          requires !path.LAtomic_Path_Tau?
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, PathToProc(path)))
+          requires LocalInv(last(sb.states).state, tid)
+          requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+          requires !PathToEffect(path).CHLStepEffectStop?
+          requires var phase := last(sb.states).aux.phase;
+                   var effect := PathToEffect(path);
+                   if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+                     phase.StraightlinePhaseEnsured?
+                   else
+                     phase.StraightlinePhaseYielded?
+          ensures  GlobalInv(s')
+        {
+          var proc := PathToProc(path);
+          var phase := last(sb.states).aux.phase;
+          if phase.StraightlinePhaseEnsured? {
+            var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingEnsured(sb, tid, proc);
+            assert StraightlineBehaviorDescriptorEndsEnsuredPossibilities(sbd);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingEnsured.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesGlobalInvariant_{sbd.Name}(sb, path, tid, s');
+      "));
+      str += @"
+            }
+          }
+          else {
+            var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+            assert StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingYielded.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesGlobalInvariant_{sbd.Name}(sb, path, tid, s');
+      "));
+      str += @"
+            }
+          }
+        }
+      ";
+      pgp.AddLemma(str, "GlobalInvAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyGlobalInvariant()
+          ensures StraightlineBehaviorsSatisfyGlobalInvariant(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')}
+            | StraightlineBehaviorsSatisfyGlobalInvariantConditions(cr, sb, step, s')
+            ensures cr.global_inv(s')
+          {
+            lemma_StraightlineBehaviorSatisfiesGlobalInvariant(sb, step.path, step.tid, s');
+          }
+        }
+      ";
+      pgp.AddLemma(str, "GlobalInvAlways");
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyLocalInvariantProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("LocalInvAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("LocalInvAlways");
+
+      var enumeratedFile = pgp.proofFiles.CreateAuxiliaryProofFile("LocalInv");
+      enumeratedFile.IncludeAndImportGeneratedFile("specs");
+      enumeratedFile.IncludeAndImportGeneratedFile("defs");
+      enumeratedFile.IncludeAndImportGeneratedFile("revelations");
+      enumeratedFile.IncludeAndImportGeneratedFile("invariants");
+      enumeratedFile.IncludeAndImportGeneratedFile("latomic");
+      enumeratedFile.IncludeAndImportGeneratedFile("convert");
+      enumeratedFile.IncludeAndImportGeneratedFile("utility");
+      alwaysFile.IncludeAndImportGeneratedFile("LocalInv");
+
+      var trivialUniversalStepConstraint = !pgp.symbolsHigh.UniversalStepConstraints.Any();
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+
+      foreach (var sbd in sbdsEndingYielded)
+      {
+        // If there is no enabling condition for the PC at the end of this behavior, then
+        // it's trivial to prove that the enabling condition (true) holds.
+
+        if (trivialUniversalStepConstraint && !sbd.LastState.HasLocalInvariant(pcsWithLocalInvariants, returnPCForMethod)) {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              path: LAtomic_Path,
+              tid: Armada_ThreadHandle,
+              s': LPlusState,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              ensures  LocalInv(last(sb.states).state, tid)
+              {{
+                lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+                assert !PCHasLocalInvariant(last(sb.states).state.s.threads[tid].pc);
+              }}
+          ";
+          pgp.AddLemma(str, "LocalInvAlways");
+          continue;
+        }
+
+        foreach (var atomicPath in sbd.PotentialSuccessorPaths.Select(tup => tup.Item1))
+        {
+          // We pass hasLocalInvariant = false to the constructor for StraightlineStepBeyondEnd because we don't
+          // get to assume that LocalInv holds just before that final step.
+
+          var sbdPlus = new StraightlineBehavior(sbd, new StraightlineStepBeyondEnd(sbd.NumSteps, atomicPath, false));
+          var pathExpander = new PathExpander(sbdPlus);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+
+          var expandedParamDeclarations = String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }
+                                                  .Concat(sbdPlus.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues = String.Join(", ", new List<string>{ "tid" }
+                                                        .Concat(sbdPlus.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations = String.Join(", ", new List<string>{ "tid:Armada_ThreadHandle" }
+                                                                 .Concat(sbdPlus.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues = String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndPaths(extractorSB, false))
+                                                           .Concat(new List<string>{ "path", "s'" }));
+
+          str = $@"
+            lemma lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{atomicPath.Name}(
+              {expandedParamDeclarations}
+            )
+          ";
+          str += String.Concat(sbdPlus.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LocalInv({extractorExpanded.State(sbd.NumSteps)}, tid)
+            {{
+              lemma_StoreBufferAppendHasEffectOfAppendedEntryAlways_L();
+              lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
+              ProofCustomizationGoesHere();
+            }}
+          ";
+          pgp.AddLemma(str, "LocalInv");
+
+          str = $@"
+            lemma lemma_EnumeratedStraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{atomicPath.Name}(
+              {enumeratedParamDeclarations}
+            )
+          ";
+          str += String.Concat(sbdPlus.GetEnumerationClauses(extractorEnumeration).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LocalInv(s{sbd.NumSteps}, tid)
+            {{
+              { String.Concat(sbdPlus.GetOpenValidPathInvocations(extractorEnumeration)) }
+              lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{atomicPath.Name}({expandedParamValues});
+            }}
+          ";
+          pgp.AddLemma(str, "LocalInv");
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{atomicPath.Name}(
+              sb: LAtomicStraightlineBehavior,
+              path: LAtomic_Path,
+              tid: Armada_ThreadHandle,
+              s': LPlusState
+              )
+              requires path.LAtomic_Path_{atomicPath.Name}?
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+              requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+              ensures  LocalInv(last(sb.states).state, tid)
+            {{
+              var proc := LProcName_{sbd.MethodName};
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+              lemma_EnumeratedStraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{atomicPath.Name}({enumeratedParamValues});
+            }}
+          ";
+          pgp.AddLemma(str, "LocalInvAlways");
+        }
+
+        str = $@"
+          lemma lemma_StraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            s': LPlusState,
+            proc: LProcName
+            )
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+            requires tid in last(sb.states).state.s.threads
+            requires PCToProc(last(sb.states).state.s.threads[tid].pc) == proc
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires !path.LAtomic_Path_Tau?
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+            ensures  LocalInv(last(sb.states).state, tid)
+          {{
+            lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+            assert proc.LProcName_{sbd.MethodName}?;
+            lemma_PathPossibilitiesStartingAtPC_{sbd.LastState.PC}(last(sb.states).state, s', path, tid);
+            match path {{
+        ";
+        str += String.Concat(sbd.PotentialSuccessorPaths.Select(tup => tup.Item1).Select(path => $@"
+              case LAtomic_Path_{path.Name}(_) =>
+                lemma_StraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}_Then_{path.Name}(sb, path, tid, s');
+        "));
+        str += "} }\n";
+        pgp.AddLemma(str, "LocalInvAlways");
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesLocalInvariant(
+          sb: LAtomicStraightlineBehavior,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          s': LPlusState,
+          proc: LProcName
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          requires tid in last(sb.states).state.s.threads
+          requires PCToProc(last(sb.states).state.s.threads[tid].pc) == proc
+          requires last(sb.states).aux.phase.StraightlinePhaseYielded?
+          requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+          requires !path.LAtomic_Path_Tau?
+          ensures  LocalInv(last(sb.states).state, tid)
+        {
+          var phase := last(sb.states).aux.phase;
+          var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+          match sbd {
+      ";
+      str += String.Concat(sbdsEndingYielded.Select(sbd => $@"
+            case SBD_{sbd.Name} =>
+              lemma_StraightlineBehaviorSatisfiesLocalInvariant_{sbd.Name}(sb, path, tid, s', proc);
+      "));
+      str += @"
+          }
+        }
+      ";
+      pgp.AddLemma(str, "LocalInvAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyLocalInvariant()
+          ensures StraightlineBehaviorsSatisfyLocalInvariant(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyLocalInvariantConditions(cr, sb, step, s')}
+            | StraightlineBehaviorsSatisfyLocalInvariantConditions(cr, sb, step, s')
+            ensures cr.local_inv(last(sb.states).state, cr.step_to_actor(step).v)
+          {
+            var actor := cr.step_to_actor(step).v;
+            var pc := cr.get_actor_pc_stack(last(sb.states).state, actor).v.pc;
+            var proc := cr.pc_to_proc(pc);
+            lemma_StraightlineBehaviorSatisfiesLocalInvariant(sb, step.path, step.tid, s', proc);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "LocalInvAlways");
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyPreconditionsForCallsProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("CallsAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("CallsAlways");
+
+      var stackCorrectFile = pgp.proofFiles.CreateAuxiliaryProofFile("StackCorrect");
+      stackCorrectFile.IncludeAndImportGeneratedFile("specs");
+      stackCorrectFile.IncludeAndImportGeneratedFile("defs");
+      stackCorrectFile.IncludeAndImportGeneratedFile("revelations");
+      stackCorrectFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("StackCorrect");
+
+      // For each call statement, demonstrate that it establishes the StackCorrectAtStart_{methodName} predicate.
+
+      foreach (var kv in pathEffectMap.Where(kv => kv.Value is CHLPathEffectCall || kv.Value is CHLPathEffectReturnThenCall))
+      {
+        var atomicPath = kv.Key;
+        var callee = kv.Value.Callee;
+        var pr = new PathPrinter(lAtomic);
+        str = $@"
+          lemma lemma_AtomicPathEnsuresStackCorrectAtStart_{atomicPath.Name}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle
+            )
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires path.LAtomic_Path_{atomicPath.Name}?
+            ensures  StackCorrectAtStart_{callee}(s', tid)
+          {{
+            { pr.GetOpenValidPathInvocation(atomicPath) }
+          }}
+        ";
+        pgp.AddLemma(str, "StackCorrect");
+      }
+
+      foreach (var preconditionName in preconditionsForMethod.Values.SelectMany(x => x))
+      {
+        var specificPreconditionFile = pgp.proofFiles.CreateAuxiliaryProofFile($"Call_{preconditionName}");
+        specificPreconditionFile.IncludeAndImportGeneratedFile("specs");
+        specificPreconditionFile.IncludeAndImportGeneratedFile("defs");
+        specificPreconditionFile.IncludeAndImportGeneratedFile("revelations");
+        specificPreconditionFile.IncludeAndImportGeneratedFile("invariants");
+        specificPreconditionFile.IncludeAndImportGeneratedFile("latomic");
+        alwaysFile.IncludeAndImportGeneratedFile($"Call_{preconditionName}");
+      }
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured)) {
+        foreach (var tup in sbd.PotentialSuccessorPaths
+                 .Where(tup => (sbd.LastState is StraightlineStateYielded && tup.Item2 is CHLPathEffectCall)
+                               || (sbd.LastState is StraightlineStateEnsured && tup.Item2 is CHLPathEffectReturnThenCall))) {
+          var atomicPath = tup.Item1;
+          var effect = tup.Item2;
+          var callee = effect.Callee;
+          var beyondEnd = new StraightlineStepBeyondEnd(sbd.NumSteps, atomicPath, pcsWithLocalInvariants.Contains(sbd.LastState.PC));
+          var sbdPlus = new StraightlineBehavior(sbd, beyondEnd);
+          var pathExpander = new PathExpander(sbdPlus);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+
+          var expandedParamDeclarations = String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }
+                                                              .Concat(sbdPlus.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues = String.Join(", ", new List<string>{ "tid" }
+                                                        .Concat(sbdPlus.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid:Armada_ThreadHandle" }
+                               .Concat(sbdPlus.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues =
+            String.Join(", ", new List<string>{ "tid" }
+                                .Concat(sbd.GetStatesAndPaths(extractorSB, false))
+                                .Concat(new List<string>{ "path", "s'" }));
+
+          foreach (var preconditionName in preconditionsForMethod[callee])
+          {
+            str = $@"
+              lemma lemma_ExpandedStraightlineBehaviorSatisfiesPreconditionForCall_{preconditionName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {expandedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires StackCorrectAtStart_{callee}({extractorExpanded.State(sbd.NumSteps + 1)}, tid)
+                ensures  {preconditionName}({extractorExpanded.State(sbd.NumSteps + 1)}, tid)
+              {{
+                ProofCustomizationGoesHere();
+              }}
+            ";
+            pgp.AddLemma(str, $"Call_{preconditionName}");
+
+            str = $@"
+              lemma lemma_EnumeratedStraightlineBehaviorSatisfiesPreconditionForCall_{preconditionName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {enumeratedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorEnumeration).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires StackCorrectAtStart_{callee}(s{sbd.NumSteps + 1}, tid)
+                ensures  {preconditionName}(s{sbd.NumSteps + 1}, tid)
+              {{
+                { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+                { extractorEnumeration.GetOpenValidPathInvocation(atomicPath, sbd.NumSteps) }
+                lemma_ExpandedStraightlineBehaviorSatisfiesPreconditionForCall_{preconditionName}_{sbd.Name}_Then_{atomicPath.Name}(
+                  {expandedParamValues}
+                );
+              }}
+            ";
+            pgp.AddLemma(str, $"Call_{preconditionName}");
+          }
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForCall_{sbd.Name}_Then_{atomicPath.Name}(
+              sb: LAtomicStraightlineBehavior,
+              path: LAtomic_Path,
+              tid: Armada_ThreadHandle,
+              s': LPlusState
+              )
+              requires path.LAtomic_Path_{atomicPath.Name}?
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+              requires LocalInv(last(sb.states).state, tid)
+              requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+          ";
+          if (sbd.LastState is StraightlineStateYielded) {
+            str += "requires PathToEffect(path).CHLStepEffectCall?\n";
+          }
+          else {
+            str += "requires PathToEffect(path).CHLStepEffectReturnThenCall?\n";
+          }
+          str += $@"
+              ensures  RequiresClauses(PathToEffect(path).callee, s', tid)
+            {{
+              var proc := LProcName_{sbd.MethodName};
+              assert PathToEffect(path).callee.LProcName_{callee}?;
+              lemma_AtomicPathEnsuresStackCorrectAtStart_{atomicPath.Name}(last(sb.states).state, s', path, tid);
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+          ";
+          str += String.Concat(preconditionsForMethod[callee].Select(name => $@"
+              lemma_EnumeratedStraightlineBehaviorSatisfiesPreconditionForCall_{name}_{sbd.Name}_Then_{atomicPath.Name}(
+                {enumeratedParamValues}
+              );
+          "));
+          str += "}";
+          pgp.AddLemma(str, "CallsAlways");
+        }
+
+        str = $@"
+          lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForCall_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            s': LPlusState
+            )
+            requires !path.LAtomic_Path_Tau?
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+            requires LocalInv(last(sb.states).state, tid)
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+        ";
+        if (sbd.LastState is StraightlineStateYielded) {
+          str += "requires PathToEffect(path).CHLStepEffectCall?\n";
+        }
+        else {
+          str += "requires PathToEffect(path).CHLStepEffectReturnThenCall?\n";
+        }
+        str += $@"
+            ensures  RequiresClauses(PathToEffect(path).callee, s', tid)
+          {{
+            lemma_StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(sb, tid, LProcName_{sbd.MethodName}, s', path);
+            match path {{
+        ";
+        foreach (var tup in sbd.PotentialSuccessorPaths)
+        {
+          var path = tup.Item1;
+          var effect = tup.Item2;
+          str += $@"
+              case LAtomic_Path_{path.Name}(_) =>
+          ";
+          if ((sbd.LastState is StraightlineStateYielded && effect is CHLPathEffectCall) ||
+              (sbd.LastState is StraightlineStateEnsured && effect is CHLPathEffectReturnThenCall)) {
+            str += $"lemma_StraightlineBehaviorSatisfiesPreconditionsForCall_{sbd.Name}_Then_{path.Name}(sb, path, tid, s');\n";
+          }
+          else {
+            str += $"assert PathToEffect(path) == {effect.Constructor};\n assert false;\n";
+          }
+        }
+        str += "} }\n";
+        pgp.AddLemma(str, "CallsAlways");
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForCall(
+          sb: LAtomicStraightlineBehavior,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          s': LPlusState
+          )
+          requires !path.LAtomic_Path_Tau?
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, PathToProc(path)))
+          requires LocalInv(last(sb.states).state, tid)
+          requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+          requires var phase := last(sb.states).aux.phase;
+                   var effect := PathToEffect(path);
+                   || (effect.CHLStepEffectCall? && phase.StraightlinePhaseYielded?)
+                   || (effect.CHLStepEffectReturnThenCall? && phase.StraightlinePhaseEnsured?)
+          ensures  RequiresClauses(PathToEffect(path).callee, s', tid)
+        {
+          var proc := PathToProc(path);
+          var phase := last(sb.states).aux.phase;
+          var sbd;
+          if phase.StraightlinePhaseEnsured? {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingEnsured(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingEnsured.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesPreconditionsForCall_{sbd.Name}(sb, path, tid, s');
+      "));
+      str += @"
+            }
+          }
+          else {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingYielded.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesPreconditionsForCall_{sbd.Name}(sb, path, tid, s');
+      "));
+      str += @"
+            }
+          }
+        }
+      ";
+      pgp.AddLemma(str, "CallsAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyPreconditionsForCalls()
+          ensures StraightlineBehaviorsSatisfyPreconditionsForCalls(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, step, s' {:trigger StraightlineBehaviorsSatisfyPreconditionsForCallsConditions(cr, sb, step, s')}
+            | StraightlineBehaviorsSatisfyPreconditionsForCallsConditions(cr, sb, step, s')
+            ensures var actor := cr.step_to_actor(step).v;
+                    var callee := cr.step_to_effect(step).callee;
+                    cr.requires_clauses(callee, s', actor)
+          {
+            lemma_StraightlineBehaviorSatisfiesPreconditionsForCall(sb, step.path, step.tid, s');
+          }
+        }
+      ";
+      pgp.AddLemma(str, "CallsAlways");
+    }
+
+    private bool AtomicPathForks(AtomicPath path)
+    {
+      return path.NextRoutines.Where(r => r.nextType == NextType.CreateThread).Any();
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyPreconditionsForForksProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("ForksAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("ForksAlways");
+
+      var forksFile = pgp.proofFiles.CreateAuxiliaryProofFile("Forks");
+      forksFile.IncludeAndImportGeneratedFile("specs");
+      forksFile.IncludeAndImportGeneratedFile("defs");
+      forksFile.IncludeAndImportGeneratedFile("revelations");
+      forksFile.IncludeAndImportGeneratedFile("latomic");
+      forksFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("Forks");
+
+      var nonforkersFile = pgp.proofFiles.CreateAuxiliaryProofFile("Nonforkers");
+      nonforkersFile.IncludeAndImportGeneratedFile("specs");
+      nonforkersFile.IncludeAndImportGeneratedFile("defs");
+      nonforkersFile.IncludeAndImportGeneratedFile("revelations");
+      nonforkersFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("Nonforkers");
+
+      // For each non-stopping atomic path that can't fork, create a lemma saying it doesn't fork.
+
+      var pr = new PathPrinter(lAtomic);
+
+      foreach (var atomicPath in pathsStartingAtPC.Values.SelectMany(x => x).Where(path => !AtomicPathForks(path)))
+      {
+        str = $@"
+          lemma lemma_AtomicPathDoesntFork_{atomicPath.Name}(
+            s: LPlusState,
+            s': LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle
+            )
+            requires LAtomic_NextPath(s, s', path, tid)
+            requires path.LAtomic_Path_{atomicPath.Name}?
+            requires other_tid != tid
+            requires other_tid !in s.s.threads
+            ensures  other_tid !in s'.s.threads
+          {{
+            { pr.GetOpenValidPathInvocation(atomicPath) }
+          }}
+        ";
+        pgp.AddLemma(str, "Nonforkers");
+      }
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured))
+      {
+        var optionalNot = (sbd.LastState is StraightlineStateYielded) ? "!" : "";
+
+        foreach (var atomicPath in sbd.PotentialSuccessorPaths.Where(tup => tup.Item2.CanFollow(sbd.LastState))
+                                                              .Select(tup => tup.Item1))
+        {
+          if (AtomicPathForks(atomicPath)) {
+            var beyondEnd = new StraightlineStepBeyondEnd(sbd.NumSteps, atomicPath, pcsWithLocalInvariants.Contains(sbd.LastState.PC));
+            var sbdPlus = new StraightlineBehavior(sbd, beyondEnd);
+            var pathExpander = new PathExpander(sbdPlus);
+            var extractorExpanded = new ExtractorExpanded(pathExpander);
+
+            var expandedParamDeclarations =
+              String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle", "forked_tid: Armada_ThreadHandle", "forked_proc: LProcName" }
+                                 .Concat(sbdPlus.GetStatesAndSteps(extractorExpanded, true)));
+            var expandedParamValues =
+              String.Join(", ", new List<string>{ "tid", "forked_tid", "forked_proc" }
+                                  .Concat(sbdPlus.GetStatesAndSteps(extractorEnumeration, false)));
+            var enumeratedParamDeclarations =
+              String.Join(", ", new List<string> { "tid: Armada_ThreadHandle", "forked_tid: Armada_ThreadHandle", "forked_proc: LProcName" }
+                                 .Concat(sbdPlus.GetStatesAndPaths(extractorEnumeration, true)));
+            var enumeratedParamValues =
+              String.Join(", ", new List<string>{ "tid", "forked_tid", "forked_proc" }
+                                  .Concat(sbd.GetStatesAndPaths(extractorSB, false))
+                                  .Concat(new List<string>{ "path", "s'" }));
+
+            str = $@"
+              lemma lemma_ExpandedStraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{atomicPath.Name}(
+                {expandedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires forked_tid != tid
+                requires forked_tid !in {extractorExpanded.State(sbd.NumSteps)}.s.threads
+                requires forked_tid in {extractorExpanded.State(sbd.NumSteps + 1)}.s.threads
+                requires forked_proc == PCToProc({extractorExpanded.State(sbd.NumSteps + 1)}.s.threads[forked_tid].pc)
+                ensures  RequiresClauses(forked_proc, {extractorExpanded.State(sbd.NumSteps + 1)}, forked_tid)
+                {{
+                  ProofCustomizationGoesHere();
+                }}
+            ";
+            pgp.AddLemma(str, "Forks");
+
+            str = $@"
+              lemma lemma_EnumeratedStraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{atomicPath.Name}(
+                {enumeratedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorEnumeration, false).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires forked_tid != tid
+                requires forked_tid !in s{sbd.NumSteps}.s.threads
+                requires forked_tid in s{sbd.NumSteps + 1}.s.threads
+                requires forked_proc == PCToProc(s{sbd.NumSteps + 1}.s.threads[forked_tid].pc)
+                ensures  RequiresClauses(forked_proc, s{sbd.NumSteps + 1}, forked_tid)
+                {{
+                  { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+                  { extractorEnumeration.GetOpenValidPathInvocation(atomicPath, sbd.NumSteps) }
+                  lemma_ExpandedStraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{atomicPath.Name}(
+                    {expandedParamValues}
+                  );
+                }}
+            ";
+            pgp.AddLemma(str, "Forks");
+
+            str = $@"
+              lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{atomicPath.Name}(
+                sb: LAtomicStraightlineBehavior,
+                path: LAtomic_Path,
+                tid: Armada_ThreadHandle,
+                s': LPlusState,
+                forked_tid: Armada_ThreadHandle,
+                forked_proc: LProcName
+                )
+                requires path.LAtomic_Path_{atomicPath.Name}?
+                requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+                requires LocalInv(last(sb.states).state, tid)
+                requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+                requires forked_tid != tid
+                requires forked_tid !in last(sb.states).state.s.threads
+                requires forked_tid in s'.s.threads
+                requires forked_proc == PCToProc(s'.s.threads[forked_tid].pc)
+                requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+                requires !PathToEffect(path).CHLStepEffectStop?
+                requires var effect := PathToEffect(path);
+                         {optionalNot}(effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall?)
+                ensures  RequiresClauses(forked_proc, s', forked_tid)
+              {{
+                var proc := LProcName_{sbd.MethodName};
+                lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+                lemma_EnumeratedStraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{atomicPath.Name}(
+                  {enumeratedParamValues}
+                );
+              }}
+            ";
+            pgp.AddLemma(str, "ForksAlways");
+          }
+        }
+
+        str = $@"
+          lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            s': LPlusState,
+            forked_tid: Armada_ThreadHandle,
+            forked_proc: LProcName
+            )
+            requires !path.LAtomic_Path_Tau?
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+            requires LocalInv(last(sb.states).state, tid)
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires forked_tid != tid
+            requires forked_tid !in last(sb.states).state.s.threads
+            requires forked_tid in s'.s.threads
+            requires forked_proc == PCToProc(s'.s.threads[forked_tid].pc)
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+            requires !PathToEffect(path).CHLStepEffectStop?
+            requires var effect := PathToEffect(path);
+                     {optionalNot}(effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall?)
+            ensures  RequiresClauses(forked_proc, s', forked_tid)
+          {{
+            lemma_StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(sb, tid, LProcName_{sbd.MethodName}, s', path);
+            match path {{
+        ";
+        foreach (var tup in sbd.PotentialSuccessorPaths)
+        {
+          var path = tup.Item1;
+          var effect = tup.Item2;
+          str += $"case LAtomic_Path_{path.Name}(_) =>\n";
+          if (!effect.CanFollow(sbd.LastState)) {
+            str += $@"
+                assert PathToEffect(path) == {effect.Constructor};
+                assert false;
+            ";
+          }
+          else if (AtomicPathForks(path)) {
+            str += $@"
+                lemma_StraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}_Then_{path.Name}(sb, path, tid, s', forked_tid,
+                                                                                                     forked_proc);
+            ";
+          }
+          else {
+            str += $@"
+                lemma_AtomicPathDoesntFork_{path.Name}(last(sb.states).state, s', path, tid, forked_tid);
+                assert false;
+            ";
+          }
+        }
+        str += "} }\n";
+        pgp.AddLemma(str, "ForksAlways");
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesPreconditionsForForks(
+          sb: LAtomicStraightlineBehavior,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          s': LPlusState,
+          forked_tid: Armada_ThreadHandle,
+          forked_proc: LProcName
+          )
+          requires !path.LAtomic_Path_Tau?
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, PathToProc(path)))
+          requires LocalInv(last(sb.states).state, tid)
+          requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+          requires forked_tid != tid
+          requires forked_tid !in last(sb.states).state.s.threads
+          requires forked_tid in s'.s.threads
+          requires forked_proc == PCToProc(s'.s.threads[forked_tid].pc)
+          requires !PathToEffect(path).CHLStepEffectStop?
+          requires var phase := last(sb.states).aux.phase;
+                   var effect := PathToEffect(path);
+                   if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+                     phase.StraightlinePhaseEnsured?
+                   else
+                     phase.StraightlinePhaseYielded?
+          ensures  RequiresClauses(forked_proc, s', forked_tid)
+        {
+          var proc := PathToProc(path);
+          var phase := last(sb.states).aux.phase;
+          var sbd;
+          if phase.StraightlinePhaseEnsured? {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingEnsured(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingEnsured.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}(sb, path, tid, s', forked_tid, forked_proc);
+      "));
+      str += @"
+            }
+          }
+          else {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingYielded.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesPreconditionsForForks_{sbd.Name}(sb, path, tid, s', forked_tid, forked_proc);
+      "));
+      str += @"
+            }
+          }
+        }
+      ";
+      pgp.AddLemma(str, "ForksAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyPreconditionsForForks()
+          ensures StraightlineBehaviorsSatisfyPreconditionsForForks(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, step, s', forked_actor
+            {:trigger StraightlineBehaviorsSatisfyPreconditionsForForksConditions(cr, sb, step, s', forked_actor)}
+            | StraightlineBehaviorsSatisfyPreconditionsForForksConditions(cr, sb, step, s', forked_actor)
+            ensures var forked_pc := cr.get_actor_pc_stack(s', forked_actor).v.pc;
+                    var forked_proc := cr.pc_to_proc(forked_pc);
+                    cr.requires_clauses(forked_proc, s', forked_actor)
+          {
+            var forked_pc := cr.get_actor_pc_stack(s', forked_actor).v.pc;
+            var forked_proc := cr.pc_to_proc(forked_pc);
+            lemma_StraightlineBehaviorSatisfiesPreconditionsForForks(sb, step.path, step.tid, s', forked_actor, forked_proc);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "ForksAlways");
+    }
+
+    private bool EndsAtReturnPC(StraightlineBehavior sbd)
+    {
+      return returnPCForMethod[sbd.MethodName].Equals(sbd.LastState.PC);
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyPostconditionsProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("PostconditionsAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("PostconditionsAlways");
+
+      var postconditionsFile = pgp.proofFiles.CreateAuxiliaryProofFile("Postconditions");
+      postconditionsFile.IncludeAndImportGeneratedFile("specs");
+      postconditionsFile.IncludeAndImportGeneratedFile("defs");
+      postconditionsFile.IncludeAndImportGeneratedFile("revelations");
+      postconditionsFile.IncludeAndImportGeneratedFile("invariants");
+      postconditionsFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("Postconditions");
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded)
+      {
+        if (EndsAtReturnPC(sbd)) {
+          var pathExpander = new PathExpander(sbd);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+          var expandedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }.Concat(sbd.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues =
+            String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid:Armada_ThreadHandle" }.Concat(sbd.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues = String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndPaths(extractorSB, false)));
+
+          str = $@"
+            lemma lemma_ExpandedStraightlineBehaviorSatisfiesPostcondition_{sbd.Name}({expandedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  Postconditions_{sbd.MethodName}({extractorExpanded.State(0)}, {extractorExpanded.State(sbd.NumSteps)}, tid)
+              {{
+                ProofCustomizationGoesHere();
+              }}
+          ";
+          pgp.AddLemma(str, "Postconditions");
+
+          str = $@"
+            lemma lemma_EnumeratedStraightlineBehaviorSatisfiesPostcondition_{sbd.Name}({enumeratedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorEnumeration, false).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  Postconditions_{sbd.MethodName}(s0, s{sbd.NumSteps}, tid)
+              {{
+                { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+                lemma_ExpandedStraightlineBehaviorSatisfiesPostcondition_{sbd.Name}({expandedParamValues});
+              }}
+          ";
+          pgp.AddLemma(str, "Postconditions");
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesPostcondition_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              ensures  EnsuresClauses(proc, sb.states[0].state, last(sb.states).state, tid)
+            {{
+              assert proc.LProcName_{sbd.MethodName}?;
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+              lemma_EnumeratedStraightlineBehaviorSatisfiesPostcondition_{sbd.Name}({enumeratedParamValues});
+            }}
+          ";
+          pgp.AddLemma(str, "PostconditionsAlways");
+        }
+        else {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesPostcondition_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var s := last(sb.states).state; tid in s.s.threads && IsReturnSite(s.s.threads[tid].pc)
+              ensures  false
+            {{
+              var pc := last(sb.states).state.s.threads[tid].pc;
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              assert !IsReturnSite(pc);
+            }}
+          ";
+          pgp.AddLemma(str, "PostconditionsAlways");
+        }
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesPostcondition(
+          sb: LAtomicStraightlineBehavior,
+          tid: Armada_ThreadHandle,
+          proc: LProcName
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          requires var phase := last(sb.states).aux.phase; phase.StraightlinePhaseYielded?
+          requires var s := last(sb.states).state; tid in s.s.threads && IsReturnSite(s.s.threads[tid].pc)
+          ensures  EnsuresClauses(proc, sb.states[0].state, last(sb.states).state, tid)
+        {
+          var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+          assert StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+          match sbd {
+      ";
+      foreach (var sbd in straightlineBehaviorDescriptors) {
+        str += $"case SBD_{sbd.Name} =>\n";
+        if (sbd.LastState is StraightlineStateYielded) {
+          str += $"lemma_StraightlineBehaviorSatisfiesPostcondition_{sbd.Name}(sb, tid, proc);\n";
+        }
+        else {
+          str += $@"
+            assert !StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+            assert false;
+          ";
+        }
+      }
+      str += "} }\n";
+      pgp.AddLemma(str, "PostconditionsAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyPostconditions()
+          ensures StraightlineBehaviorsSatisfyPostconditions(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyPostconditionsConditions(cr, sb, actor, proc)}
+            | StraightlineBehaviorsSatisfyPostconditionsConditions(cr, sb, actor, proc)
+            ensures cr.ensures_clauses(proc, sb.states[0].state, last(sb.states).state, actor)
+          {
+            lemma_StraightlineBehaviorSatisfiesPostcondition(sb, actor, proc);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "PostconditionsAlways");
+    }
+
+    private bool EndsAtVisitedLoopHead(StraightlineBehavior sbd)
+    {
+      var pc = sbd.LastState.PC;
+      return loopHeads.Contains(pc) && sbd.LastState.IsLoopHeadVisited(pc);
+    }
+
+    private bool EndsAtUnvisitedLoopHead(StraightlineBehavior sbd)
+    {
+      var pc = sbd.LastState.PC;
+      return loopHeads.Contains(pc) && !sbd.LastState.IsLoopHeadVisited(pc);
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("LoopEntryAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("LoopEntryAlways");
+
+      var loopEntryFile = pgp.proofFiles.CreateAuxiliaryProofFile("LoopEntry");
+      loopEntryFile.IncludeAndImportGeneratedFile("specs");
+      loopEntryFile.IncludeAndImportGeneratedFile("defs");
+      loopEntryFile.IncludeAndImportGeneratedFile("revelations");
+      loopEntryFile.IncludeAndImportGeneratedFile("invariants");
+      loopEntryFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("LoopEntry");
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded)
+      {
+        if (EndsAtUnvisitedLoopHead(sbd)) {
+          var pathExpander = new PathExpander(sbd);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+          var expandedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }.Concat(sbd.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues =
+            String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid:Armada_ThreadHandle" }.Concat(sbd.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues = String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndPaths(extractorSB, false)));
+
+          str = $@"
+            lemma lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}({expandedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LoopModifies_{sbd.LastState.PC}({extractorExpanded.State(sbd.NumSteps)},
+                                                       {extractorExpanded.State(sbd.NumSteps)}, tid)
+            {{
+              ProofCustomizationGoesHere();
+            }}
+          ";
+          pgp.AddLemma(str, "LoopEntry");
+
+          str = $@"
+            lemma lemma_EnumeratedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}({enumeratedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorEnumeration).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LoopModifies_{sbd.LastState.PC}(s{sbd.NumSteps}, s{sbd.NumSteps}, tid)
+            {{
+              { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+              lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}({expandedParamValues});
+            }}
+          ";
+          pgp.AddLemma(str, "LoopEntry");
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires tid in last(sb.states).state.s.threads
+              ensures  var s := last(sb.states).state; LoopModifiesClauses(s.s.threads[tid].pc, s, s, tid)
+            {{
+              var s := last(sb.states).state;
+              var pc := s.s.threads[tid].pc;
+              assert proc.LProcName_{sbd.MethodName}?;
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+              lemma_EnumeratedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}({enumeratedParamValues});
+              assert LoopModifies_{sbd.LastState.PC}(s, s, tid);
+              forall ensures pc.{sbd.LastState.PC}? {{
+                lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              }}
+              assert LoopModifiesClauses(pc, s, s, tid);
+            }}
+          ";
+          pgp.AddLemma(str, "LoopEntryAlways");
+        }
+        else if (EndsAtVisitedLoopHead(sbd)) {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var StraightlineState(s, aux) := last(sb.states);
+                       tid in s.s.threads && s.s.threads[tid].pc !in aux.visited_loops
+              ensures  false
+            {{
+              var StraightlineState(s, aux) := last(sb.states);
+              var pc := s.s.threads[tid].pc;
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              assert pc in aux.visited_loops;
+            }}
+          ";
+          pgp.AddLemma(str, "LoopEntryAlways");
+        }
+        else {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var s :=  last(sb.states).state;
+                       tid in s.s.threads && IsLoopHead(s.s.threads[tid].pc)
+              ensures  false
+            {{
+              var StraightlineState(s, aux) := last(sb.states);
+              var pc := s.s.threads[tid].pc;
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              assert !IsLoopHead(pc);
+            }}
+          ";
+          pgp.AddLemma(str, "LoopEntryAlways");
+        }
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry(
+          sb: LAtomicStraightlineBehavior,
+          tid: Armada_ThreadHandle,
+          proc: LProcName
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          requires var StraightlineState(s, aux) := last(sb.states);
+                   && aux.phase.StraightlinePhaseYielded?
+                   && tid in s.s.threads
+                   && IsLoopHead(s.s.threads[tid].pc)
+                   && s.s.threads[tid].pc !in aux.visited_loops
+          ensures  var s := last(sb.states).state; LoopModifiesClauses(s.s.threads[tid].pc, s, s, tid)
+        {
+          var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+          assert StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+          var StraightlineState(s, aux) := last(sb.states);
+          var pc := s.s.threads[tid].pc;
+          match sbd {
+      ";
+      foreach (var sbd in straightlineBehaviorDescriptors) {
+        str += $"case SBD_{sbd.Name} =>\n";
+        if (sbd.LastState is StraightlineStateYielded) {
+          str += $"lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_{sbd.Name}(sb, tid, proc);\n";
+        }
+        else {
+          str += $@"
+            assert !StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+            assert false;
+          ";
+        }
+      }
+      str += "} }\n";
+      pgp.AddLemma(str, "LoopEntryAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry()
+          ensures StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions(cr, sb, actor, proc)}
+            | StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions(cr, sb, actor, proc)
+            ensures var s := last(sb.states).state;
+                    var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+                    cr.loop_modifies_clauses(pc, s, s, actor)
+          {
+            assert cr.get_actor_pc_stack(last(sb.states).state, actor).Some?;
+            lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry(sb, actor, proc);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "LoopEntryAlways");
+    }
+
+    private bool RevisitsLoopHead(Tuple<AtomicPath, CHLPathEffect> tup, StraightlineBehavior sbd)
+    {
+      var atomicPath = tup.Item1;
+      var effect = tup.Item2;
+      return (   (sbd.LastState is StraightlineStateYielded && effect is CHLPathEffectNormal)
+              || (sbd.LastState is StraightlineStateEnsured && effect is CHLPathEffectReturn))
+             && atomicPath.EndPC != null
+             && sbd.LastState.IsLoopHeadVisited(atomicPath.EndPC);
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("LoopBackAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/chl/AtomicConcurrentHoareLogicSpec.i.dfy");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("LoopBackAlways");
+
+      var loopJumpBackFile = pgp.proofFiles.CreateAuxiliaryProofFile("LoopBack");
+      loopJumpBackFile.IncludeAndImportGeneratedFile("specs");
+      loopJumpBackFile.IncludeAndImportGeneratedFile("defs");
+      loopJumpBackFile.IncludeAndImportGeneratedFile("revelations");
+      loopJumpBackFile.IncludeAndImportGeneratedFile("latomic");
+      loopJumpBackFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("LoopBack");
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded)
+      {
+        if (EndsAtVisitedLoopHead(sbd)) {
+          var pos = sbd.LastState.VisitedLoopHeads[sbd.LastState.PC];
+          var pathExpander = new PathExpander(sbd);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+          var expandedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle" }.Concat(sbd.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues =
+            String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid:Armada_ThreadHandle" }.Concat(sbd.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues = String.Join(", ", new List<string>{ "tid" }.Concat(sbd.GetStatesAndPaths(extractorSB, false)));
+
+          str = $@"
+            lemma lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}({expandedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LoopModifies_{sbd.LastState.PC}({extractorExpanded.State(pos)}, {extractorExpanded.State(sbd.NumSteps)}, tid)
+              ensures  {extractorExpanded.State(pos)}.config == {extractorExpanded.State(sbd.NumSteps)}.config
+            {{
+              ProofCustomizationGoesHere();
+            }}
+          ";
+          pgp.AddLemma(str, "LoopBack");
+
+          str = $@"
+            lemma lemma_EnumeratedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}({enumeratedParamDeclarations})
+          ";
+          str += String.Concat(sbd.GetEnumerationClauses(extractorEnumeration).Select(r => "requires " + r + "\n"));
+          str += $@"
+              ensures  LoopModifies_{sbd.LastState.PC}(s{pos}, s{sbd.NumSteps}, tid)
+              ensures  s{pos}.config == s{sbd.NumSteps}.config
+            {{
+              { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+              lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}({expandedParamValues});
+            }}
+          ";
+          pgp.AddLemma(str, "LoopBack");
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var StraightlineState(s, aux) := last(sb.states);
+                       tid in s.s.threads && s.s.threads[tid].pc in aux.visited_loops
+              ensures  var StraightlineState(s, aux) := last(sb.states);
+                       var pc := s.s.threads[tid].pc;
+                       LoopModifiesClauses(pc, aux.visited_loops[pc], s, tid)
+            {{
+              var StraightlineState(s, aux) := last(sb.states);
+              var pc := s.s.threads[tid].pc;
+              assert proc.LProcName_{sbd.MethodName}?;
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+              lemma_EnumeratedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}({enumeratedParamValues});
+              assert LoopModifies_{sbd.LastState.PC}(sb.states[{pos}].state, last(sb.states).state, tid);
+              assert sb.states[{pos}].state.config == last(sb.states).state.config;
+              forall
+                ensures pc.{sbd.LastState.PC}?
+                ensures aux.visited_loops[pc] == sb.states[{pos}].state
+              {{
+                lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              }}
+              assert LoopModifiesClauses(pc, aux.visited_loops[pc], s, tid);
+            }}
+          ";
+          pgp.AddLemma(str, "LoopBackAlways");
+        }
+        else if (EndsAtUnvisitedLoopHead(sbd)) {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var StraightlineState(s, aux) := last(sb.states);
+                       tid in s.s.threads && s.s.threads[tid].pc in aux.visited_loops
+              ensures  false
+            {{
+              var StraightlineState(s, aux) := last(sb.states);
+              var pc := s.s.threads[tid].pc;
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              assert pc !in aux.visited_loops;
+            }}
+          ";
+          pgp.AddLemma(str, "LoopBackAlways");
+        }
+        else {
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}(
+              sb: LAtomicStraightlineBehavior,
+              tid: Armada_ThreadHandle,
+              proc: LProcName
+              )
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, proc, SBD_{sbd.Name})
+              requires var s := last(sb.states).state;
+                       tid in s.s.threads && IsLoopHead(s.s.threads[tid].pc)
+              ensures  false
+            {{
+              var StraightlineState(s, aux) := last(sb.states);
+              var pc := s.s.threads[tid].pc;
+              lemma_StraightlineBehaviorEndProperties_{sbd.Name}(sb, tid, proc);
+              assert !IsLoopHead(pc);
+            }}
+          ";
+          pgp.AddLemma(str, "LoopBackAlways");
+        }
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack(
+          sb: LAtomicStraightlineBehavior,
+          tid: Armada_ThreadHandle,
+          proc: LProcName
+          )
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, proc))
+          requires var StraightlineState(s, aux) := last(sb.states);
+                   && aux.phase.StraightlinePhaseYielded?
+                   && tid in s.s.threads
+                   && IsLoopHead(s.s.threads[tid].pc)
+                   && s.s.threads[tid].pc in aux.visited_loops
+          ensures  var StraightlineState(s, aux) := last(sb.states);
+                   var pc := s.s.threads[tid].pc;
+                   LoopModifiesClauses(pc, aux.visited_loops[pc], s, tid)
+        {
+          var sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+          assert StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+          var StraightlineState(s, aux) := last(sb.states);
+          var pc := s.s.threads[tid].pc;
+          match sbd {
+      ";
+      foreach (var sbd in straightlineBehaviorDescriptors) {
+        str += $"case SBD_{sbd.Name} =>\n";
+        if (sbd.LastState is StraightlineStateYielded) {
+          str += $"lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_{sbd.Name}(sb, tid, proc);\n";
+        }
+        else {
+          str += $@"
+            assert !StraightlineBehaviorDescriptorEndsYieldedPossibilities(sbd);
+            assert false;
+          ";
+        }
+      }
+      str += "} }\n";
+      pgp.AddLemma(str, "LoopBackAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack()
+          ensures StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, actor, proc {:trigger StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions(cr, sb, actor, proc)}
+            | StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions(cr, sb, actor, proc)
+            ensures var StraightlineState(s, aux) := last(sb.states);
+                    var pc := cr.get_actor_pc_stack(s, actor).v.pc;
+                    cr.loop_modifies_clauses(pc, aux.visited_loops[pc], s, actor)
+          {
+            lemma_StraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack(sb, actor, proc);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "LoopBackAlways");
+    }
+
+    private void GenerateStraightlineBehaviorsSatisfyYieldPredicatesProof()
+    {
+      string str;
+
+      var alwaysFile = pgp.proofFiles.CreateAuxiliaryProofFile("YieldAlways");
+      alwaysFile.IncludeAndImportGeneratedFile("specs");
+      alwaysFile.IncludeAndImportGeneratedFile("invariants");
+      alwaysFile.IncludeAndImportGeneratedFile("defs");
+      alwaysFile.IncludeAndImportGeneratedFile("latomic");
+      alwaysFile.IncludeAndImportGeneratedFile("others");
+      alwaysFile.IncludeAndImportGeneratedFile("sbd");
+      alwaysFile.IncludeAndImportGeneratedFile("pcstack");
+      alwaysFile.IncludeAndImportGeneratedFile("exhaustive");
+      alwaysFile.IncludeAndImportGeneratedFile("continuation");
+      alwaysFile.IncludeAndImportGeneratedFile("enumeration");
+      alwaysFile.AddImport("ConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("AtomicConcurrentHoareLogicSpecModule");
+      alwaysFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("YieldAlways");
+
+      // If the yield predicate is just "true", generate a very simple lemma:
+
+      if (!yieldPredicateNames.Any()) {
+        str = @"
+          lemma lemma_StraightlineBehaviorsSatisfyYieldPredicate()
+            ensures StraightlineBehaviorsSatisfyYieldPredicate(GetConcurrentHoareLogicRequest())
+          {
+            var cr := GetConcurrentHoareLogicRequest();
+            forall sb, step, s', other_actor {:trigger StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)}
+              | StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)
+              ensures cr.yield_pred(last(sb.states).state, s', other_actor)
+            {
+              var asf := LAtomic_GetSpecFunctions();
+              var s := last(sb.states).state;
+              var s' := asf.path_next(s, step.path, step.tid);
+              lemma_LAtomic_AtomicPathCantAffectOtherThreadsExceptViaFork(asf, s, step.path, step.tid);
+              lemma_PathLeavesConfigUnchanged(s, s', step.path, step.tid);
+              assert ActionTuple(s, s', PathAndTid(step.path, step.tid)) in cr.spec.next;
+              lemma_CHLStepEffectsCorrect();
+              assert YieldPredicateBasic(s, s', other_actor);
+            }
+          }
+        ";
+        pgp.AddLemma(str, "YieldAlways");
+
+        return;
+      }
+
+      // Otherwise, create a file for each yield predicate conjunct
+
+      foreach (var item in yieldPredicateNames)
+      {
+        var predName = item.Key;
+        var specificPredFile = pgp.proofFiles.CreateAuxiliaryProofFile($"Yield_{predName}");
+        specificPredFile.IncludeAndImportGeneratedFile("specs");
+        specificPredFile.IncludeAndImportGeneratedFile("defs");
+        specificPredFile.IncludeAndImportGeneratedFile("revelations");
+        specificPredFile.IncludeAndImportGeneratedFile("invariants");
+        specificPredFile.IncludeAndImportGeneratedFile("latomic");
+        alwaysFile.IncludeAndImportGeneratedFile($"Yield_{predName}");
+      }
+
+      var extractorEnumeration = new ExtractorEnumeration(lAtomic);
+      var extractorSB = new ExtractorSB("sb", "tid", "proc");
+      foreach (var sbd in sbdsEndingYielded.Concat(sbdsEndingEnsured))
+      {
+        foreach (var atomicPath in sbd.PotentialSuccessorPaths.Where(tup => tup.Item2.CanFollow(sbd.LastState)).Select(tup => tup.Item1))
+        {
+          var beyondEnd = new StraightlineStepBeyondEnd(sbd.NumSteps, atomicPath, pcsWithLocalInvariants.Contains(sbd.LastState.PC));
+          var sbdPlus = new StraightlineBehavior(sbd, beyondEnd);
+          var pathExpander = new PathExpander(sbdPlus);
+          var extractorExpanded = new ExtractorExpanded(pathExpander);
+
+          var expandedParamDeclarations =
+            String.Join(", ", new List<string>{ "tid: Armada_ThreadHandle", "other_tid: Armada_ThreadHandle" }
+                               .Concat(sbdPlus.GetStatesAndSteps(extractorExpanded, true)));
+          var expandedParamValues =
+            String.Join(", ", new List<string>{ "tid", "other_tid" }
+                                .Concat(sbdPlus.GetStatesAndSteps(extractorEnumeration, false)));
+          var enumeratedParamDeclarations =
+            String.Join(", ", new List<string> { "tid: Armada_ThreadHandle", "other_tid: Armada_ThreadHandle" }
+                               .Concat(sbdPlus.GetStatesAndPaths(extractorEnumeration, true)));
+          var enumeratedParamValues =
+            String.Join(", ", new List<string>{ "tid", "other_tid" }
+                                .Concat(sbd.GetStatesAndPaths(extractorSB, false))
+                                .Concat(new List<string>{ "path", "s'" }));
+
+          foreach (var kv in yieldPredicateNames)
+          {
+            var predName = kv.Key;
+            var predFun = kv.Value;
+
+            str = $@"
+              lemma lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {expandedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorExpanded, true).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires tid != other_tid
+                requires other_tid in {extractorExpanded.State(sbd.NumSteps)}.s.threads
+                ensures  {predFun}({extractorExpanded.State(sbd.NumSteps)}, {extractorExpanded.State(sbd.NumSteps + 1)}, other_tid)
+              {{
+                ProofCustomizationGoesHere();
+              }}
+            ";
+            pgp.AddLemma(str, $"Yield_{predName}");
+
+            str = $@"
+              lemma lemma_EnumeratedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}(
+                {enumeratedParamDeclarations}
+              )
+            ";
+            str += String.Concat(sbdPlus.GetEnumerationClauses(extractorEnumeration).Select(r => "requires " + r + "\n"));
+            str += $@"
+                requires tid != other_tid
+                requires other_tid in s{sbd.NumSteps}.s.threads
+                ensures  {predFun}(s{sbd.NumSteps}, s{sbd.NumSteps + 1}, other_tid)
+              {{
+                { String.Concat(sbd.GetOpenValidPathInvocations(extractorEnumeration)) }
+                { extractorEnumeration.GetOpenValidPathInvocation(atomicPath, sbd.NumSteps) }
+                lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}(
+                  {expandedParamValues}
+                );
+              }}
+            ";
+            pgp.AddLemma(str, $"Yield_{predName}");
+          }
+
+          str = $@"
+            lemma lemma_StraightlineBehaviorSatisfiesYieldPredicate_{sbd.Name}_Then_{atomicPath.Name}(
+              sb: LAtomicStraightlineBehavior,
+              path: LAtomic_Path,
+              tid: Armada_ThreadHandle,
+              s': LPlusState,
+              other_tid: Armada_ThreadHandle
+              )
+              requires path.LAtomic_Path_{atomicPath.Name}?
+              requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+              requires LocalInv(last(sb.states).state, tid)
+              requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+              requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+              requires tid != other_tid
+              requires other_tid in last(sb.states).state.s.threads
+              ensures  YieldPredicate(last(sb.states).state, s', other_tid)
+            {{
+              var proc := LProcName_{sbd.MethodName};
+              var asf := LAtomic_GetSpecFunctions();
+              var s := last(sb.states).state;
+              lemma_LAtomic_AtomicPathCantAffectOtherThreadsExceptViaFork(asf, s, path, tid);
+              lemma_PathLeavesConfigUnchanged(s, s', path, tid);
+              lemma_LAtomic_PathHasPCStackEffect_{atomicPath.Name}(s, s', path, tid);
+              assert YieldPredicateBasic(s, s', other_tid);
+              lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
+          ";
+          str += String.Concat(yieldPredicateNames.Select(kv => kv.Key).Select(predName => $@"
+              lemma_EnumeratedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}({enumeratedParamValues});
+          "));
+          str += "}";
+          pgp.AddLemma(str, "YieldAlways");
+        }
+
+        var optionalNot = (sbd.LastState is StraightlineStateYielded) ? "!" : "";
+        str = $@"
+          lemma lemma_StraightlineBehaviorSatisfiesYieldPredicate_{sbd.Name}(
+            sb: LAtomicStraightlineBehavior,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle,
+            s': LPlusState,
+            other_tid: Armada_ThreadHandle
+            )
+            requires !path.LAtomic_Path_Tau?
+            requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, LProcName_{sbd.MethodName}))
+            requires LocalInv(last(sb.states).state, tid)
+            requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+            requires StraightlineBehaviorFullySatisfiesDescriptor(sb.trace, LProcName_{sbd.MethodName}, SBD_{sbd.Name})
+            requires !PathToEffect(path).CHLStepEffectStop?
+            requires var effect := PathToEffect(path);
+                     {optionalNot}(effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall?)
+            requires tid != other_tid
+            requires other_tid in last(sb.states).state.s.threads
+            ensures  YieldPredicate(last(sb.states).state, s', other_tid)
+          {{
+            lemma_StraightlineBehaviorNonstoppingContinuationPossibilities_{sbd.Name}(sb, tid, LProcName_{sbd.MethodName}, s', path);
+            match path {{
+        ";
+        foreach (var tup in sbd.PotentialSuccessorPaths)
+        {
+          var path = tup.Item1;
+          var effect = tup.Item2;
+          str += $"case LAtomic_Path_{path.Name}(_) =>\n";
+          if (effect.CanFollow(sbd.LastState)) {
+            str += $"lemma_StraightlineBehaviorSatisfiesYieldPredicate_{sbd.Name}_Then_{path.Name}(sb, path, tid, s', other_tid);\n";
+          }
+          else {
+            str += $@"
+                assert PathToEffect(path) == {effect.Constructor};
+                assert false;
+            ";
+          }
+        }
+        str += "} }\n";
+        pgp.AddLemma(str, "YieldAlways");
+      }
+
+      str = @"
+        lemma lemma_StraightlineBehaviorSatisfiesYieldPredicate(
+          sb: LAtomicStraightlineBehavior,
+          path: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          s': LPlusState,
+          other_tid: Armada_ThreadHandle
+          )
+          requires !path.LAtomic_Path_Tau?
+          requires AnnotatedBehaviorSatisfiesSpec(sb, GetLAtomicStraightlineSpec(tid, PathToProc(path)))
+          requires LocalInv(last(sb.states).state, tid)
+          requires LAtomic_NextPath(last(sb.states).state, s', path, tid)
+          requires !PathToEffect(path).CHLStepEffectStop?
+          requires var phase := last(sb.states).aux.phase;
+                   var effect := PathToEffect(path);
+                   if effect.CHLStepEffectReturn? || effect.CHLStepEffectReturnThenCall? then
+                     phase.StraightlinePhaseEnsured?
+                   else
+                     phase.StraightlinePhaseYielded?
+          requires tid != other_tid
+          requires other_tid in last(sb.states).state.s.threads
+          ensures  YieldPredicate(last(sb.states).state, s', other_tid)
+        {
+          var proc := PathToProc(path);
+          var phase := last(sb.states).aux.phase;
+          var sbd;
+          if phase.StraightlinePhaseEnsured? {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingEnsured(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingEnsured.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesYieldPredicate_{sbd.Name}(sb, path, tid, s', other_tid);
+      "));
+      str += @"
+            }
+          }
+          else {
+            sbd := lemma_GetFullDescriptorForStraightlineBehaviorEndingYielded(sb, tid, proc);
+            match sbd {
+      ";
+      str += String.Concat(sbdsEndingYielded.Select(sbd => $@"
+              case SBD_{sbd.Name} =>
+                lemma_StraightlineBehaviorSatisfiesYieldPredicate_{sbd.Name}(sb, path, tid, s', other_tid);
+      "));
+      str += @"
+            }
+          }
+        }
+      ";
+      pgp.AddLemma(str, "YieldAlways");
+
+      str = @"
+        lemma lemma_StraightlineBehaviorsSatisfyYieldPredicate()
+          ensures StraightlineBehaviorsSatisfyYieldPredicate(GetConcurrentHoareLogicRequest())
+        {
+          var cr := GetConcurrentHoareLogicRequest();
+          forall sb, step, s', other_actor {:trigger StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)}
+            | StraightlineBehaviorsSatisfyYieldPredicateConditions(cr, sb, step, s', other_actor)
+            ensures cr.yield_pred(last(sb.states).state, s', other_actor)
+          {
+            lemma_StraightlineBehaviorSatisfiesYieldPredicate(sb, step.path, step.tid, s', other_actor);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "YieldAlways");
+    }
+
+    private void GenerateStraightlineBehaviorProofs()
+    {
+      GenerateStraightlineBehaviorsSatisfyGlobalInvariantProof();
+      GenerateStraightlineBehaviorsSatisfyLocalInvariantProof();
+      GenerateStraightlineBehaviorsSatisfyPreconditionsForCallsProof();
+      GenerateStraightlineBehaviorsSatisfyPreconditionsForForksProof();
+      GenerateStraightlineBehaviorsSatisfyPostconditionsProof();
+      GenerateStraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryProof();
+      GenerateStraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackProof();
+      GenerateStraightlineBehaviorsSatisfyYieldPredicatesProof();
     }
 
     private void GenerateLInitImpliesHInitLemma()
@@ -2942,363 +4223,309 @@ namespace Microsoft.Armada
       GenerateLemmasHelpfulForProvingInitPreservation_LH();
 
       var str = @"
-        lemma lemma_LInitImpliesHInit(ls:LPlusState) returns (hconfig:H.Armada_Config)
-          requires LPlus_Init(ls)
-          ensures  H.Armada_InitConfig(ConvertTotalState_LPlusH(ls), hconfig)
+        lemma lemma_LInitImpliesHInit()
+          ensures LInitImpliesHInit(GetAtomicConcurrentHoareLogicRequest())
         {
-          var hs := ConvertTotalState_LPlusH(ls);
-          hconfig := ConvertConfig_LH(ls.config);
+          var ar := GetAtomicConcurrentHoareLogicRequest();
+          forall ls | ar.l.init(ls)
+            ensures ar.h.init(ar.lstate_to_hstate(ls))
+          {
+            var hs := ConvertTotalState_LPlusH(ls);
+            var hconfig := ConvertConfig_LH(ls.config);
 
-          lemma_ConvertTotalStatePreservesInit(ls.s, hs, ls.config, hconfig);
-          assert H.Armada_InitConfig(hs, hconfig);
+            lemma_ConvertTotalStatePreservesInit(ls.s, hs, ls.config, hconfig);
+            assert H.Armada_InitConfig(hs, hconfig);
+          }
         }
       ";
       pgp.AddLemma(str);
     }
 
-    private void GenerateLNextPlusEnablementConditionImpliesHNextLemmaForNormalNextRoutine(NextRoutine nextRoutine)
+    private void GenerateLNextPlusLocalInvariantImpliesHNextLemmaForNormalPath(AtomicPath atomicPath)
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lstep.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", nextRoutine.Formals.Select(f => $", hstep.{f.GloballyUniqueVarName}"));
-
-      var hNextRoutine = nextRoutineMap[nextRoutine];
-      var hNextRoutineName = hNextRoutine.NameSuffix;
+      var hAtomicPath = pathMap[atomicPath];
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
 
       string str = $@"
-        lemma lemma_LNextPlusEnablementConditionImpliesHNext_{nextRoutineName}(ls:LPlusState, ls':LPlusState, lstep:L.Armada_TraceEntry)
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires InductiveInv(ls)
-            requires GlobalInv(ls)
-            requires MapStepToThread(lstep).Some? ==>
-                && var actor := MapStepToThread(lstep).v;
-                && EnablementCondition(ls, actor)
-                && LocalInv(ls, actor)
-            ensures  H.Armada_NextOneStep(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertTraceEntry_LH(lstep))
+        lemma lemma_LNextPlusLocalInvariantImpliesHNext_{atomicPath.Name}(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle
+          )
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires lpath.LAtomic_Path_{atomicPath.Name}?
+          requires InductiveInv(ls)
+          requires LocalInv(ls, tid)
+          requires GlobalInv(ls)
+          ensures  HAtomic_NextPath(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertAtomicPath_LH(lpath), tid)
         {{
+          { lpr.GetOpenValidPathInvocation(atomicPath) }
+
           var hs := ConvertTotalState_LPlusH(ls);
           var hs' := ConvertTotalState_LPlusH(ls');
-          var tid := lstep.tid;
-          var hstep := ConvertTraceEntry_LH(lstep);
+          var hpath := ConvertAtomicPath_LH(lpath);
+
+          { hpr.GetOpenPathInvocation(hAtomicPath) }
 
           lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
           lemma_StoreBufferAppendAlwaysCommutesWithConvert();
-          assert H.Armada_ValidStep_{hNextRoutineName}(hs, tid{hstep_params});
-          if L.Armada_UndefinedBehaviorAvoidance_{nextRoutineName}(ls.s, tid{lstep_params}) {{
-            assert H.Armada_UndefinedBehaviorAvoidance_{hNextRoutineName}(hs, tid{hstep_params});
-            var alt_hs' := H.Armada_GetNextState_{hNextRoutineName}(hs, tid{hstep_params});
-            assert hs'.stop_reason == alt_hs'.stop_reason;
-            if tid in hs'.threads {{
-              assert hs'.threads[tid] == alt_hs'.threads[tid];
-            }}
-            assert hs'.threads == alt_hs'.threads;
-            assert hs'.mem == alt_hs'.mem;
-            assert hs' == alt_hs';
-            assert H.Armada_Next_{hNextRoutineName}(hs, hs', tid{hstep_params});
-          }}
-          else {{
-            assert !H.Armada_UndefinedBehaviorAvoidance_{hNextRoutineName}(hs, tid{hstep_params});
-          }}
+          ProofCustomizationGoesHere();
+      ";
+      for (var i = 0; i < atomicPath.NumNextRoutines; ++i) {
+        var nextRoutine = atomicPath.NextRoutines[i];
+        var pos = i+1;
+        str += $"var hs{pos} := ConvertTotalState_LPlusH(lstates.s{pos});\n";
+        if (nextRoutine.Stopping) {
+          str += $@"
+            assert !hs{pos}.stop_reason.Armada_NotStopped?;
+            assert !hstates.s{pos}.stop_reason.Armada_NotStopped?;
+          ";
+        }
+        else {
+          str += $@"
+            assert hs{pos}.stop_reason.Armada_NotStopped?;
+            assert hstates.s{pos}.stop_reason.Armada_NotStopped?;
+          ";
+          if (nextRoutine.nextType == NextType.TerminateThread) {
+            str += $@"
+              assert tid !in hs{pos}.threads;
+              assert tid !in hstates.s{pos}.threads;
+            ";
+          }
+          else {
+            str += $@"
+              assert hs{pos}.threads[tid] == hstates.s{pos}.threads[tid];
+            ";
+          }
+
+          str += $@"
+            assert hs{pos}.threads == hstates.s{pos}.threads;
+            assert hs{pos}.mem == hstates.s{pos}.mem;
+            assert hs{pos} == hstates.s{pos};
+          ";
+        }
+      }
+      str += $@"
         }}
       ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "lift");
     }
 
-    private void GenerateLNextPlusEnablementConditionImpliesHNextLemmaForTauNextRoutine(NextRoutine nextRoutine)
+    private void GenerateLNextPlusLocalInvariantImpliesHNextLemmaForTauPath(AtomicPath atomicPath)
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
+      GenerateLiftAtomicPathLemmaForTauPath(atomicPath);
 
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lstep.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", nextRoutine.Formals.Select(f => $", hstep.{f.GloballyUniqueVarName}"));
+      // This is just like lemma_LiftAtomicPath_Tau in AbstractProofGenerator, except it also gets
+      // to assume GlobalInv(ls) in the preconditions.  (It also has a slightly different calling
+      // convention:  it receives ls' as well.)
 
-      var hNextRoutineName = nextRoutine.NameSuffix;
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+      var hAtomicPath = pathMap[atomicPath];
 
       string str = $@"
-        lemma lemma_LNextPlusEnablementConditionImpliesHNext_{nextRoutineName}(ls:LPlusState, ls':LPlusState, lstep:L.Armada_TraceEntry)
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires lstep.Armada_TraceEntry_{nextRoutineName}?
-            requires InductiveInv(ls)
-            requires GlobalInv(ls)
-            requires MapStepToThread(lstep).Some? ==>
-                && var actor := MapStepToThread(lstep).v;
-                && EnablementCondition(ls, actor)
-                && LocalInv(ls, actor)
-            ensures  H.Armada_NextOneStep(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertTraceEntry_LH(lstep))
+        lemma lemma_LNextPlusLocalInvariantImpliesHNext_Tau(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle
+          )
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires lpath.LAtomic_Path_Tau?
+          requires InductiveInv(ls)
+          requires GlobalInv(ls)
+          ensures  HAtomic_NextPath(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertAtomicPath_LH(lpath), tid)
         {{
+          { lpr.GetOpenValidPathInvocation(atomicPath) }
+
           var hs := ConvertTotalState_LPlusH(ls);
+          var hpath := ConvertAtomicPath_LH(lpath);
           var hs' := ConvertTotalState_LPlusH(ls');
-          var tid := lstep.tid;
-          var hstep := ConvertTraceEntry_LH(lstep);
+
+          { hpr.GetOpenPathInvocation(hAtomicPath) }
 
           var lentry := ls.s.threads[tid].storeBuffer[0];
-          assert H.Armada_ValidStep_{nextRoutineName}(hs, tid{hstep_params});
-          assert H.Armada_UndefinedBehaviorAvoidance_{nextRoutineName}(hs, tid{hstep_params});
           var hentry := hs.threads[tid].storeBuffer[0];
           var lmem := ls.s.mem;
           var hmem1 := ConvertSharedMemory_LH(L.Armada_ApplyStoreBufferEntry(lmem, lentry));
           var hmem2 := H.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_LH(lmem), hentry);
           lemma_ApplyStoreBufferEntryCommutesWithConvert(lmem, lentry, hentry, hmem1, hmem2);
 
-          var alt_hs' := H.Armada_GetNextState_{nextRoutineName}(hs, tid{hstep_params});
-          assert hs'.threads[tid].storeBuffer == alt_hs'.threads[tid].storeBuffer;
+          var alt_hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+          ProofCustomizationGoesHere();
           assert hs'.threads[tid] == alt_hs'.threads[tid];
           assert hs'.threads == alt_hs'.threads;
           assert hs' == alt_hs';
-          assert H.Armada_Next_{nextRoutineName}(hs, hs', tid{hstep_params});
+
+          /* { hpr.GetAssertValidPathInvocation(hAtomicPath) } */
         }}
       ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "lift");
     }
 
-    private void GenerateLNextPlusEnablementConditionImpliesHNextLemma()
+    private void GenerateLNextPlusLocalInvariantImpliesHNextLemma()
     {
       var finalCases = "";
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var nextRoutineName = nextRoutine.NameSuffix;
-
-        if (nextRoutine.nextType == NextType.Tau) {
-          GenerateLNextPlusEnablementConditionImpliesHNextLemmaForTauNextRoutine(nextRoutine);
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        if (atomicPath.Tau) {
+          GenerateLNextPlusLocalInvariantImpliesHNextLemmaForTauPath(atomicPath);
         }
         else {
-          GenerateLNextPlusEnablementConditionImpliesHNextLemmaForNormalNextRoutine(nextRoutine);
+          GenerateLNextPlusLocalInvariantImpliesHNextLemmaForNormalPath(atomicPath);
         }
 
-        var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"case Armada_TraceEntry_{nextRoutineName}(_{lstep_params}) => lemma_LNextPlusEnablementConditionImpliesHNext_{nextRoutineName}(ls, ls', lstep);";
+        finalCases += $@"
+          case LAtomic_Path_{atomicPath.Name}(_) =>
+            lemma_LNextPlusLocalInvariantImpliesHNext_{atomicPath.Name}(ls, ls', lpath, tid);
+        ";
       }
 
-      string str = @"
-        lemma lemma_LNextPlusEnablementConditionImpliesHNext(ls:LPlusState, ls':LPlusState, lstep:L.Armada_TraceEntry)
-            requires LPlus_NextOneStep(ls, ls', lstep)
-            requires InductiveInv(ls)
-            requires GlobalInv(ls)
-            requires MapStepToThread(lstep).Some? ==>
-                && var actor := MapStepToThread(lstep).v;
-                && EnablementCondition(ls, actor)
-                && LocalInv(ls, actor)
-            ensures  H.Armada_NextOneStep(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertTraceEntry_LH(lstep))
-        {
-          match lstep {
+      string str = $@"
+        lemma lemma_LNextPlusLocalInvariantImpliesHNext(
+          ls: LPlusState,
+          ls': LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle
+          )
+          requires LAtomic_NextPath(ls, ls', lpath, tid)
+          requires InductiveInv(ls)
+          requires !lpath.LAtomic_Path_Tau? ==> LocalInv(ls, tid)
+          requires GlobalInv(ls)
+          ensures  HAtomic_NextPath(ConvertTotalState_LPlusH(ls), ConvertTotalState_LPlusH(ls'), ConvertAtomicPath_LH(lpath), tid)
+        {{
+          match lpath {{
+            { finalCases }
+          }}
+        }}
       ";
-      str += finalCases;
-      str += @"
-          }
-        }
-      ";
-      pgp.AddLemma(str);
+      pgp.AddLemma(str, "lift");
     }
 
-    private void GeneratePerformCHLAssumeIntro()
+    private void GenerateIsValidAtomicConcurrentHoareLogicRequestLemmas()
     {
       string str;
 
-      str = @"
-        lemma lemma_LowAndHighMatchYielding()
-          ensures forall pc:L.Armada_PC :: L.Armada_IsNonyieldingPC(pc) <==> H.Armada_IsNonyieldingPC(ConvertPC_LH(pc))
-        {
-        }
-      ";
-      pgp.AddLemma(str);
+      GenerateIsValidConcurrentHoareLogicRequest();
 
       str = @"
-        lemma {:timeLimitMultiplier 2} lemma_PerformCHLAssumeIntroMultipleSubsteps(
-          ub:AnnotatedBehavior<LPlusState, L.Armada_TraceEntry>,
-          tau: bool,
-          tid: Armada_ThreadHandle,
-          ls:LPlusState,
-          ls':LPlusState,
-          lsteps:seq<L.Armada_TraceEntry>,
-          hs:HState,
-          hs':HState,
-          hsteps:seq<H.Armada_TraceEntry>,
-          lstates: seq<LPlusState>,
-          hstates: seq<HState>
-          )
-          requires AnnotatedBehaviorSatisfiesSpec(ub, GetLOneStepSpec())
-          requires forall step :: step in lsteps ==> step.tid == tid
-          requires forall step :: step in lsteps ==> step.Armada_TraceEntry_Tau? == tau
-          requires var s := last(ub.states).s;
-                   s.stop_reason.Armada_NotStopped? ==>
-                   (forall any_tid :: any_tid in s.threads && (any_tid != tid || tau) ==> !L.Armada_IsNonyieldingPC(s.threads[any_tid].pc))
-          requires ls == last(ub.states)
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), ls, ls', lsteps)
-          requires hs == ConvertTotalState_LPlusH(ls)
-          requires hs' == ConvertTotalState_LPlusH(ls')
-          requires |hsteps| == |lsteps|
-          requires forall i :: 0 <= i < |lsteps| ==> hsteps[i] == ConvertTraceEntry_LH(lsteps[i])
-          requires lstates == Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls, lsteps)
-          requires hstates == Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hsteps)
-          ensures  Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), hs, hs', hsteps)
-          ensures  |hstates| == |lstates|
-          ensures  forall i :: 0 <= i < |lstates| ==> hstates[i] == ConvertTotalState_LPlusH(lstates[i])
-          decreases |lsteps|
+        lemma lemma_LPathImpliesHPath()
+          ensures LPathImpliesHPath(GetAtomicConcurrentHoareLogicRequest())
         {
-          if |lsteps| > 0 {
-            var ls_next := LPlus_GetNextStateAlways(ls, lsteps[0]);
-            var ub' := AnnotatedBehavior(ub.states + [ls_next], ub.trace + [lsteps[0]]);
-            var hs_next := ConvertTotalState_LPlusH(ls_next);
-            assert hsteps[0] == ConvertTraceEntry_LH(lsteps[0]);
-            lemma_EstablishLOneStepNext(tau, tid, ls, ls_next, lsteps[0]);
-            assert forall any_tid :: any_tid in ls_next.s.threads && (any_tid != tid || tau)
-                               ==> !L.Armada_IsNonyieldingPC(ls_next.s.threads[any_tid].pc);
-            var cr := GetConcurrentHoareLogicRequest();
-            lemma_IsValidConcurrentHoareLogicRequest(cr);
-            lemma_ExtendStateNextSeqRight(ub.states, ub.trace, cr.spec.next, ls_next, lsteps[0]);
-            lemma_AllCHLInvariantsHoldAtStep(cr, ub', |ub.trace|, lsteps[0].tid);
-            lemma_LNextPlusEnablementConditionImpliesHNext(ls, ls_next, lsteps[0]);
-            lemma_NextOneStepImpliesGetNextState_H(hs, hs_next, hsteps[0]);
-            assert last(ub'.states) == ls_next;
-            forall i | 0 <= i < |lsteps[1..]|
-              ensures hsteps[1..][i] == ConvertTraceEntry_LH(lsteps[1..][i])
-            {
-              var iplus := 1+i;
-              calc {
-                hsteps[1..][i];
-                  { lemma_IndexIntoDrop(hsteps, 1, i); }
-                hsteps[iplus];
-                ConvertTraceEntry_LH(lsteps[iplus]);
-                  { lemma_IndexIntoDrop(lsteps, 1, i); }
-                ConvertTraceEntry_LH(lsteps[1..][i]);
-              }
-            }
-            var asf := LPlus_GetSpecFunctions();
-            calc {
-              lstates[1..];
-                { lemma_ArmadaGetStateSequenceDrop(asf, ls, lsteps, lstates); }
-              Armada_GetStateSequence(asf, asf.step_next(ls, lsteps[0]), lsteps[1..]);
-              Armada_GetStateSequence(asf, ls_next, lsteps[1..]);
-              Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls_next, lsteps[1..]);
-            }
-            lemma_PerformCHLAssumeIntroMultipleSubsteps(ub', tau, tid, ls_next, ls', lsteps[1..], hs_next, hs', hsteps[1..],
-                                                        lstates[1..], hstates[1..]);
-            forall i | 0 <= i < |lstates|
-              ensures hstates[i] == ConvertTotalState_LPlusH(lstates[i])
-            {
-              if i > 0 {
-                var iminus := i-1;
-                calc {
-                  hstates[i];
-                    { lemma_IndexIntoDrop(hstates, 1, iminus); }
-                  hstates[1..][iminus];
-                  ConvertTotalState_LPlusH(lstates[1..][iminus]);
-                    { lemma_IndexIntoDrop(lstates, 1, iminus); }
-                  ConvertTotalState_LPlusH(lstates[i]);
-                }
-              }
-            }
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_ConvertMultistepMaintainsMatching(tau: bool, tid: Armada_ThreadHandle, steps: seq<L.Armada_TraceEntry>)
-          requires forall step :: step in steps ==> step.tid == tid
-          requires forall step :: step in steps ==> step.Armada_TraceEntry_Tau? == tau
-          ensures forall step :: step in MapSeqToSeq(steps, ConvertTraceEntry_LH) ==> step.tid == tid
-          ensures forall step :: step in MapSeqToSeq(steps, ConvertTraceEntry_LH) ==> step.Armada_TraceEntry_Tau? == tau
-          decreases |steps|
-        {
-          if |steps| > 0 {
-            assert tau ==> steps[0].Armada_TraceEntry_Tau?;
-            lemma_ConvertMultistepMaintainsMatching(tau, tid, steps[1..]);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_PerformCHLAssumeIntroOneStep(
-          lb:AnnotatedBehavior<LPlusState, LStep>,
-          pos:int
-          )
-          requires AnnotatedBehaviorSatisfiesSpec(lb, GetLPlusSpec())
-          requires 0 <= pos < |lb.states| - 1
-          ensures  var ls := lb.states[pos];
-                   var ls' := lb.states[pos+1];
-                   var lstep := lb.trace[pos];
-                   var hs := ConvertTotalState_LPlusH(ls);
-                   var hs' := ConvertTotalState_LPlusH(ls');
-                   var hstep := ConvertMultistep_LH(lstep);
-                   H.Armada_Next(hs, hs', hstep)
-        {
-          var ls := lb.states[pos];
-          var ls' := lb.states[pos+1];
-          var lstep := lb.trace[pos];
-          var hs := ConvertTotalState_LPlusH(ls);
-          var hs' := ConvertTotalState_LPlusH(ls');
-          var hstep := ConvertMultistep_LH(lstep);
-
-          var ub := lemma_UnrollBehavior(lb, pos);
-          assert ActionTuple(lb.states[pos], lb.states[pos+1], lb.trace[pos]) in GetLPlusSpec().next;
-          var lstates := Armada_GetStateSequence(LPlus_GetSpecFunctions(), ls, lstep.steps);
-          var hstates := Armada_GetStateSequence(H.Armada_GetSpecFunctions(), hs, hstep.steps);
-          lemma_PerformCHLAssumeIntroMultipleSubsteps(ub, lstep.tau, lstep.tid, ls, ls', lstep.steps, hs, hs', hstep.steps,
-                                                      lstates, hstates);
-          lemma_ConvertMultistepMaintainsMatching(lstep.tau, lstep.tid, lstep.steps);
-          lemma_LowAndHighMatchYielding();
-          forall i | 0 < i < |hstep.steps|
-            ensures hstep.tid in hstates[i].threads
-            ensures H.Armada_IsNonyieldingPC(hstates[i].threads[hstep.tid].pc)
+          var ar := GetAtomicConcurrentHoareLogicRequest();
+          forall ls, lpath, tid | LPathImpliesHPathConditions(ar, ls, lpath, tid)
+            ensures var ls' := ar.l.path_next(ls, lpath, tid);
+                    var hs := ar.lstate_to_hstate(ls);
+                    var hpath := ar.lpath_to_hpath(lpath);
+                    var hs' := ar.lstate_to_hstate(ls');
+                    && ar.h.path_valid(hs, hpath, tid)
+                    && hs' == ar.h.path_next(hs, hpath, tid)
           {
-            assert hstates[i] == ConvertTotalState_LPlusH(lstates[i]);
-            assert lstep.tid in lstates[i].s.threads;
-            assert L.Armada_IsNonyieldingPC(lstates[i].s.threads[lstep.tid].pc);
+            var ls' := ar.l.path_next(ls, lpath, tid);
+            lemma_LNextPlusLocalInvariantImpliesHNext(ls, ls', lpath, tid);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_PerformCHLAssumeIntro(
-          lb:AnnotatedBehavior<LPlusState, LStep>
-          ) returns (
-          hb:AnnotatedBehavior<HState, HStep>
-          )
-          requires AnnotatedBehaviorSatisfiesSpec(lb, GetLPlusSpec())
-          ensures  BehaviorRefinesBehavior(lb.states, hb.states, GetLPlusHRefinementRelation())
-          ensures  AnnotatedBehaviorSatisfiesSpec(hb, GetHSpec())
+        lemma lemma_EmbeddedRequestCorresponds()
+          ensures EmbeddedRequestCorresponds(GetAtomicConcurrentHoareLogicRequest())
         {
-          var l0 := lb.states[0];
-          var h0 := ConvertTotalState_LPlusH(l0);
-          var relation := GetLPlusHRefinementRelation();
-          var hspec := GetHSpec();
+        }
+      ";
+      pgp.AddLemma(str);
 
-          var hconfig := lemma_LInitImpliesHInit(l0);
-          var hstates := [h0];
-          var htrace := [];
-          var lh_map := [RefinementRange(0, 0)];
-          var pos := 0;
+      str = $@"
+        lemma lemma_AtomicInitImpliesOK()
+          ensures AtomicInitImpliesOK(LAtomic_GetSpecFunctions())
+        {{
+        }}
+      ";
+      pgp.AddLemma(str);
 
-          while pos < |lb.states| - 1
-            invariant 0 <= pos < |lb.states|
-            invariant |htrace| == |hstates|-1
-            invariant hstates[0] in hspec.init
-            invariant forall i :: 0 <= i < |htrace| ==> H.Armada_Next(hstates[i], hstates[i+1], htrace[i])
-            invariant last(hstates) == ConvertTotalState_LPlusH(lb.states[pos])
-            invariant BehaviorRefinesBehaviorUsingRefinementMap(lb.states[..pos+1], hstates, relation, lh_map)
+      str = @"
+        lemma lemma_AtomicPathRequiresOK()
+          ensures AtomicPathRequiresOK(LAtomic_GetSpecFunctions())
+        {
+          var asf := LAtomic_GetSpecFunctions();
+          forall s, path, tid | asf.path_valid(s, path, tid)
+            ensures asf.state_ok(s)
           {
-            var ls := lb.states[pos];
-            var ls' := lb.states[pos+1];
-            var lstep := lb.trace[pos];
-            assert ActionTuple(ls, ls', lstep) in GetLPlusSpec().next;
-
-            var hs := ConvertTotalState_LPlusH(ls);
-            var hs' := ConvertTotalState_LPlusH(ls');
-            var hstep := ConvertMultistep_LH(lstep);
-            lemma_PerformCHLAssumeIntroOneStep(lb, pos);
-
-            htrace := htrace + [hstep];
-            hstates := hstates + [hs'];
-            lh_map := lh_map + [RefinementRange(|hstates|-1, |hstates|-1)];
-            pos := pos + 1;
+            lemma_PathImpliesThreadRunning(s, path, tid);
           }
+        }
+      ";
+      pgp.AddLemma(str);
 
-          hb := AnnotatedBehavior(hstates, htrace);
-          assert lb.states[..pos+1] == lb.states;
-          assert BehaviorRefinesBehaviorUsingRefinementMap(lb.states, hb.states, relation, lh_map);
+      str = @"
+        lemma lemma_AtomicSteppingThreadHasPC()
+          ensures AtomicSteppingThreadHasPC(LAtomic_GetSpecFunctions())
+        {
+          var asf := LAtomic_GetSpecFunctions();
+          forall s, path, tid | asf.path_valid(s, path, tid)
+            ensures asf.get_thread_pc(s, tid).Some?
+          {
+            lemma_PathImpliesThreadRunning(s, path, tid);
+          }
+        }
+      ";
+      pgp.AddLemma(str);
+
+      lAtomic.GenerateAtomicTauLeavesPCUnchangedLemma();
+
+      str = @"
+        lemma lemma_LStateToHStateMapsPCsCorrectly()
+          ensures LStateToHStateMapsPCsCorrectly(GetAtomicConcurrentHoareLogicRequest())
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+
+      lAtomic.GenerateAtomicPathCantAffectOtherThreadPCsExceptViaForkLemma();
+
+      str = @"
+        lemma lemma_LHPathPropertiesMatch()
+          ensures LHPathPropertiesMatch(GetAtomicConcurrentHoareLogicRequest())
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_StateConversionPreservesOK()
+          ensures StateConversionPreservesOK(GetAtomicConcurrentHoareLogicRequest())
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_StateConversionSatisfiesRelation()
+          ensures StateConversionSatisfiesRelation(GetAtomicConcurrentHoareLogicRequest())
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+
+      str = @"
+        lemma lemma_IsValidAtomicConcurrentHoareLogicRequest()
+          ensures IsValidAtomicConcurrentHoareLogicRequest(GetAtomicConcurrentHoareLogicRequest())
+        {
+          lemma_IsValidConcurrentHoareLogicRequest();
+          lemma_LPathImpliesHPath();
+          lemma_EmbeddedRequestCorresponds();
+          lemma_AtomicInitImpliesOK();
+          lemma_AtomicPathRequiresOK();
+          lemma_AtomicSteppingThreadHasPC();
+          lemma_LAtomic_AtomicTauLeavesPCUnchanged();
+          lemma_LAtomic_AtomicThreadCantAffectOtherThreadPCExceptViaFork();
+          lemma_LStateToHStateMapsPCsCorrectly();
+          lemma_LInitImpliesHInit();
+          lemma_LHPathPropertiesMatch();
+          lemma_StateConversionPreservesOK();
+          lemma_StateConversionSatisfiesRelation();
         }
       ";
       pgp.AddLemma(str);
@@ -3306,29 +4533,19 @@ namespace Microsoft.Armada
 
     private void GenerateLemmasForAssumeIntroProof()
     {
-      GenerateStateRefinerSatisfiesRelationLemma();
       GenerateLInitImpliesHInitLemma();
-      GenerateLNextPlusEnablementConditionImpliesHNextLemma();
-      GeneratePerformCHLAssumeIntro();
-    }
+      GenerateLNextPlusLocalInvariantImpliesHNextLemma();
+      GenerateIsValidAtomicConcurrentHoareLogicRequestLemmas();
 
-    private void GenerateFinalProof()
-    {
       var str = @"
-        lemma lemma_ProveRefinementViaAssumeIntro()
-          ensures SpecRefinesSpec(L.Armada_Spec(), H.Armada_Spec(), GetLHRefinementRelation())
+        lemma lemma_LiftLAtomicToHAtomic() returns (refinement_relation:RefinementRelation<LPlusState, H.Armada_TotalState>)
+          ensures SpecRefinesSpec(AtomicSpec(LAtomic_GetSpecFunctions()), AtomicSpec(HAtomic_GetSpecFunctions()), refinement_relation)
+          ensures refinement_relation == GetLPlusHRefinementRelation()
         {
-          var lspec := L.Armada_Spec();
-          var hspec := H.Armada_Spec();
-          forall lb | BehaviorSatisfiesSpec(lb, lspec)
-            ensures BehaviorRefinesSpec(lb, hspec, GetLHRefinementRelation())
-          {
-            var alb := lemma_GetLPlusAnnotatedBehavior(lb);
-            var ahb := lemma_PerformCHLAssumeIntro(alb);
-            assert BehaviorRefinesBehavior(alb.states, ahb.states, GetLPlusHRefinementRelation());
-            lemma_IfLPlusBehaviorRefinesBehaviorThenLBehaviorDoes(lb, alb.states, ahb.states);
-            lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes(ahb);
-          }
+          var ar := GetAtomicConcurrentHoareLogicRequest();
+          lemma_IsValidAtomicConcurrentHoareLogicRequest();
+          lemma_LiftAtomicToAtomicUsingCHLRequest(ar);
+          refinement_relation := GetLPlusHRefinementRelation();
         }
       ";
       pgp.AddLemma(str);

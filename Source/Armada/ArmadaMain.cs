@@ -86,10 +86,10 @@ namespace Microsoft.Armada {
         if (d is LiteralModuleDecl) {
           var def = ((LiteralModuleDecl)d).ModuleDef;
           var pathName = ArmadaOptions.O.ArmadaOutputDir + "/" + def.Name + ".dfy";
-          if (def.ModuleType == ArmadaModuleType.ArmadaLevel) {
+          if (def.ModuleType == ArmadaModuleType.ArmadaLevel && def.IsToBeVerified) {
             Console.Out.WriteLine("Printing level to {0}", pathName);
           }
-          else if (def.ModuleType == ArmadaModuleType.ArmadaStructs) {
+          else if (def.ModuleType == ArmadaModuleType.ArmadaStructs && def.IsToBeVerified) {
             Console.Out.WriteLine("Printing structs to {0}", pathName);
           }
           else {

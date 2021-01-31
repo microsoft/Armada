@@ -1162,10 +1162,31 @@ YieldPredicateDecl<DeclModifierData dModIn, out YieldPredicateDecl yieldPredicat
  (. yieldPredicate = new YieldPredicateDecl(id, id.val, null, body); .)
   .
 
+UniversalStepConstraintDecl<DeclModifierData dModIn, out UniversalStepConstraintDecl stepConstraint>
+= (. Contract.Ensures(Contract.ValueAtReturn(out stepConstraint) != null);
+     CheckDeclModifiers(dModIn, "Yield predicates", AllowedDeclModifiers.None);
+     IToken id;
+     Expression body;
+     IToken bodyStart;
+     IToken bodyEnd;
+     string code;
+     bool isVerbatimString;
+     stepConstraint = null;
+  .)
+  SYNC
+  "universal_step_constraint"
+  NoUSIdent<out id>
+  ( FunctionBody<out body, out bodyStart, out bodyEnd> (. stepConstraint = new UniversalStepConstraintDecl(id, id.val, null, body); .)
+    | stringToken (. code = Util.RemoveParsedStringQuotes(t.val, out isVerbatimString);
+                     stepConstraint = new UniversalStepConstraintDecl(id, id.val, null, code); .)
+  )
+  .
+
 ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProofDecl proofDecl>
 = (. Contract.Requires(module != null);
      Contract.Ensures(Contract.ValueAtReturn(out proofDecl) != null);
      CheckDeclModifiers(dModIn, "Strategies", AllowedDeclModifiers.None);
+     Attributes attrs = null;
      if (module.ModuleType != ArmadaModuleType.ArmadaProof) {
        SemErr("Strategies only supported in Armada refinement proofs");
      }
@@ -1223,10 +1244,35 @@ ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProo
     [ stringToken    (. code = t.val; .)
     ]
                      (. proofDecl = new CHLInvariantArmadaProofDecl(x, module, id, code); .)
+  | "chl_local_invariant"  (. x = t; code = null; .)
+    NoUSIdent<out id>
+    NoUSIdent<out id2>
+    [ stringToken          (. code = t.val; .)
+    ]
+                     (. proofDecl = new CHLLocalInvariantArmadaProofDecl(x, module, id, id2, code); .)
   | "chl_yield_pred" (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     [ stringToken    (. code = t.val; .)
-    ]                (. proofDecl = new CHLYieldPredicateArmadaProofDecl(x, module, id, code); .)
+    ]                (. proofDecl = new CHLYieldPredicateArmadaProofDecl(x, module, id, code, attrs); .)
+  | "chl_precondition"  (. x = t; code = null; .)
+    NoUSIdent<out id>
+    NoUSIdent<out id2>
+    [ stringToken    (. code = t.val; .)
+    ]
+                     (. proofDecl = new CHLPreconditionArmadaProofDecl(x, module, id, id2, code); .)
+  | "chl_postcondition"  (. x = t; code = null; .)
+    NoUSIdent<out id>
+    NoUSIdent<out id2>
+    [ stringToken    (. code = t.val; .)
+    ]
+                     (. proofDecl = new CHLPostconditionArmadaProofDecl(x, module, id, id2, code); .)
+  | "chl_loop_modifies"  (. x = t; code = null; .)
+    NoUSIdent<out id>
+    NoUSIdent<out id2>
+    [ stringToken    (. code = t.val; .)
+    ]
+                     (. proofDecl = new CHLLoopModifiesClauseArmadaProofDecl(x, module, id, id2, code); .)
   | "auxiliary" (. x = t; .)
     NoUSIdent<out id>
     stringToken        (. code = t.val; .)
@@ -1247,7 +1293,7 @@ ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProo
   | "var_hiding" (. x = t; ids = new List<IToken>(); .)
     NoUSIdent<out id>          (. ids.Add(id); .)
     { "," NoUSIdent<out id>    (. ids.Add(id); .) }
-    (. proofDecl = new VariableHidingStrategyDecl(x, module, ids); .)
+    (. proofDecl = new GlobalVariableHidingStrategyDecl(x, module, ids); .)
   | "stack_var_hiding" (. x = t; ids = new List<IToken>(); .)
     NoUSIdent<out id>
     NoUSIdent<out id2>          (. ids.Add(id2); .)
@@ -1256,7 +1302,7 @@ ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProo
   | "var_intro" (. x = t; ids = new List<IToken>(); .)
     NoUSIdent<out id>          (. ids.Add(id); .)
     { "," NoUSIdent<out id>    (. ids.Add(id); .) }
-    (. proofDecl = new VariableIntroStrategyDecl(x, module, ids); .)
+    (. proofDecl = new GlobalVariableIntroStrategyDecl(x, module, ids); .)
   | "stack_var_intro" (. x = t; code = null; .)
     NoUSIdent<out id>
     NoUSIdent<out id2>
@@ -1327,6 +1373,7 @@ ClassMemberDecl<. DeclModifierData dmod, List<MemberDecl> mm, bool allowConstruc
      Function/*!*/ f;
      GlobalInvariantDecl globalInvariant;
      YieldPredicateDecl yieldPredicate;
+     UniversalStepConstraintDecl stepConstraint;
   .)
   ( (. if (moduleLevelDecl) {
          SemErr(la, "fields are not allowed to be declared at the module level; instead, wrap the field in a 'class' declaration");
@@ -1350,6 +1397,7 @@ ClassMemberDecl<. DeclModifierData dmod, List<MemberDecl> mm, bool allowConstruc
     MethodDecl<dmod, allowConstructors, isWithinAbstractModule, out m>  (. mm.Add(m); .)
   | GlobalInvariantDecl<dmod, out globalInvariant> (. mm.Add(globalInvariant); .)
   | YieldPredicateDecl<dmod, out yieldPredicate> (. mm.Add(yieldPredicate); .)
+  | UniversalStepConstraintDecl<dmod, out stepConstraint> (. mm.Add(stepConstraint); .)
 
   )
   .
@@ -1753,6 +1801,7 @@ MethodDecl<DeclModifierData dmod, bool allowConstructor, bool isWithinAbstractMo
      List<Expression/*!*/> dec = new List<Expression/*!*/>();
      List<Expression/*!*/> reads = new List<Expression/*!*/>();
      List<Expression/*!*/> awaits = new List<Expression/*!*/>();
+     List<Expression/*!*/> undefinedUnless = new List<Expression/*!*/>();
      Attributes decAttrs = null;
      Attributes modAttrs = null;
      BlockStmt body = null;
@@ -1829,7 +1878,7 @@ MethodDecl<DeclModifierData dmod, bool allowConstructor, bool isWithinAbstractMo
     ]
   | "..."                                       (. signatureEllipsis = t; .)
   )
-  { MethodSpec<req, mod, ens, dec, reads, awaits, ref decAttrs, ref modAttrs, caption, isConstructor || isDestructor> }
+  { MethodSpec<req, mod, ens, dec, reads, awaits, undefinedUnless, ref decAttrs, ref modAttrs, caption, isConstructor || isDestructor> }
   [ IF(isConstructor)
     (. DividedBlockStmt dividedBody; .)
     DividedBlockStmt<out dividedBody, out bodyStart, out bodyEnd>
@@ -1863,7 +1912,7 @@ MethodDecl<DeclModifierData dmod, bool allowConstructor, bool isWithinAbstractMo
                              ens, new Specification<Expression>(dec, decAttrs), body, attrs, signatureEllipsis);
     } else {
        m = new Method(tok, id.val, dmod.IsStatic, dmod.IsGhost, typeArgs, ins, outs,
-                      req, new Specification<FrameExpression>(mod, modAttrs), ens, new Specification<Expression>(dec, decAttrs), new Specification<Expression>(reads, null), awaits, body, attrs, signatureEllipsis);
+                      req, new Specification<FrameExpression>(mod, modAttrs), ens, new Specification<Expression>(dec, decAttrs), new Specification<Expression>(reads, null), awaits, undefinedUnless, body, attrs, signatureEllipsis);
      }
      m.BodyStartTok = bodyStart;
      m.BodyEndTok = bodyEnd;
@@ -1877,7 +1926,8 @@ KType<ref FixpointPredicate.KType kType>
   "]"
   .
 MethodSpec<.List<MaybeFreeExpression> req, List<FrameExpression> mod, List<MaybeFreeExpression> ens,
-            List<Expression> decreases, List<Expression> reads, List<Expression> awaits, ref Attributes decAttrs, ref Attributes modAttrs, string caption, bool performThisDeprecatedCheck.>
+            List<Expression> decreases, List<Expression> reads, List<Expression> awaits, List<Expression> undefinedUnless,
+            ref Attributes decAttrs, ref Attributes modAttrs, string caption, bool performThisDeprecatedCheck.>
 = (. Contract.Requires(cce.NonNullElements(req));
      Contract.Requires(cce.NonNullElements(mod));
      Contract.Requires(cce.NonNullElements(ens));
@@ -1912,6 +1962,11 @@ MethodSpec<.List<MaybeFreeExpression> req, List<FrameExpression> mod, List<Maybe
                OldSemi
   | "awaits"   Expression<out e, false, false>               (. awaits.Add(e); .)
                { "," Expression<out e, false, false>         (. awaits.Add(e); .)
+               }
+               OldSemi
+  | "undefined_unless"
+               Expression<out e, false, false>               (. undefinedUnless.Add(e); .)
+               { "," Expression<out e, false, false>         (. undefinedUnless.Add(e); .)
                }
                OldSemi
   )
@@ -2449,6 +2504,10 @@ OneStmt<out Statement/*!*/ s>
   | PrintStmt<out s>
   | RevealStmt<out s>
   | SomehowStmt<out s>
+  | FenceStmt<out s>
+  | GotoStmt<out s>
+  | CompareAndSwapStmt<out s>
+  | AtomicExchangeStmt<out s>
   | DeallocStmt<out s>
   | CreateThreadStmt<out s>
   | UpdateStmt<out s>
@@ -2589,7 +2648,7 @@ UpdateStmt<out Statement/*!*/ s>
   .
 Rhs<out AssignmentRhs r>
 = (. Contract.Ensures(Contract.ValueAtReturn<AssignmentRhs>(out r) != null);
-     IToken/*!*/ x, newToken;  Expression/*!*/ e;
+     IToken/*!*/ x, newToken;  Expression/*!*/ e, e2, e3;
      IToken id;
      Type ty = new InferredTypeProxy();
      List<Expression> ee = null;
@@ -2630,6 +2689,15 @@ Rhs<out AssignmentRhs r>
     "(" Type<out ty> ")" (. r = new MallocRhs(x, ty); .)
   | "calloc" (. x = t; .)
     "(" Type<out ty> "," Expression<out e, false, false> ")" (. r = new CallocRhs(x, ty, e); .)
+  | "compare_and_swap"                    (. x = t; .)
+    "(" Expression<out e, false, false>
+    "," Expression<out e2, false, false>
+    "," Expression<out e3, false, false>
+    ")"                                   (. r = new CompareAndSwapRhs(x, e, e2, e3); .)
+  | "atomic_exchange"                     (. x = t; .)
+    "(" Expression<out e, false, false>
+    "," Expression<out e2, false, false>
+    ")"                                   (. r = new AtomicExchangeRhs(x, e, e2); .)
   )
   { Attribute<ref attrs> }             (. r.Attributes = attrs; .)
   .
@@ -2835,6 +2903,7 @@ WhileStmt<out Statement stmt>
      Expression guard = null;  IToken guardEllipsis = null;
 
      List<MaybeFreeExpression> invariants = new List<MaybeFreeExpression>();
+     List<Expression> ens = new List<Expression>();
      List<Expression> decreases = new List<Expression>();
      Attributes decAttrs = null;
      Attributes modAttrs = null;
@@ -2850,14 +2919,14 @@ WhileStmt<out Statement stmt>
   "while"                    (. x = t; .)
   (
     IF(IsLoopSpec() || IsAlternative())
-    { LoopSpec<invariants, decreases, ref mod, ref decAttrs, ref modAttrs> }
+    { LoopSpec<invariants, ens, decreases, ref mod, ref decAttrs, ref modAttrs> }
     AlternativeBlock<false, out alternatives, out usesOptionalBraces, out endTok>
     (. stmt = new AlternativeLoopStmt(x, endTok, invariants, new Specification<Expression>(decreases, decAttrs), new Specification<FrameExpression>(mod, modAttrs), alternatives, usesOptionalBraces); .)
   |
     ( Guard<out guard>           (. Contract.Assume(guard == null || cce.Owner.None(guard)); .)
     | "..."                      (. guardEllipsis = t; .)
     )
-    { LoopSpec<invariants, decreases, ref mod, ref decAttrs, ref modAttrs> }
+    { LoopSpec<invariants, ens, decreases, ref mod, ref decAttrs, ref modAttrs> }
     ( IF(la.kind == _lbrace)      /* if there's an open brace, claim it as the beginning of the loop body (as opposed to a BlockStmt following the loop) */
       BlockStmt<out body, out bodyStart, out bodyEnd>  (. endTok = body.EndTok; isDirtyLoop = false; .)
     | IF(la.kind == _ellipsis)    /* if there's an ellipsis, claim it as standing for the loop body (as opposed to a "...;" statement following the loop) */
@@ -2872,19 +2941,19 @@ WhileStmt<out Statement stmt>
         if (body == null && !isDirtyLoop) {
           body = new BlockStmt(x, endTok, new List<Statement>());
         }
-        stmt = new WhileStmt(x, endTok, guard, invariants, new Specification<Expression>(decreases, decAttrs), new Specification<FrameExpression>(null, null), body);
+        stmt = new WhileStmt(x, endTok, guard, invariants, ens, new Specification<Expression>(decreases, decAttrs), new Specification<FrameExpression>(null, null), body);
         stmt = new SkeletonStatement(stmt, guardEllipsis, bodyEllipsis);
       } else {
         // The following statement protects against crashes in case of parsing errors
         if (body == null && !isDirtyLoop) {
           body = new BlockStmt(x, endTok, new List<Statement>());
         }
-        stmt = new WhileStmt(x, endTok, guard, invariants, new Specification<Expression>(decreases, decAttrs), new Specification<FrameExpression>(mod, modAttrs), body);
+        stmt = new WhileStmt(x, endTok, guard, invariants, ens, new Specification<Expression>(decreases, decAttrs), new Specification<FrameExpression>(mod, modAttrs), body);
       }
     .)
   )
   .
-LoopSpec<.List<MaybeFreeExpression> invariants, List<Expression> decreases, ref List<FrameExpression> mod, ref Attributes decAttrs, ref Attributes modAttrs.>
+LoopSpec<.List<MaybeFreeExpression> invariants, List<Expression> ens, List<Expression> decreases, ref List<FrameExpression> mod, ref Attributes decAttrs, ref Attributes modAttrs.>
 = (. Expression e; FrameExpression fe;
      bool isFree = false; Attributes attrs = null;
   .)
@@ -2894,6 +2963,9 @@ LoopSpec<.List<MaybeFreeExpression> invariants, List<Expression> decreases, ref 
     "invariant"
     { Attribute<ref attrs> }
     Expression<out e, false, true>                (. invariants.Add(new MaybeFreeExpression(e, isFree, attrs)); .)
+    OldSemi
+  | SYNC "ensures"
+    Expression<out e, false, true>                (. ens.Add(e); .)
     OldSemi
   | SYNC "decreases"
     { Attribute<ref decAttrs> }
@@ -3070,8 +3142,7 @@ RevealStmt<out Statement s>
 
 SomehowStmt<out Statement/*!*/ s>
 = (. Contract.Ensures(Contract.ValueAtReturn(out s) != null); IToken/*!*/ x;
-     List<Expression/*!*/> awaits = new List<Expression/*!*/>();
-     List<Expression/*!*/> req = new List<Expression/*!*/>();
+     List<Expression/*!*/> undefinedUnless = new List<Expression/*!*/>();
      List<Expression/*!*/> mod = new List<Expression/*!*/>();
      List<Expression/*!*/> ens = new List<Expression/*!*/>();
      Attributes modAttrs = null;
@@ -3079,10 +3150,10 @@ SomehowStmt<out Statement/*!*/ s>
   .)
   "somehow" (. x = t; .)
   {
-      ( "awaits"   Expression<out e, false, false>           (. awaits.Add(e); .)
-                   { "," Expression<out e, false, false>     (. awaits.Add(e); .)
+      ( "undefined_unless"
+                   Expression<out e, false, false>           (. undefinedUnless.Add(e); .)
+                   { "," Expression<out e, false, false>     (. undefinedUnless.Add(e); .)
                    }
-      | "requires" Expression<out e, false, false>           (. req.Add(e); .)
       | "modifies" { Attribute<ref modAttrs> }
                    Expression<out e, false, false>           (. mod.Add(e); .)
                    { "," Expression<out e, false, false>     (. mod.Add(e); .)
@@ -3090,7 +3161,45 @@ SomehowStmt<out Statement/*!*/ s>
       | "ensures"  Expression<out e, false, false>           (. ens.Add(e); .)
       )
   }
-  ";" (. s = new SomehowStmt(x, t, awaits, req, new Specification<Expression>(mod, modAttrs), ens); .)
+  ";" (. s = new SomehowStmt(x, t, undefinedUnless, new Specification<Expression>(mod, modAttrs), ens); .)
+  .
+
+FenceStmt<out Statement/*!*/ s>
+= (. Contract.Ensures(Contract.ValueAtReturn(out s) != null); IToken/*!*/ x;
+  .)
+  "fence" (. x = t; .)
+  ";" (. s = new FenceStmt(x, t); .)
+  .
+
+GotoStmt<out Statement/*!*/ s>
+= (. Contract.Ensures(Contract.ValueAtReturn(out s) != null); IToken/*!*/ x, id;
+  .)
+  "goto" (. x = t; .)
+  LabelIdent<out id>
+  ";" (. s = new GotoStmt(x, t, id.val); .)
+  .
+
+CompareAndSwapStmt<out Statement/*!*/ s>
+= (. Contract.Ensures(Contract.ValueAtReturn(out s) != null);
+     IToken/*!*/ x;
+     Expression e, e2, e3;
+  .)
+  "compare_and_swap"                      (. x = t; .)
+  "(" Expression<out e, false, false>
+  "," Expression<out e2, false, false>
+  "," Expression<out e3, false, false>
+  ")" ";" (. s = new UpdateStmt(x, t, new List<Expression>(), new List<AssignmentRhs> { new CompareAndSwapRhs(x, e, e2, e3) }); .)
+  .
+
+AtomicExchangeStmt<out Statement/*!*/ s>
+= (. Contract.Ensures(Contract.ValueAtReturn(out s) != null);
+     IToken/*!*/ x;
+     Expression e, e2;
+  .)
+  "atomic_exchange"                      (. x = t; .)
+  "(" Expression<out e, false, false>
+  "," Expression<out e2, false, false>
+  ")" ";" (. s = new UpdateStmt(x, t, new List<Expression>(), new List<AssignmentRhs> { new AtomicExchangeRhs(x, e, e2) }); .)
   .
 
 DeallocStmt<out Statement/*!*/ s>
@@ -3685,8 +3794,8 @@ Lhs<out Expression e>
 /* A ConstAtomExpression is never an l-value, and does not start with an identifier. */
 ConstAtomExpression<out Expression e, bool allowSemi, bool allowLambda>
 = (. Contract.Ensures(Contract.ValueAtReturn(out e) != null);
-     IToken/*!*/ x;  BigInteger n;   BaseTypes.BigDec d;
-     e = dummyExpr;  Type toType = null;
+     IToken/*!*/ x;  BigInteger n;   BaseTypes.BigDec d; Expression e2;
+     e = dummyExpr; e2 = null; Type toType = null;
   .)
   ( "false"                                    (. e = new LiteralExpr(t, false); .)
   | "true"                                     (. e = new LiteralExpr(t, true); .)
@@ -3701,12 +3810,18 @@ ConstAtomExpression<out Expression e, bool allowSemi, bool allowLambda>
   | "this"                                     (. e = new ThisExpr(t); .)
   | "$me"                                      (. e = new MeExpr(t); .)
   | "$sb_empty"                                (. e = new StoreBufferEmptyExpr(t); .)
+  | "$state"                                   (. e = new TotalStateExpr(t); .)
   | "fresh"                                    (. x = t; .)
     "(" Expression<out e, true, true> ")"      (. e = new UnaryOpExpr(x, UnaryOpExpr.Opcode.Fresh, e); .)
   | "allocated"                                (. x = t; .)
     "(" Expression<out e, true, true> ")"      (. e = new UnaryOpExpr(x, UnaryOpExpr.Opcode.Allocated, e); .)
   | "allocated_array"                          (. x = t; .)
     "(" Expression<out e, true, true> ")"      (. e = new UnaryOpExpr(x, UnaryOpExpr.Opcode.AllocatedArray, e); .)
+  | "if_undefined"                             (. x = t; .)
+    "(" Expression<out e, true, true> ","
+        Expression<out e2, true, true> ")"     (. e = new IfUndefinedExpr(x, e, e2); .)
+  | "global_view"                              (. x = t; .)
+    "(" Expression<out e, true, true> ")"      (. e = new UnaryOpExpr(x, UnaryOpExpr.Opcode.GlobalView, e); .)
   | "unchanged"                                (. x = t; FrameExpression fe; var mod = new List<FrameExpression>(); IToken oldAt = null; .)
     [ "@" LabelIdent<out oldAt> ]
     "("

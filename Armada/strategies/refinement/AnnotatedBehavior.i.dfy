@@ -195,6 +195,33 @@ module AnnotatedBehaviorModule {
         }
     }
 
+    lemma lemma_ReplaceStateOnlyStateNextSeqRight<State, Step>(
+        states:seq<State>,
+        trace:seq<Step>,
+        next:iset<ActionTuple<State, Step>>,
+        new_state:State
+        )
+        requires StateNextSeq(states, trace, next)
+        requires |states| > 1
+        requires ActionTuple(states[|states|-2], new_state, last(trace)) in next
+        ensures  StateNextSeq(all_but_last(states) + [new_state], trace, next)
+    {
+    }
+
+    lemma lemma_ReplaceStateNextSeqRight<State, Step>(
+        states:seq<State>,
+        trace:seq<Step>,
+        next:iset<ActionTuple<State, Step>>,
+        new_state:State,
+        new_step:Step
+        )
+        requires StateNextSeq(states, trace, next)
+        requires |states| > 1
+        requires ActionTuple(states[|states|-2], new_state, new_step) in next
+        ensures  StateNextSeq(all_but_last(states) + [new_state], all_but_last(trace) + [new_step], next)
+    {
+    }
+
     lemma lemma_TakeStateNextSeq<State, Step>(
         states:seq<State>,
         trace:seq<Step>,

@@ -434,8 +434,8 @@ lemma lemma_mul_one_to_one_forall()
 
 lemma lemma_mul_properties()
     ensures forall x:int, y:int {:trigger x*y} :: x*y == y*x;
-    ensures forall x:int {:trigger x*0}{:trigger 0*x} :: x*0 == 0*x == 0;
-    ensures forall x:int {:trigger x*1}{:trigger 1*x} :: x*1 == 1*x == x;
+//    ensures forall x:int {:trigger x*0}{:trigger 0*x} :: x*0 == 0*x == 0;
+//    ensures forall x:int {:trigger x*1}{:trigger 1*x} :: x*1 == 1*x == x;
     ensures forall x:int, y:int, z:int {:trigger x*z, y*z} :: x < y && z > 0 ==> x*z < y*z;
     ensures forall x:int, y:int, z:int {:trigger x*z, y*z} :: x <= y && z >= 0 ==> x*z <= y*z;
     ensures forall x:int, y:int, z:int {:trigger x*(y + z)} :: x*(y + z) == x*y + x*z;
@@ -445,10 +445,10 @@ lemma lemma_mul_properties()
     ensures forall x:int, y:int, z:int {:trigger x*(y*z)}{:trigger (x*y)*z} :: x*(y*z) == (x*y)*z;
     ensures forall x:int, y:int {:trigger x*y} :: x*y != 0 <==> x != 0 && y != 0;
     ensures forall x:int, y:int {:trigger x*y} :: 0 <= x && 0 <= y ==> 0 <= x*y;
-    ensures forall x:int, y:int {:trigger x*y} :: 0 < x && 0 < y && 0 <= x*y ==> x <= x*y && y <= x*y;
-    ensures forall x:int, y:int {:trigger x*y} :: (1 < x && 0 < y) ==> (y < x*y);
-    ensures forall x:int, y:int {:trigger x*y} :: (0 < x && 0 < y) ==> (y <= x*y);
-    ensures forall x:int, y:int {:trigger x*y} :: (0 < x && 0 < y) ==> (0 < x*y);
+//    ensures forall x:int, y:int {:trigger x*y} :: 0 < x && 0 < y && 0 <= x*y ==> x <= x*y && y <= x*y;
+//    ensures forall x:int, y:int {:trigger x*y} :: (1 < x && 0 < y) ==> (y < x*y);
+//    ensures forall x:int, y:int {:trigger x*y} :: (0 < x && 0 < y) ==> (y <= x*y);
+//    ensures forall x:int, y:int {:trigger x*y} :: (0 < x && 0 < y) ==> (0 < x*y);
 {
     lemma_mul_strict_inequality_forall();
     lemma_mul_inequality_forall();
@@ -464,7 +464,7 @@ lemma lemma_mul_properties()
 lemma lemma_mul_cancels_negatives(a:int, b:int)
     ensures a*b == (-a)*(-b);
 {
-    lemma_mul_properties();
+    lemma_mul_auto_induction(a, imap u :: u*b == (-u)*(-b));
 }
 
 //- Kept for legacy reasons:

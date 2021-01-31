@@ -6,6 +6,7 @@ structs SharedStructs2 {
 
 level C using SharedStructs2 {
     noaddr var p:ptr<int32>;
+    noaddr var v:int32;
     noaddr var w:int32;
     noaddr var x:int32;
     noaddr var y:int32;
@@ -18,18 +19,22 @@ level C using SharedStructs2 {
 
     method main()
     {
-        w ::= 3;
+        v ::= 3;
 label lbl1:
-        x ::= 4;
+        w ::= 4;
 label lbl2:
-        y ::= 5;
+        atomic {
+            x ::= 5;
+            y ::= 6;
+        }
 label lbl3:
-        z ::= 6;
+        z ::= 7;
     }
 }
 
 level D using SharedStructs2 {
     noaddr var p:ptr<int32>;
+    noaddr var v:int32;
     noaddr var w:int32;
     noaddr var x:int32;
     noaddr var y:int32;
@@ -43,10 +48,11 @@ level D using SharedStructs2 {
     method main()
     {
         atomic {
-            w ::= 3;
-            x ::= 4;
-            y ::= 5;
-            z ::= 6;
+            v ::= 3;
+            w ::= 4;
+            x ::= 5;
+            y ::= 6;
+            z ::= 7;
         }
     }
 }
@@ -56,6 +62,6 @@ proof CD {
     reduction phase1 main_lbl1 phase2 main_lbl2-main_lbl3
 
     inductive_invariant MyGlobalInvariant @"
-      forall tid :: tid in s.s.threads ==> s.s.threads[tid].storeBuffer == []
+      forall tid :: tid in threads ==> threads[tid].storeBuffer == []
     "
 }

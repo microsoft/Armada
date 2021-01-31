@@ -5,14 +5,17 @@ structs SharedStructs3 {
 }
 
 level E using SharedStructs3 {
-    noaddr var x:int32;
     noaddr var y:int32;
+    ghost var z:int := 0;
 
     method Worker(n:int32)
     {
+        noaddr var x:int32;
+        x := n;
         atomic {
-            x := n;
             y := 4;
+            z := 1;
+            z := 0;
         }
     }
 
@@ -24,15 +27,18 @@ level E using SharedStructs3 {
 }
 
 level F using SharedStructs3 {
-    noaddr var x:int32;
     noaddr var y:int32;
+    ghost var z:int := 0;
 
     method Worker(n:int32)
     {
+        noaddr var x:int32;
+        x := n;
         atomic {
-            x := n;
             assume x == n;
             y := 4;
+            z := 1;
+            z := 0;
         }
     }
 
@@ -46,4 +52,6 @@ level F using SharedStructs3 {
 proof EF {
     refinement E F
     assume_intro
+
+    chl_invariant z_always_zero "s.s.ghosts.z == 0"
 }

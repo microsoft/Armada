@@ -13,16 +13,18 @@ namespace Microsoft.Armada
     private string auxName;
     private ModuleDefinition module;
     private List<MemberDecl> newDefaultClassDecls;
+    private bool includeImportedFiles;
 
-    public ProofFile(ModuleDefinition i_module, string i_dirName)
+    public ProofFile(ModuleDefinition i_module, string i_dirName, bool i_includeImportedFiles = true)
     {
       dirName = i_dirName;
       auxName = null;
       module = i_module;
+      includeImportedFiles = i_includeImportedFiles;
       Initialize();
     }
 
-    public ProofFile(string i_dirName, string i_auxName)
+    public ProofFile(string i_dirName, string i_auxName, bool i_includeImportedFiles)
     {
       dirName = i_dirName;
       auxName = i_auxName;
@@ -41,6 +43,7 @@ namespace Microsoft.Armada
                                     null, // abstracts
                                     null, // reduces
                                     null); // parser
+      includeImportedFiles = i_includeImportedFiles;
       Initialize();
     }
 
@@ -57,6 +60,11 @@ namespace Microsoft.Armada
     public string AuxName
     {
       get { return auxName; }
+    }
+
+    public bool IncludeImportedFiles
+    {
+      get { return includeImportedFiles; }
     }
 
     private void Initialize()
@@ -149,11 +157,6 @@ namespace Microsoft.Armada
       AddImport($"ArmadaModule_{importedAuxName}");
     }
 
-    public void AddTypeSynonymDecl(string synonym, Type t)
-    {
-      AddTopLevelDecl(AH.MakeTypeSynonymDecl(module, synonym, t));
-    }
-
     public void AddTopLevelDecl(TopLevelDecl d)
     {
       module.ArmadaTranslation.TopLevelDecls.Add(d);
@@ -162,12 +165,6 @@ namespace Microsoft.Armada
     public void AddDefaultClassDecl(MemberDecl d)
     {
       newDefaultClassDecls.Add(d);
-    }
-
-    public void AddDatatypeDecl(string declName, List<DatatypeCtor> ctors)
-    {
-      var d = AH.MakeDatatypeDecl(module, declName, ctors);
-      AddTopLevelDecl(d);
     }
 
   }
@@ -184,7 +181,7 @@ namespace Microsoft.Armada
     {
       prog = i_prog;
       name = i_mainProof.Name;
-      mainProof = new ProofFile(i_mainProof, name);
+      mainProof = new ProofFile(i_mainProof, name, true);
       auxiliaryProofs = new Dictionary<string, ProofFile>();
       pg = null;
 
@@ -222,14 +219,14 @@ namespace Microsoft.Armada
       return auxiliaryProofs[auxName];
     }
 
-    public ProofFile CreateAuxiliaryProofFile(string auxName)
+    public ProofFile CreateAuxiliaryProofFile(string auxName, bool includeImportedFiles = true)
     {
       if (auxiliaryProofs.ContainsKey(auxName)) {
-        AH.PrintError(prog, Token.NoToken, "Attempt to create an auxiliary proof file with an already-existing name ({auxName})");
+        AH.PrintError(prog, Token.NoToken, $"Attempt to create an auxiliary proof file with an already-existing name ({auxName})");
         return null;
       }
 
-      var proof = new ProofFile(name, auxName);
+      var proof = new ProofFile(name, auxName, includeImportedFiles);
       if (pg != null) {
         pg.AddCommonHeaderElements(proof);
       }
@@ -265,16 +262,6 @@ namespace Microsoft.Armada
     public void AddDefaultClassDecl(MemberDecl d, string auxName = null)
     {
       LookupFile(auxName).AddDefaultClassDecl(d);
-    }
-
-    public void AddDatatypeDecl(string declName, List<DatatypeCtor> ctors, string auxName = null)
-    {
-      LookupFile(auxName).AddDatatypeDecl(declName, ctors);
-    }
-
-    public void AddTypeSynonymDecl(string synonym, Type t, string auxName = null)
-    {
-      LookupFile(auxName).AddTypeSynonymDecl(synonym, t);
     }
   }
 }

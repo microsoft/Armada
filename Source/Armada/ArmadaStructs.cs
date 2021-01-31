@@ -51,6 +51,7 @@ namespace Microsoft.Armada {
     public IEnumerable<string> FieldNames { get { return fieldNames; } }
     public Type GetFieldType(string fieldName) { return fieldTypes[fieldName]; }
     public Type LookupFieldType(string fieldName) { return (fieldTypes.ContainsKey(fieldName)) ? fieldTypes[fieldName] : null; }
+    public int GetFieldPos(string fieldName) { return fieldNames.IndexOf(fieldName); }
   }
 
   public class ArmadaStructs
@@ -90,6 +91,11 @@ namespace Microsoft.Armada {
     public Type GetStructFieldType(string structName, string fieldName)
     {
       return structs.ContainsKey(structName) ? structs[structName].GetFieldType(fieldName) : null;
+    }
+
+    public int GetStructFieldPos(string structName, string fieldName)
+    {
+      return structs.ContainsKey(structName) ? structs[structName].GetFieldPos(fieldName) : -1;
     }
 
     public Type FlattenType(Type t, string moduleName = null)

@@ -10,11 +10,11 @@ E.dfy
 F.dfy
 EF.dfy
 SharedStructs3.dfy
-X.dfy
-Y.dfy
-XY.dfy
+G.dfy
+H.dfy
+GH.dfy
 SharedStructs4.dfy
 AB/
 CD/
 EF/
-XY/
+GH/

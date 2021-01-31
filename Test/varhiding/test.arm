@@ -95,8 +95,8 @@ proof AB {
     inductive_invariant YNonNegative depends_on YNeverInStoreBuffers
     inductive_invariant YNeverInStoreBuffers @"
       forall tid, entry ::
-        && tid in s.s.threads
-        && entry in s.s.threads[tid].storeBuffer
+        && tid in threads
+        && entry in threads[tid].storeBuffer
         && entry.loc.Armada_StoreBufferLocation_Unaddressable?
         ==> !entry.loc.v.Armada_GlobalStaticVar_y?
     "

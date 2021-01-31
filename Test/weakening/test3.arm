@@ -31,5 +31,5 @@ proof EF {
 
     include_file "ArithmeticFacts.dfy" which_includes "EF/specs.dfy"
     import_module ArithmeticFactsModule which_imports ArmadaModule_specs
-    extra lemma_LiftNext_Update_main_lb "ArithmeticFactsModule.lemma_Equivalence(lps.s.ghosts.x as int);"
+    extra lemma_LiftAtomicPath_From_main_lb_To_main_End "ArithmeticFactsModule.lemma_Equivalence(ls.s.ghosts.x as int);"
 }

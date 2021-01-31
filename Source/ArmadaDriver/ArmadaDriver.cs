@@ -27,6 +27,7 @@ namespace Microsoft.Armada
 
     public static int Main(string[] args)
     {
+      Console.WriteLine("Starting Armada");
       int ret = 0;
       var thread = new System.Threading.Thread(
         new System.Threading.ThreadStart(() =>

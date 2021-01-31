@@ -1,6 +1,6 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs test5structs
+structs SharedStructs5
 {
     struct S1 {
        var a:int32;
@@ -8,7 +8,7 @@ structs test5structs
     }
 }
 
-level test5 using test5structs
+level E using SharedStructs5
 {
     var x: int32;
     var s: S1;

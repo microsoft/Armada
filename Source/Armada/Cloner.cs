@@ -566,7 +566,15 @@ namespace Microsoft.Armada
 
       } else if (stmt is SomehowStmt) {
         var s = (SomehowStmt)stmt;
-        r = new SomehowStmt(Tok(s.Tok), Tok(s.EndTok), s.Awaits.ConvertAll(CloneExpr), s.Req.ConvertAll(CloneExpr), CloneSpecExpr(s.Mod), s.Ens.ConvertAll(CloneExpr));
+        r = new SomehowStmt(Tok(s.Tok), Tok(s.EndTok), s.UndefinedUnless.ConvertAll(CloneExpr), CloneSpecExpr(s.Mod), s.Ens.ConvertAll(CloneExpr));
+
+      } else if (stmt is FenceStmt) {
+        var s = (FenceStmt)stmt;
+        r = new FenceStmt(Tok(s.Tok), Tok(s.EndTok));
+
+      } else if (stmt is GotoStmt) {
+        var s = (GotoStmt)stmt;
+        r = new GotoStmt(Tok(s.Tok), Tok(s.EndTok), s.Target);
 
       } else if (stmt is DeallocStmt) {
         var s = (DeallocStmt)stmt;
@@ -616,7 +624,7 @@ namespace Microsoft.Armada
 
       } else if (stmt is WhileStmt) {
         var s = (WhileStmt)stmt;
-        r = new WhileStmt(Tok(s.Tok), Tok(s.EndTok), CloneExpr(s.Guard), s.Invariants.ConvertAll(CloneMayBeFreeExpr), CloneSpecExpr(s.Decreases), CloneSpecFrameExpr(s.Mod), CloneBlockStmt(s.Body));
+        r = new WhileStmt(Tok(s.Tok), Tok(s.EndTok), CloneExpr(s.Guard), s.Invariants.ConvertAll(CloneMayBeFreeExpr), s.Ens.ConvertAll(CloneExpr), CloneSpecExpr(s.Decreases), CloneSpecFrameExpr(s.Mod), CloneBlockStmt(s.Body));
 
       } else if (stmt is AlternativeLoopStmt) {
         var s = (AlternativeLoopStmt)stmt;
@@ -779,6 +787,7 @@ namespace Microsoft.Armada
       var decreases = CloneSpecExpr(m.Decreases);
       var reads = CloneSpecExpr(m.Reads);
       var awaits = m.Awaits.ConvertAll(CloneExpr);
+      var undefinedUnless = m.UndefinedUnless.ConvertAll(CloneExpr);
 
       var ens = m.Ens.ConvertAll(CloneMayBeFreeExpr);
 
@@ -802,7 +811,7 @@ namespace Microsoft.Armada
           req, mod, ens, decreases, body, CloneAttributes(m.Attributes), null);
       } else {
         return new Method(Tok(m.tok), m.Name, m.HasStaticKeyword, m.IsGhost, tps, ins, m.Outs.ConvertAll(CloneFormal),
-                          req, mod, ens, decreases, reads, awaits, body, CloneAttributes(m.Attributes), null);
+                          req, mod, ens, decreases, reads, awaits, undefinedUnless, body, CloneAttributes(m.Attributes), null);
       }
     }
 

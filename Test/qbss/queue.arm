@@ -3,7 +3,7 @@ include "../../Armada/ArmadaCommonDefinitions.dfy"
 structs SharedStructs {
     struct BSSQueueElement {
         var key:uint64 /*Key*/;
-        var value:uint64 /*Value*/;
+        var value:uint64 /*Value*/;    
     }
 
     struct QbssState {
@@ -17,7 +17,7 @@ structs SharedStructs {
 
     datatype QbssElement = QbssElement(key:uint64, value:uint64)
 
-    datatype QbssLogEntry = EnqueueLogEntry(key:uint64, value:uint64) | DequeueLogEntry(key:uint64, value:uint64)
+    datatype QbssLogEntry = EnqueueLogEntry(key:uint64, value:uint64) | DequeueLogEntry(key:uint64, value:uint64)   
     ghost var log:seq<QbssLogEntry> := [];
 
     refinement_constraint @"
@@ -43,7 +43,7 @@ level QueueBSSNoTSO using SharedStructs {
         if(read_index != modulo) {
             write_index := queue.write_index;
 
-            e := queue.element_array + write_index;
+            e := queue.element_array + write_index; 
             (*e).key ::= k;
             (*e).value ::= v;
             write_index := queue.write_index;
@@ -68,7 +68,7 @@ level QueueBSSNoTSO using SharedStructs {
         write_index := queue.write_index;
         if(read_index != write_index) {
             read_index := queue.read_index;
-            e := queue.element_array + read_index;
+            e := queue.element_array + read_index; 
 
             if(k != null) {
             tmp_int := (*e).key;
@@ -125,7 +125,7 @@ level QueueBSSNoTSO_AbstractQueueIntroduced using SharedStructs {
         if(read_index != modulo) {
             write_index := queue.write_index;
 
-            e := queue.element_array + write_index;
+            e := queue.element_array + write_index; 
             (*e).key ::= k;
             (*e).value ::= v;
             write_index := queue.write_index;
@@ -155,7 +155,7 @@ level QueueBSSNoTSO_AbstractQueueIntroduced using SharedStructs {
         write_index := queue.write_index;
         if(read_index != write_index) {
             read_index := queue.read_index;
-            e := queue.element_array + read_index;
+            e := queue.element_array + read_index; 
 
             if(k != null) {
             tmp_int := (*e).key;
@@ -220,7 +220,7 @@ level QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue using SharedStructs 
         if(read_index != modulo) {
             write_index := queue.write_index;
 
-            e := queue.element_array + write_index;
+            e := queue.element_array + write_index; 
             (*e).key ::= k;
             (*e).value ::= v;
             write_index := queue.write_index;
@@ -246,7 +246,7 @@ level QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue using SharedStructs 
         write_index := queue.write_index;
         if(read_index != write_index) {
             read_index := queue.read_index;
-            e := queue.element_array + read_index;
+            e := queue.element_array + read_index; 
 
             if(k != null) {
             tmp_int := (*e).key;
@@ -319,7 +319,7 @@ level QueueBSSNoTSO_WithAbstractQueue using SharedStructs {
             write_index := queue.write_index;
 
     label e_init:
-            e := queue.element_array + write_index;
+            e := queue.element_array + write_index; 
     label k_update:
             (*e).key ::= k;
     label v_update:
@@ -353,18 +353,18 @@ level QueueBSSNoTSO_WithAbstractQueue using SharedStructs {
     label inside_if_start:
             read_index := queue.read_index;
     label e_init:
-            e := queue.element_array + read_index;
+            e := queue.element_array + read_index; 
 
             if(k != null) {
     label tmp_int_update_key:
             tmp_int := (*e).key;
-    label k_update:
+    label k_update: 
                 *k ::= tmp_int;
             }
             if(v != null) {
     label tmp_int_update_value:
                 tmp_int := (*e).value;
-    label v_update:
+    label v_update: 
                 *v ::= tmp_int;
             }
 
@@ -381,7 +381,7 @@ level QueueBSSNoTSO_WithAbstractQueue using SharedStructs {
 
     method main() {
         noaddr var tid1:uint64 :=0;
-      noaddr var tid2:uint64 :=0;
+        noaddr var tid2:uint64 :=0;
         noaddr var k:ptr<uint64> := null;
         noaddr var v:ptr<uint64> := null;
         noaddr var a:ptr<BSSQueueElement> := null;
@@ -401,9 +401,9 @@ level QueueBSSNoTSO_WithAbstractQueue using SharedStructs {
         queue.element_array ::= a;
     label before_if:
         if (queue.element_array != null && k != null && v != null) {
-    label BeforeEnqueueCreate:
+    label BeforeEnqueueCreate: 
             tid1 ::= create_thread enqueue(*k,*v);
-    label BeforeDequeueCreate:
+    label BeforeDequeueCreate: 
             tid2 ::= create_thread dequeue(k,v);
         }
     }
@@ -433,8 +433,8 @@ level QueueBSSNoTSO_AbstractLogs using SharedStructs {
         read_index := *;
         if(*) {
             write_index := *;
-            assume queue.element_array + write_index == queue.element_array + write_index;
-            e := queue.element_array + write_index;
+            assume queue.element_array + write_index == queue.element_array + write_index; 
+            e := queue.element_array + write_index; 
 
             assume allocated(e);
             (*e).key ::= *;
@@ -463,7 +463,7 @@ level QueueBSSNoTSO_AbstractLogs using SharedStructs {
         if(*) {
             read_index := *;
             assume queue.element_array + read_index == queue.element_array + read_index;
-            e := queue.element_array + read_index;
+            e := queue.element_array + read_index; 
 
             if(k != null) {
                 assume allocated(e);
@@ -511,8 +511,8 @@ level QueueBSSNoTSO_AbstractLogs using SharedStructs {
 }
 
 proof NoTSOUseAbstractQueueForLog {
-  refinement QueueBSSNoTSO_WithAbstractQueue QueueBSSNoTSO_AbstractLogs
-  starweakening
+    refinement QueueBSSNoTSO_WithAbstractQueue QueueBSSNoTSO_AbstractLogs
+    starweakening
 
     include_file "queue_tsobypassing_abstractloginvariant.dfy" which_includes "NoTSOUseAbstractQueueForLog/specs.dfy"
     import_module queue_tsobypassing_abstractloginvariant which_imports ArmadaModule_specs
@@ -520,106 +520,77 @@ proof NoTSOUseAbstractQueueForLog {
     include_file "../../Armada/util/math/mod_auto.i.dfy"
     import_module Math__mod_auto_i
 
-    inductive_invariant WeakeningInvariant @"
-    WeakeningInvariant_ext(s)
-    " depends_on AddressableInvariant
+    inductive_invariant WeakeningInvariant "WeakeningInvariant_ext(s)" depends_on AddressableInvariant
 
     use_address_invariant
 
-    extra lemma_InvariantPredicateImpliedByInit_WeakeningInvariant
-    @"
-    var h := s.s.mem.heap;
-    lemma_NoSetIntersectionImpliesNoCommonElements(h.valid, h.freed);
+    extra lemma_InvariantPredicateImpliedByInit_WeakeningInvariant @"
+      var h := s.s.mem.heap;
+      lemma_NoSetIntersectionImpliesNoCommonElements(h.valid, h.freed);
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_IfTrue_main_before_if
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_main_BeforeDequeueCreate_To_main_End @"
+      assert s'.s.mem == s.s.mem;
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_CreateThread_main_BeforeEnqueueCreate
-    @"
-    assert s'.s.mem == s.s.mem;
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_enqueue_write_index_update_To_enqueue_End @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_CreateThread_main_BeforeDequeueCreate
-    @"
-    assert s'.s.mem == s.s.mem;
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_read_index_update_To_dequeue_End @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_write_index_update
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
-    assert WeakeningInvariant_ext(s');
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_2_T_To_dequeue_inside_if_start @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_read_index_update
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
-    assert WeakeningInvariant_ext(s);
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_e_init_To_dequeue_5 @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_IfTrue_dequeue_2
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_enqueue_k_update_To_enqueue_v_update @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_abs_queue_update
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_enqueue_v_update_To_enqueue_9 @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_e_init
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_k_update_To_dequeue_8 @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_enqueue_End
-    @"
-    assert s.s.threads[step.tid].new_ptrs == {};
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_v_update_To_dequeue_11 @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_dequeue_End
-    @"
-    assert s.s.threads[step.tid].new_ptrs == {};
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_End_to_exit @"
+      lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 
-    extra
-    lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Terminate_main_End
-    @"
-    assert s.s.threads[step.tid].new_ptrs == {};
-    "
-
-    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_k_update
-    @"
-    assert WeakeningInvariant_ext(s');
-    "
-
-    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_dequeue_v_update
-    @"
-    assert WeakeningInvariant_ext(s');
-    "
-
-    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_k_update
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
-    assert WeakeningInvariant_ext(s');
-    "
-
-    extra lemma_InvariantPredicateMaintainedByNext_WeakeningInvariant_Update_enqueue_v_update
-    @"
-    lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
-    assert WeakeningInvariant_ext(s');
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_main_array_calloc_T_To_main_element_array_alloc @"
+      assert forall tid1 :: tid1 in s'.s.threads ==> !s'.s.threads[tid].top.Armada_StackFrame_dequeue?;
+      assert forall tid1 :: tid1 in s'.s.threads ==> !s'.s.threads[tid].top.Armada_StackFrame_enqueue?;
+      assert MemorySafetyElementArrayCustomPointer(s'.s.threads[tid].top.main.a, s'.s.mem);
+      assert WeakeningInvariant_ext(s');
     "
 }
 

@@ -3,8 +3,7 @@ include "UseAbstractQueueForLog/specs.dfy"
 include "SharedStructs.dfy"
 include "auxiliary_helper.dfy"
 include "queue_abstractloginvariant.dfy"
-// include "../../Armada/util/math/mod_auto.i.dfy"
-include "mod_auto_cheat.dfy"
+include "../../Armada/util/math/mod_auto.i.dfy"
 
 
   module tau_invariant_helper {

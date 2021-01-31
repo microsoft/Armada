@@ -4,9 +4,6 @@ include "../../Armada/option.s.dfy"
 
 // replace the serciver implementaion with somehow.
 level simplify_level {
-    import opened ArmadaCommonDefinitions
-	import opened util_option_s
-
     type Tid = uint64
     
     // the data structure for disk schedule requests.

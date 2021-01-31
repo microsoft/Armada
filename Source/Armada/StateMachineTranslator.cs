@@ -48,13 +48,49 @@ namespace Microsoft.Armada {
       return name + "Local";
     }
 
+    public bool CheckForConcreteStructType(Type t, ArmadaStructs structs)
+    {
+      if (AH.IsPrimitiveType(t)) {
+        return true;
+      }
+      if (t is UserDefinedType u) {
+        return structs.DoesStructExist(u.Name);
+      }
+      if (t is SizedArrayType sat) {
+        return CheckForConcreteStructType(sat.Range, structs);
+      }
+      return false;
+    }
+
+    public bool CheckForConcreteStructDefinition(ArmadaStruct s, ArmadaStructs structs)
+    {
+      foreach (var fieldName in s.FieldNames) {
+        var t = s.GetFieldType(fieldName);
+        if (!CheckForConcreteStructType(t, structs)) {
+          AH.PrintError(prog, $"Struct {s.Name} has a field {fieldName} of type {t}, which is neither a primitive type nor a struct type.");
+          return false;
+        }
+      }
+      return true;
+    }
+
+    public bool CheckForConcreteStructDefinitions(ArmadaStructs structs)
+    {
+      foreach (var structName in structs.StructNames) {
+        var s = structs.GetStruct(structName);
+        if (!CheckForConcreteStructDefinition(s, structs)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     public bool CheckForCyclicStructDefinition(ArmadaStruct outer, ArmadaStruct inner, ArmadaStructs structs) {
       foreach (var fieldName in inner.FieldNames) {
         var t = inner.GetFieldType(fieldName);
-        if (t is UserDefinedType) {
-          var u = (UserDefinedType)t;
+        if (t is UserDefinedType u) {
           if (u.Name == outer.Name) {
-            AH.PrintError(prog, $"Class {outer.Name} has a cyclic dependency on itself, specifically in field {fieldName} of component {inner.Name}");
+            AH.PrintError(prog, $"Struct {outer.Name} has a cyclic dependency on itself, specifically in field {fieldName} of component {inner.Name}");
             return false;
           }
           else if (structs.DoesStructExist(u.Name)) {
@@ -73,51 +109,6 @@ namespace Microsoft.Armada {
         }
       }
       return true;
-    }
-
-    public string GetObjectTypeAsString(ModuleDefinition m, Type t, ArmadaStructs structs)
-    {
-      t = t.NormalizeExpand(true);
-      if (t is UserDefinedType) {
-        var ut = (UserDefinedType)t;
-        if (structs.DoesStructExist(ut.Name)) {
-          return $"Armada_ObjectType_struct(Armada_StructType_{ut.Name})";
-        }
-        return $"Armada_ObjectType_primitive(Armada_PrimitiveType_{ut.Name})";
-      }
-      else if (t is SizedArrayType) {
-        var ssa = (SizedArrayType)t;
-        var subtype = GetObjectTypeAsString(m, ssa.Range, structs);
-        var ssaSize = (LiteralExpr)ssa.Size;
-        return $"Armada_ObjectType_array({subtype}, {ssaSize.Value})";
-      }
-      else if (t is PointerType) {
-        var ty = AH.GetConcretePointerTypeName();
-        return $"Armada_ObjectType_primitive(Armada_PrimitiveType_{ty})";
-      }
-
-      return null;
-    }
-
-    public void GenerateStructDatatypes(ModuleDefinition m, ArmadaStructs structs, List<TopLevelDecl> newTopLevelDecls,
-                                        List<string> structTypes, List<string> structFieldTypes)
-    {
-      foreach (var structName in structs.StructNames) {
-        var s = structs.GetStruct(structName);
-        List<Formal> structFields = new List<Formal>();
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          var formal = AH.MakeFormal(fieldName, structs.FlattenType(fieldType));
-          structFields.Add(formal);
-          structFieldTypes.Add("Armada_FieldType_" + structName + "'" + fieldName);
-        }
-        var dtName = "Armada_Struct_" + structName;
-        var dtDecl = AH.MakeDatatypeDecl(m, dtName, new List<DatatypeCtor> { AH.MakeDatatypeCtor(dtName, structFields) });
-        newTopLevelDecls.Add(dtDecl);
-
-        var structType = "Armada_StructType_" + structName;
-        structTypes.Add(structType);
-      }
     }
 
     public void RemoveAllMethods(ModuleDefinition m)
@@ -151,18 +142,16 @@ namespace Microsoft.Armada {
       }
     }
 
-    public DatatypeCtor CreateMethodStackFrame(string methodName, ArmadaSymbolTable symbols)
+    public void CreateMethodStackFrame(string methodName, ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       var smst = symbols.GetMethodSymbolTable(methodName);
-      var stackFormals = new List<Formal>();
-      foreach (var v in smst.AllVariablesInOrder) {
-        stackFormals.Add(AH.MakeFormal($"{methodName}'{v.FieldName}", v.GetFlattenedType(symbols)));
-      }
-
-      return AH.MakeDatatypeCtor($"Armada_StackFrame_{methodName}", stackFormals);
+      var varFormals = smst.AllVariablesInOrder.Select(v => $"{v.FieldName}: {v.GetFlattenedType(symbols).ToString()}");
+      declCollector.AddItem($@"
+        datatype Armada_StackVars_{methodName} = Armada_StackVars_{methodName}({AH.CombineStringsWithCommas(varFormals)})
+      ");
     }
 
-    public void ParseMethodWithBody(Program prog, MethodInfo methodInfo, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void ParseMethodWithBody(Program prog, MethodInfo methodInfo, ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       var method = methodInfo.method;
 
@@ -175,7 +164,7 @@ namespace Microsoft.Armada {
     }
 
     public void CreateNextRoutinesForMethodWithNoBodyPart1(ArmadaSymbolTable symbols, MethodInfo methodInfo,
-                                                           List<MemberDecl> newDefaultClassDecls, ArmadaPC startPC, ArmadaPC midPC)
+                                                           DeclCollector declCollector, ArmadaPC startPC, ArmadaPC midPC)
     {
       //
       // The first next routine to generate is...
@@ -184,8 +173,8 @@ namespace Microsoft.Armada {
       //
 
       var method = methodInfo.method;
-      var next = new NextRoutine(prog, symbols, NextType.ExternStart, methodInfo, null, null, startPC, midPC);
-      method.externStartNextRoutine = next;
+      var next = new NextRoutineConstructor(prog, symbols, NextType.ExternStart, methodInfo, null, null, startPC, midPC);
+      method.externStartNextRoutineConstructor = next;
       var read_context = new NormalResolutionContext(next, symbols);
       List<FrameExpression> modifies = method.Mod.Expressions ?? new List<FrameExpression>();
       List<Expression> reads = method.Reads.Expressions ?? new List<Expression>();
@@ -198,17 +187,17 @@ namespace Microsoft.Armada {
           return;
         }
         var await_clause_resolved = read_context.ResolveAsRValue(await_clause);
-        next.AddConjunct(await_clause_resolved.UndefinedBehaviorAvoidance);
-        next.AddConjunct(await_clause_resolved.Val);
+        next.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(await_clause_resolved.UndefinedBehaviorAvoidance);
+        next.AddDefinedBehaviorConjunct(await_clause_resolved.Val);
       }
 
-      // Add each requires clause as an undefined-behavior constraint, to model that the
-      // method's behavior is undefined if its requirements aren't met at the outset.
+      // Add each undefined_unless clause as an undefined-behavior constraint, to model that the
+      // method's behavior is undefined if its undefined_unless constraints aren't met at the outset.
 
-      foreach (var requires_clause in method.Req) {
-        var r = read_context.ResolveAsRValue(requires_clause.E);
-        next.AddUndefinedBehaviorAvoidanceConstraint(r.UndefinedBehaviorAvoidance);
-        next.AddUndefinedBehaviorAvoidanceConstraint(r.Val);
+      foreach (var undefined_unless_clause in method.UndefinedUnless) {
+        var uuc = read_context.ResolveAsRValue(undefined_unless_clause);
+        next.AddUndefinedBehaviorAvoidanceConstraint(uuc.UndefinedBehaviorAvoidance);
+        next.AddUndefinedBehaviorAvoidanceConstraint(uuc.Val);
       }
 
       // Compute each s{i+1} by updating a single modifies element in s{i}.
@@ -217,9 +206,8 @@ namespace Microsoft.Armada {
       for (int i = 0; i < modifies.Count; ++i) {
         var lhs = modifies.ElementAt(i).E;
 
-        var nextFormal = new NextFormal($"newval{i}_{startPC}", $"newval{i}", lhs.Type);
-        next.AddFormal(nextFormal);
-        var newRhs = AH.MakeNameSegment($"newval{i}", lhs.Type);
+        var nextFormal = new NextFormal($"newval{i}_{startPC}", $"newval{i}", lhs.Type, symbols);
+        var newRhs = next.AddFormal(nextFormal);
 
         //
         // It's important that we model the external method as
@@ -241,49 +229,51 @@ namespace Microsoft.Armada {
         next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
         s_current = Attributes.Contains(method.Mod.Attributes, "tso") ?
-          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs) :
+          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs, startPC) :
           newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, newRhs);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
       if (reads.Count > 0) {
-        // s_current := Armada_UpdateTSFrame(s_current, tid, s_current.threads[tid].top.(Armada_Extern0 := ..., Armada_Extern1 := ...})
+        // s_current := Armada_UpdateTSFrame(
+        //    s_current, tid,
+        //    Armada_StackFrame_{method.Name}(s_current.threads[tid].top.{method.Name}.(Armada_Extern0 := ..., Armada_Extern1 := ...))
+        // );
 
-        var locv_current = AH.MakeApply2("Armada_GetThreadLocalView", s_current, next.tid, "Armada_SharedMemory");
-        locv_current = next.AddVariableDeclaration("locv", locv_current);
-        var ghosts_current = AH.MakeExprDotName(s_current, "ghosts", "Armada_Ghosts");
+        var locv_current = next.AddVariableDeclaration("locv", $"Armada_GetThreadLocalView({s_current}, {next.tid})");
         // The top stack frame hasn't changed since the beginning, since nothing we modify is on the stack
         var top = read_context.GetRValueTopStackFrame();
-        var top_correct_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{method.Name}?", new BoolType());
-        next.AddUndefinedBehaviorAvoidanceConstraint(top_correct_type);
-        var current_context = new CustomResolutionContext(s_current, s_current, locv_current, top, ghosts_current,
+        next.AddUndefinedBehaviorAvoidanceConstraint($"({top}).Armada_StackFrame_{method.Name}?");
+        var current_context = new CustomResolutionContext(s_current, s_current, locv_current, top, $"{s_current}.ghosts",
                                                           next.tid, method.Name, symbols, next);
-        var updates = new List<Tuple<IToken, string, Expression>>();
 
+        var updates = new List<string>();
         for (int i = 0; i < reads.Count; ++i) {
           var read_expr = reads.ElementAt(i);
           var read_val = current_context.ResolveAsRValue(read_expr);
           next.AddUndefinedBehaviorAvoidanceConstraint(read_val.UndefinedBehaviorAvoidance);
-          updates.Add(Tuple.Create(read_expr.tok, $"{method.Name}'Armada_Extern{i}", read_val.Val));
+          updates.Add($"Armada_Extern{i} := {read_val.Val}");
         }
 
-        var top_post_snapshot = AH.SetExprType(new DatatypeUpdateExpr(Token.NoToken, top, updates), "Armada_StackFrame");
-        s_current = AH.MakeApply3("Armada_UpdateTSFrame", s_current, next.tid, top_post_snapshot, "Armada_TotalState");
+        var top_vars = $"({top}).{method.Name}";
+        if (updates.Any()) {
+          top_vars += ".(" + String.Join(", ", updates) + ")";
+        }
+        s_current = $"Armada_UpdateTSFrame({s_current}, {next.tid}, Armada_StackFrame_{method.Name}({top_vars}))";
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
       // s_current := Armada_UpdatePC(s_current, tid, midPC);
 
-      var newPC = AH.MakeNameSegment(midPC.ToString(), "Armada_PC");
-      s_current = AH.MakeApply3("Armada_UpdatePC", s_current, next.tid, newPC, "Armada_TotalState");
+      s_current = $"Armada_UpdatePC({s_current}, {next.tid}, {midPC})";
       s_current = next.AddVariableDeclaration("s", s_current);
 
       next.SetNextState(s_current);
-      symbols.AddNextRoutine(next);
+      symbols.AddNextRoutineConstructor(next);
     }
 
     public void CreateNextRoutinesForMethodWithNoBodyPart2(ArmadaSymbolTable symbols, MethodInfo methodInfo,
-                                                           List<MemberDecl> newDefaultClassDecls, ArmadaPC midPC)
+                                                           DeclCollector declCollector, ArmadaPC midPC)
     {
       //
       // The second next routine to generate is...
@@ -292,8 +282,8 @@ namespace Microsoft.Armada {
       //                    Armada_Extern local variables
 
       var method = methodInfo.method;
-      var next = new NextRoutine(prog, symbols, NextType.ExternContinue, methodInfo, null, null, midPC, midPC);
-      method.externContinueNextRoutine = next;
+      var next = new NextRoutineConstructor(prog, symbols, NextType.ExternContinue, methodInfo, null, null, midPC, midPC);
+      method.externContinueNextRoutineConstructor = next;
       var read_context = new NormalResolutionContext(next, symbols);
       List<FrameExpression> modifies = method.Mod.Expressions ?? new List<FrameExpression>();
       List<Expression> reads = method.Reads.Expressions ?? new List<Expression>();
@@ -301,17 +291,13 @@ namespace Microsoft.Armada {
       // Crash if, for any element in the read set, the current value of that element doesn't
       // match the corresponding element of the latest snapshot.
 
-      var top = AH.MakeExprDotName(next.t, "top", "Armada_StackFrame");
-      var top_correct_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{method.Name}?", new BoolType());
-      next.AddUndefinedBehaviorAvoidanceConstraint(top_correct_type);
+      next.AddUndefinedBehaviorAvoidanceConstraint($"({next.t}).top.Armada_StackFrame_{method.Name}?");
 
       for (int i = 0; i < reads.Count; ++i) {
         var read_expr = reads.ElementAt(i);
         var current_val = read_context.ResolveAsRValue(read_expr);
         next.AddUndefinedBehaviorAvoidanceConstraint(current_val.UndefinedBehaviorAvoidance);
-        var snapshot_val = AH.MakeExprDotName(top, $"{method.Name}'Armada_Extern{i}", read_expr.Type);
-        var read_expr_unchanged = AH.MakeEqExpr(current_val.Val, snapshot_val);
-        next.AddUndefinedBehaviorAvoidanceConstraint(read_expr_unchanged);
+        next.AddUndefinedBehaviorAvoidanceConstraint($"({current_val.Val}) == ({next.t}).top.{method.Name}.Armada_Extern{i}");
       }
 
       // Compute each s{i+1} by updating a single modifies element in s{i}.
@@ -320,9 +306,8 @@ namespace Microsoft.Armada {
       for (int i = 0; i < modifies.Count; ++i) {
         var lhs = modifies.ElementAt(i).E;
 
-        var nextFormal = new NextFormal($"newval{i}_{midPC}", $"newval{i}", lhs.Type);
-        next.AddFormal(nextFormal);
-        var newRhs = AH.MakeNameSegment($"newval{i}", lhs.Type);
+        var nextFormal = new NextFormal($"newval{i}_{midPC}", $"newval{i}", lhs.Type, symbols);
+        var newRhs = next.AddFormal(nextFormal);
 
         //
         // It's important that we model the external method as
@@ -344,42 +329,45 @@ namespace Microsoft.Armada {
         next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
         s_current = Attributes.Contains(method.Mod.Attributes, "tso") ?
-          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs) :
+          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs, midPC) :
           newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, newRhs);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
       if (reads.Count > 0) {
-        // s_current := Armada_UpdateTSFrame(s_current, tid, s_current.threads[tid].top.(Armada_Extern0 := ..., Armada_Extern1 := ...})
+        // s_current := Armada_UpdateTSFrame(
+        //    s_current, tid,
+        //    Armada_StackFrame_{method.Name}(s_current.threads[tid].top.{method.Name}.(Armada_Extern0 := ..., Armada_Extern1 := ...))
+        // );
 
-        var locv_current = AH.MakeApply2("Armada_GetThreadLocalView", s_current, next.tid, "Armada_SharedMemory");
-        locv_current = next.AddVariableDeclaration("locv", locv_current);
-        var ghosts_current = AH.MakeExprDotName(s_current, "ghosts", "Armada_Ghosts");
-        var threads_current = AH.MakeExprDotName(s_current, "threads", AH.MakeThreadsType());
-        var thread_current = AH.MakeSeqSelectExpr(threads_current, next.tid, "Armada_Thread");
-        var top_current = AH.MakeExprDotName(thread_current, "top", "Armada_StackFrame");
+        var locv_current = next.AddVariableDeclaration("locv", $"Armada_GetThreadLocalView({s_current}, {next.tid})");
+        var ghosts_current = $"{s_current}.ghosts";
+        var top_current = $"{s_current}.threads[{next.tid}].top";
         var current_context = new CustomResolutionContext(s_current, s_current, locv_current, top_current, ghosts_current,
                                                           next.tid, method.Name, symbols, next);
-        var updates = new List<Tuple<IToken, string, Expression>>();
 
+        var updates = new List<string>();
         for (int i = 0; i < reads.Count; ++i) {
           var read_expr = reads.ElementAt(i);
           var read_val = current_context.ResolveAsRValue(read_expr);
           next.AddUndefinedBehaviorAvoidanceConstraint(read_val.UndefinedBehaviorAvoidance);
-          updates.Add(Tuple.Create(read_expr.tok, $"{method.Name}'Armada_Extern{i}", read_val.Val));
+          updates.Add($"Armada_Extern{i} := {read_val.Val}");
         }
 
-        var top_post_snapshot = AH.SetExprType(new DatatypeUpdateExpr(Token.NoToken, top_current, updates), "Armada_StackFrame");
-        s_current = AH.MakeApply3("Armada_UpdateTSFrame", s_current, next.tid, top_post_snapshot, "Armada_TotalState");
+        var top_vars = $"({next.t}).top.{method.Name}";
+        if (updates.Any()) {
+          top_vars += ".(" + String.Join(", ", updates) + ")";
+        }
+        s_current = $"Armada_UpdateTSFrame({s_current}, {next.tid}, Armada_StackFrame_{method.Name}({top_vars}))";
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
       next.SetNextState(s_current);
-      symbols.AddNextRoutine(next);
+      symbols.AddNextRoutineConstructor(next);
     }
 
     public void CreateNextRoutinesForMethodWithNoBodyPart3(ArmadaSymbolTable symbols, MethodInfo methodInfo,
-                                                           List<MemberDecl> newDefaultClassDecls, ArmadaPC midPC, ArmadaPC endPC)
+                                                           DeclCollector declCollector, ArmadaPC midPC, ArmadaPC endPC)
     {
       //
       // The third next routine to generate is...
@@ -387,29 +375,28 @@ namespace Microsoft.Armada {
       //
 
       var method = methodInfo.method;
-      var next = new NextRoutine(prog, symbols, NextType.ExternEnd, methodInfo, null, null, midPC, endPC);
-      method.externEndNextRoutine = next;
+      var next = new NextRoutineConstructor(prog, symbols, NextType.ExternEnd, methodInfo, null, null, midPC, endPC);
+      method.externEndNextRoutineConstructor = next;
       var read_context = new BodylessMethodPostconditionResolutionContext(next, symbols);
 
       foreach (var ensure_raw in method.Ens) {
         var ensure_resolved = read_context.ResolveAsRValue(ensure_raw.E);
-        next.AddConjunct(ensure_resolved.UndefinedBehaviorAvoidance);
-        next.AddConjunct(ensure_resolved.Val);
+        next.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(ensure_resolved.UndefinedBehaviorAvoidance);
+        next.AddDefinedBehaviorConjunct(ensure_resolved.Val);
       }
 
       var s_current = next.s;
 
       // s_current := Armada_UpdatePC(s_current, tid, endPC);
 
-      var newPC = AH.MakeNameSegment(endPC.ToString(), "Armada_PC");
-      s_current = AH.MakeApply3("Armada_UpdatePC", s_current, next.tid, newPC, "Armada_TotalState");
+      s_current = $"Armada_UpdatePC({s_current}, {next.tid}, {endPC})";
       s_current = next.AddVariableDeclaration("s", s_current);
 
       next.SetNextState(s_current);
-      symbols.AddNextRoutine(next);
+      symbols.AddNextRoutineConstructor(next);
     }
 
-    public void ParseMethodWithNoBody(Program prog, MethodInfo methodInfo, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void ParseMethodWithNoBody(Program prog, MethodInfo methodInfo, ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       var method = methodInfo.method;
       if (!Attributes.Contains(method.Attributes, "extern")) {
@@ -438,13 +425,13 @@ namespace Microsoft.Armada {
       symbols.AssociateLabelWithPC("Middle", midPC);
       symbols.AssociateLabelWithPC("End", endPC);
 
-      // Create the can-return-from predicate.
+      // Set the return PC.
 
-      methodInfo.AddReturnPC(endPC);
+      methodInfo.SetReturnPC(endPC);
     }
 
     public void CreateNextRoutinesForMethodWithNoBody(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo,
-                                                      List<MemberDecl> newDefaultClassDecls)
+                                                      DeclCollector declCollector)
     {
       var methodName = methodInfo.method.Name;
       var startPC = new ArmadaPC(symbols, methodName, 0);
@@ -453,77 +440,65 @@ namespace Microsoft.Armada {
 
       // Generate the next routines for the three transitions.
 
-      CreateNextRoutinesForMethodWithNoBodyPart1(symbols, methodInfo, newDefaultClassDecls, startPC, midPC);
-      CreateNextRoutinesForMethodWithNoBodyPart2(symbols, methodInfo, newDefaultClassDecls, midPC);
-      CreateNextRoutinesForMethodWithNoBodyPart3(symbols, methodInfo, newDefaultClassDecls, midPC, endPC);
+      CreateNextRoutinesForMethodWithNoBodyPart1(symbols, methodInfo, declCollector, startPC, midPC);
+      CreateNextRoutinesForMethodWithNoBodyPart2(symbols, methodInfo, declCollector, midPC);
+      CreateNextRoutinesForMethodWithNoBodyPart3(symbols, methodInfo, declCollector, midPC, endPC);
     }
 
     public void CreateNextTerminateThread(ArmadaSymbolTable symbols, MethodInfo methodInfo)
     {
-      foreach (var returnPC in methodInfo.ReturnPCs) {
-        var next = new NextRoutine(prog, symbols, NextType.Terminate, methodInfo, null, null, returnPC, null);
-        methodInfo.method.terminateNextRoutine = next;
+      var returnPC = methodInfo.ReturnPC;
+      var terminatingProcess = methodInfo.method.Name.Equals("main");
+      var next = new NextRoutineConstructor(prog, symbols, terminatingProcess ? NextType.TerminateProcess : NextType.TerminateThread,
+                                            methodInfo, null, null, returnPC, null);
+      methodInfo.method.terminateNextRoutineConstructor = next;
 
-        // |t.stack| == 0
+      var s = $"({next.s})";
+      var t = $"({next.t})";
 
-        var stack = AH.MakeExprDotName(next.t, "stack", AH.MakeStackType());
-        var stack_size = AH.MakeCardinalityExpr(stack);
-        var stack_empty = AH.MakeEqExpr(stack_size, AH.MakeZero());
-        next.AddConjunct(stack_empty);
+      // |t.stack| == 0
 
-        // The thread's store buffer contents should be flushed before termination, i.e.,
-        // |t.storeBuffers| == 0
+      next.AddConjunct($"|{t}.stack| == 0");
 
-        var store_buffer = AH.MakeExprDotName(next.t, "storeBuffer", AH.MakeStoreBufferType());
-        var store_buffer_size = AH.MakeCardinalityExpr(store_buffer);
-        var store_buffer_empty = AH.MakeEqExpr(store_buffer_size, AH.MakeZero());
-        next.AddConjunct(store_buffer_empty);
+      // The thread's store buffer contents should be flushed before termination, i.e.,
+      // |t.storeBuffer| == 0
 
-        // s_current := s.(threads := (map other | other in s.threads && other != tid :: s.threads[other]))
+      next.AddConjunct($"|{t}.storeBuffer| == 0");
 
-        var other = AH.MakeNameSegment("other", "Armada_ThreadHandle");
-        var threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-        var other_in_threads = AH.MakeInExpr(other, threads);
-        var other_neq_tid = AH.MakeNeqExpr(other, next.tid);
-        var other_in_threads_and_neq_tid = AH.MakeAndExpr(other_in_threads, other_neq_tid);
-        var other_thread = AH.MakeSeqSelectExpr(threads, other, "Armada_Thread");
-        var bvars = new List<BoundVar> { AH.MakeBoundVar("other", "Armada_ThreadHandle") };
-        var new_threads = AH.MakeMapComprehension(bvars, other_in_threads_and_neq_tid, other_thread);
-        var s_current = AH.MakeDatatypeUpdateExpr(next.s, "threads", new_threads);
+      // s_current := s.(threads := (map other | other in s.threads && other != tid :: s.threads[other]),
+      //                 joinable_tids := s.joinable_tids + {tid})
+
+      var s_current = $@"
+        {s}.(threads := (map other | other in {s}.threads && other != {next.tid} :: {s}.threads[other]),
+                         joinable_tids := {s}.joinable_tids + {{ {next.tid} }})
+      ";
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // Now, we need to free the new_ptrs.  In Dafny, if we denote s_current by s, that's:
+      //
+      // s := s.(mem := s.mem.(heap := s.mem.heap.(valid := s.mem.heap.valid - t.new_ptrs,
+      //                                           freed := s.mem.heap.freed + t.new_ptrs)))
+
+      s = s_current;
+      s_current = $@"
+        {s}.(mem := {s}.mem.(heap := {s}.mem.heap.(valid := {s}.mem.heap.valid - {t}.new_ptrs,
+                                                   freed := {s}.mem.heap.freed + {t}.new_ptrs)))
+      ";
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // Finally, we need to set the stop_reason to Armada_StopReasonTerminated if the terminated
+      // thread was the main thread.
+
+      if (terminatingProcess) {
+        s_current = $"{s_current}.(stop_reason := Armada_StopReasonTerminated)";
         s_current = next.AddVariableDeclaration("s", s_current);
-
-        // Now, we need to free the new_ptrs.  In Dafny, if we denote s_current by s, that's:
-        //
-        // s := s.(mem := s.mem.(heap := s.mem.heap :=
-        //         s.mem.heap.(valid := s.mem.heap.valid - t.new_ptrs,
-        //                     freed := s.mem.heap.freed + t.new_ptrs))))
-
-        var mem = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-        var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-        var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-        var freed = AH.MakeExprDotName(h, "freed", AH.MakePointerSetType());
-        var new_ptrs = AH.MakeExprDotName(next.t, "new_ptrs", AH.MakePointerSetType());
-        var valid_new = AH.MakeSubExpr(valid, new_ptrs);
-        var freed_new = AH.MakeAddExpr(freed, new_ptrs);
-        var h_new = AH.MakeDatatypeUpdate2Expr(h, "valid", valid_new, "freed", freed_new);
-        var mem_new = AH.MakeDatatypeUpdateExpr(mem, "heap", h_new);
-        s_current = AH.MakeDatatypeUpdateExpr(s_current, "mem", mem_new);
-        s_current = next.AddVariableDeclaration("s", s_current);
-
-        // Finally, we need to set the stop_reason to Armada_StopReasonTerminated if the terminated
-        // thread was the main thread.
-        if (methodInfo.method.Name.Equals("main")) {
-          s_current =
-            AH.MakeDatatypeUpdateExpr(s_current, "stop_reason", AH.MakeNameSegment("Armada_StopReasonTerminated", "Armada_StopReason"));
-          s_current = next.AddVariableDeclaration("s", s_current);
-        }
-
-        next.SetNextState(s_current);
-        symbols.AddNextRoutine(next);
       }
+
+      next.SetNextState(s_current);
+      symbols.AddNextRoutineConstructor(next);
     }
 
-    public void ProcessMethods(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls, List<TopLevelDecl> newTopLevelDecls)
+    public void ProcessMethods(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       bool mainFound = false;
 
@@ -539,13 +514,18 @@ namespace Microsoft.Armada {
           mainFound = true;
         }
         if (method.Body is null) {
-          ParseMethodWithNoBody(prog, methodInfo, symbols, newDefaultClassDecls);
+          ParseMethodWithNoBody(prog, methodInfo, symbols, declCollector);
         }
         else {
-          ParseMethodWithBody(prog, methodInfo, symbols, newDefaultClassDecls);
+          ParseMethodWithBody(prog, methodInfo, symbols, declCollector);
         }
         if (Attributes.Contains(method.Attributes, "atomic")) {
-          methodInfo.UseAtomicCallsAndReturns();
+          if (method.Name == "main") {
+            AH.PrintWarning(prog, "Ignoring :atomic on main, since main can't use atomic calls and returns");
+          }
+          else {
+            methodInfo.UseAtomicCallsAndReturns();
+          }
         }
       }
 
@@ -559,10 +539,10 @@ namespace Microsoft.Armada {
         var methodInfo = symbols.AllMethods.LookupMethod(methodName);
         var method = methodInfo.method;
         if (method.Body is null) {
-          CreateNextRoutinesForMethodWithNoBody(prog, symbols, methodInfo, newDefaultClassDecls);
+          CreateNextRoutinesForMethodWithNoBody(prog, symbols, methodInfo, declCollector);
         }
         else {
-          methodInfo.ParsedBody.GenerateNextRoutines(prog, symbols, methodInfo);
+          methodInfo.ParsedBody.GenerateNextRoutines();
         }
       }
 
@@ -572,201 +552,169 @@ namespace Microsoft.Armada {
       }
     }
 
-    public void CreateApplyTauUnaddressableFunction(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    private string GetStructFieldUpdate(Type innerType, int numArrayDimensions, string currentValue, int currentField)
     {
-      var globals = AH.MakeNameSegment("globals", "Armada_Globals");
-      var v = AH.MakeNameSegment("v", "Armada_GlobalStaticVar");
-      var fields = AH.MakeNameSegment("fields", AH.MakeSeqType("Armada_Field"));
-      var value = AH.MakeNameSegment("value", "Armada_PrimitiveValue");
+      if (numArrayDimensions == 0) {
+        if (AH.IsPrimitiveType(innerType)) {
+          return $"value.n_{innerType}";
+        }
+        else if (innerType is UserDefinedType ut) {
+          return $"Armada_UpdateStruct_{ut.Name}({currentValue}, fields[{currentField}..], value)";
+        }
+        else {
+          AH.PrintError(prog, $"Invalid type {innerType}");
+          return currentValue;
+        }
+      }
+      else {
+        var subfieldUpdate = GetStructFieldUpdate(innerType, numArrayDimensions - 1,
+                                                  $"{currentValue}[fields[{currentField}]]", currentField + 1);
+        return $"{currentValue}[fields[{currentField}] := {subfieldUpdate}]";
+      }
+    }
 
-      var cases = new List<MatchCaseExpr>();
+    private string GetGlobalsUpdateConstraints(Type innerType, int numArrayDimensions, string value)
+    {
+      var constraints = new List<string>();
+      if (AH.IsPrimitiveType(innerType)) {
+        constraints.Add($"|fields| == {numArrayDimensions}");
+      }
+      else {
+        constraints.Add($"|fields| >= {numArrayDimensions}");
+      }
+      for (int i = 0; i < numArrayDimensions; ++i) {
+        constraints.Add($"0 <= fields[{i}] < |{value}|");
+        value += $"[fields[{i}]]";
+      }
+      if (AH.IsPrimitiveType(innerType)) {
+        constraints.Add($"value.Armada_PrimitiveValue_{innerType}?");
+      }
+      return AH.CombineStringsWithAnd(constraints);
+    }
+
+    public void CreateApplyTauUnaddressableFunction(ArmadaSymbolTable symbols, DeclCollector declCollector)
+    {
+      var caseBodies = "";
 
       foreach (var varName in symbols.Globals.VariableNames) {
         var gv = symbols.Globals.Lookup(varName);
         if (gv is GlobalUnaddressableArmadaVariable) {
-          var cur_value = AH.MakeExprDotName(globals, varName, gv.ty);
-          var updated_value = AH.GetInvocationOfPerformFieldUpdate(cur_value, fields, value);
-          var updated_globals = AH.MakeDatatypeUpdateExpr(globals, varName, updated_value);
-          cases.Add(AH.MakeMatchCaseExpr($"Armada_GlobalStaticVar_{varName}", updated_globals));
+          Type innerType;
+          var numArrayDimensions = AH.GetNumArrayDimensions(gv.ty, out innerType);
+          var globalsDotVarName = $"globals.{varName}";
+          caseBodies += $@"
+            case Armada_GlobalStaticVar_{varName} =>
+              if {GetGlobalsUpdateConstraints(innerType, numArrayDimensions, globalsDotVarName)} then
+                globals.({varName} := {GetStructFieldUpdate(innerType, numArrayDimensions, globalsDotVarName, 0)})
+              else
+                globals
+          ";
         }
       }
 
-      cases.Add(AH.MakeMatchCaseExpr("Armada_GlobalStaticVarNone", globals));
-      var body = AH.MakeMatchExpr(v, cases, "Armada_Globals");
-      var fn = AH.MakeFunction("Armada_ApplyTauUnaddressable",
-                               new List<Formal> {
-                                 AH.MakeFormal("globals", "Armada_Globals"),
-                                 AH.MakeFormal("v", "Armada_GlobalStaticVar"),
-                                 AH.MakeFormal("fields", AH.MakeSeqType("Armada_Field")),
-                                 AH.MakeFormal("value", "Armada_PrimitiveValue")
-                               },
-                               body);
-      newDefaultClassDecls.Add(fn);
+      caseBodies += "case Armada_GlobalStaticVarNone => globals\n";
+      declCollector.AddItem($@"
+        function Armada_ApplyTauUnaddressable(globals: Armada_Globals, v: Armada_GlobalStaticVar, fields: seq<int>,
+                                              value: Armada_PrimitiveValue) : Armada_Globals
+        {{
+          match v
+            {caseBodies}
+        }}
+      ");
     }
 
-    public Expression GetUpdatedHeapAfterTau(Expression h, Expression p, Expression value)
+    public void CreateApplyTauAddressableFunction(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      // if && p in h.valid
-      //    && p in h.tree
-      //    && p in h.values
-      //    && h.tree[p].ty.Armada_ObjectType_primitive?
-      //    && Armada_PrimitiveValueMatchesType(value, h.tree[p].ty.pty)
-      // then
-      //   h.(values := Armada_UpdateHeapValues(h.values, p, value)))
-      // else
-      //   h
-
-      var conditions = new List<Expression>();
-      var valid_set = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid = AH.MakeInExpr(p, valid_set);
-      conditions.Add(valid);
-
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      var in_tree = AH.MakeInExpr(p, tree);
-      conditions.Add(in_tree);
-
-      var node = AH.MakeSeqSelectExpr(tree, p, "Armada_Node");
-      var ty = AH.MakeExprDotName(node, "ty", "Armada_ObjectType");
-      var is_primitive = AH.MakeExprDotName(ty, "Armada_ObjectType_primitive?", new BoolType());
-      conditions.Add(is_primitive);
-
-      var pty = AH.MakeExprDotName(ty, "pty", "Armada_PrimitiveType");
-      var matches_type = AH.MakeApply2("Armada_PrimitiveValueMatchesType", value, pty, new BoolType());
-      conditions.Add(matches_type);
-
-      var values = AH.MakeExprDotName(h, "values", AH.MakeValuesType());
-      var values_updated = AH.MakeApply3("Armada_UpdateHeapValues", values, p, value, AH.MakeValuesType());
-      var h_updated = AH.MakeDatatypeUpdateExpr(h, "values", values_updated);
-
-      var body = AH.MakeIfExpr(AH.CombineExpressionsWithAnd(conditions), h_updated, h);
-      return body;
+      declCollector.AddItem(@"
+        function Armada_ApplyTauAddressable(h: Armada_Heap, p: Armada_Pointer, value: Armada_PrimitiveValue) : (h': Armada_Heap)
+          ensures Armada_HeapMetadataUnchangedByTau(h, h')
+        {
+          if && p in h.valid
+             && p in h.tree
+             && p in h.values
+             && h.tree[p].ty.Armada_ObjectTypePrimitive?
+             && Armada_PrimitiveValueMatchesType(value, h.tree[p].ty.pty)
+          then
+            h.(values := Armada_UpdateHeapValuesWithPrimitiveValue(h.values, p, value))
+          else
+            h
+        }
+      ");
     }
 
-    public void CreateApplyTauAddressableFunction(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void CreateHeapMetadataUnchangedByTau(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var h = AH.MakeNameSegment("h", "Armada_Heap");
-      var p = AH.MakeNameSegment("p", "Armada_Pointer");
-      var value = AH.MakeNameSegment("value", "Armada_PrimitiveValue");
-      var h_updated = GetUpdatedHeapAfterTau(h, p, value);
-      var h_prime = AH.MakeNameSegment("h'", "Armada_Heap");
-      var ens = AH.MakeApply2("Armada_HeapMetadataUnchangedByTau", h, h_prime, new BoolType());
-      var fn = AH.MakeFunctionWithEns("Armada_ApplyTauAddressable",
-                                      new List<Formal> {
-                                        AH.MakeFormal("h", "Armada_Heap"),
-                                        AH.MakeFormal("p", "Armada_Pointer"),
-                                        AH.MakeFormal("value", "Armada_PrimitiveValue")
-                                      },
-                                      AH.MakeFormal("h'", "Armada_Heap"),
-                                      ens,
-                                      h_updated);
-      newDefaultClassDecls.Add(fn);
+      declCollector.AddItem(@"
+        predicate Armada_HeapMetadataUnchangedByTau(h: Armada_Heap, h': Armada_Heap)
+        {
+          && h'.valid == h.valid
+          && h'.tree == h.tree
+          && h'.freed == h.freed
+        }
+      ");
     }
 
-    public void CreateHeapMetadataUnchangedByTau(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void CreateTauNext(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var old_heap = AH.MakeNameSegment("h", "Armada_Heap");
-      var new_heap = AH.MakeNameSegment("h'", "Armada_Heap");
-      var preds = new List<Expression>();
+      CreateHeapMetadataUnchangedByTau(symbols, declCollector);
+      CreateApplyTauUnaddressableFunction(symbols, declCollector);
+      CreateApplyTauAddressableFunction(symbols, declCollector);
 
-      var old_valid = AH.MakeExprDotName(old_heap, "valid", AH.MakePointerSetType());
-      var new_valid = AH.MakeExprDotName(new_heap, "valid", AH.MakePointerSetType());
-      var valids_match = AH.MakeEqExpr(new_valid, old_valid);
-      preds.Add(valids_match);
+      declCollector.AddItem(@"
+        function Armada_ApplyStoreBufferEntry(mem: Armada_SharedMemory, entry: Armada_StoreBufferEntry) : (mem':Armada_SharedMemory)
+          ensures Armada_HeapMetadataUnchangedByTau(mem.heap, mem'.heap)
+        {
+          match entry.loc
+              case Armada_StoreBufferLocation_Unaddressable(v, fields) =>
+                mem.(globals := Armada_ApplyTauUnaddressable(mem.globals, v, fields, entry.value))
+              case Armada_StoreBufferLocation_Addressable(p) =>
+                mem.(heap := Armada_ApplyTauAddressable(mem.heap, p, entry.value))
+        }
+      ");
 
-      var old_tree = AH.MakeExprDotName(old_heap, "tree", "Armada_Tree");
-      var new_tree = AH.MakeExprDotName(new_heap, "tree", "Armada_Tree");
-      var trees_match = AH.MakeEqExpr(new_tree, old_tree);
-      preds.Add(trees_match);
+      declCollector.AddItem(@"
+        function Armada_ApplyStoreBuffer(mem: Armada_SharedMemory, storeBuffer: seq<Armada_StoreBufferEntry>) : (mem':Armada_SharedMemory)
+          ensures Armada_HeapMetadataUnchangedByTau(mem.heap, mem'.heap)
+          decreases |storeBuffer|
+        {
+          if |storeBuffer| == 0 then
+            mem
+          else
+            Armada_ApplyStoreBuffer(Armada_ApplyStoreBufferEntry(mem, storeBuffer[0]), storeBuffer[1..])
+        }
+      ");
 
-      var old_freed = AH.MakeExprDotName(old_heap, "freed", "Armada_Freed");
-      var new_freed = AH.MakeExprDotName(new_heap, "freed", "Armada_Freed");
-      var freeds_match = AH.MakeEqExpr(new_freed, old_freed);
-      preds.Add(freeds_match);
+      declCollector.AddItem(@"
+        function Armada_GetThreadLocalView(s: Armada_TotalState, tid: Armada_ThreadHandle) : (mem':Armada_SharedMemory)
+          requires tid in s.threads
+          ensures  Armada_HeapMetadataUnchangedByTau(s.mem.heap, mem'.heap)
+        {
+          Armada_ApplyStoreBuffer(s.mem, s.threads[tid].storeBuffer)
+        }
+      ");
 
-      var formals = new List<Formal> { AH.MakeFormal("h", "Armada_Heap"), AH.MakeFormal("h'", "Armada_Heap") };
-      var body = AH.CombineExpressionsWithAnd(preds);
-      var pred = AH.MakePredicate("Armada_HeapMetadataUnchangedByTau", formals, body);
-      newDefaultClassDecls.Add(pred);
-    }
+      var next = new NextRoutineConstructor(prog, symbols, NextType.Tau, null, null, null, null, null);
+      symbols.TauNextRoutineConstructor = next;
 
-    public void CreateTauNext(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
-    {
-      CreateHeapMetadataUnchangedByTau(symbols, newDefaultClassDecls);
-      CreateApplyTauUnaddressableFunction(symbols, newDefaultClassDecls);
-      CreateApplyTauAddressableFunction(symbols, newDefaultClassDecls);
-
-      var fnDef = @"
-  function Armada_ApplyStoreBufferEntry(mem: Armada_SharedMemory, entry: Armada_StoreBufferEntry) : (mem':Armada_SharedMemory)
-    ensures Armada_HeapMetadataUnchangedByTau(mem.heap, mem'.heap)
-  {
-    match entry.loc
-        case Armada_StoreBufferLocation_Unaddressable(v, fields) => mem.(globals := Armada_ApplyTauUnaddressable(mem.globals, v, fields, entry.value))
-        case Armada_StoreBufferLocation_Addressable(p) => mem.(heap := Armada_ApplyTauAddressable(mem.heap, p, entry.value))
-  }
-";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_ApplyStoreBufferEntry", fnDef));
-
-      fnDef = @"
-  function Armada_ApplyStoreBuffer(mem: Armada_SharedMemory, storeBuffer: seq<Armada_StoreBufferEntry>) : (mem':Armada_SharedMemory)
-    ensures Armada_HeapMetadataUnchangedByTau(mem.heap, mem'.heap)
-    decreases |storeBuffer|
-  {
-    if |storeBuffer| == 0 then
-      mem
-    else
-      Armada_ApplyStoreBuffer(Armada_ApplyStoreBufferEntry(mem, storeBuffer[0]), storeBuffer[1..])
-  }
-";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_ApplyStoreBuffer", fnDef));
-
-      fnDef = $@"
-  function Armada_GetThreadLocalView(s: Armada_TotalState, tid: Armada_ThreadHandle) : (mem':Armada_SharedMemory)
-    requires tid in s.threads
-    ensures  Armada_HeapMetadataUnchangedByTau(s.mem.heap, mem'.heap)
-  {{
-    Armada_ApplyStoreBuffer(s.mem, s.threads[tid].storeBuffer)
-  }}
-";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_GetThreadLocalView", fnDef));
-
-      var next = new NextRoutine(prog, symbols, NextType.Tau, null, null, null, null, null);
-      symbols.TauNextRoutine = next;
+      var s = $"({next.s})";
+      var t = $"({next.t})";
 
       // Add conjunct |t.storeBuffer| > 0:
 
-      var store_buffer = AH.MakeExprDotName(next.t, "storeBuffer", AH.MakeStoreBufferType());
-      var store_buffer_size = AH.MakeCardinalityExpr(store_buffer);
-      var store_buffer_nonempty = AH.MakeGtExpr(store_buffer_size, AH.MakeZero());
-      next.AddConjunct(store_buffer_nonempty);
+      next.AddConjunct($"|{t}.storeBuffer| > 0");
 
-      //
-      // Get an expression for what s.threads will be like after the first entry in the store buffer is popped:
-      //    var updated_threads := s.threads[next.tid := next.t.(storeBuffer := t.storeBuffer[1..])]
-      //
+      // Get an expression for the correct final state, which involves popping the first store-buffer entry
+      // and applying it to memory.
 
-      var store_buffer_popped = AH.MakeSeqSliceExpr(store_buffer, AH.MakeOne(), null);
-      var updated_thread = AH.MakeDatatypeUpdateExpr(next.t, "storeBuffer", store_buffer_popped);
-      var threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-      var updated_threads = AH.MakeSeqUpdateExpr(threads, next.tid, updated_thread);
-
-      //
-      // Get an expression for the correct final state:
-      //    var mem' := Armada_ApplyStoreBufferEntry(s.mem, store_buffer_entry);
-      //    s_updated := s.(threads := updated_threads, mem := mem');
-      //
-
-      var mem = AH.MakeExprDotName(next.s, "mem", "Armada_SharedMemory");
-      var store_buffer_entry = AH.MakeSeqSelectExpr(store_buffer, AH.MakeZero(), "Armada_StoreBufferEntry");
-      var mem_prime = AH.MakeApply2("Armada_ApplyStoreBufferEntry", mem, store_buffer_entry, "Armada_SharedMemory");
-      var s_updated = AH.MakeDatatypeUpdate2Expr(next.s,
-                                                 "threads", updated_threads,
-                                                 "mem", mem_prime);
-
+      var s_updated = $@"
+        {s}.(threads := {s}.threads[{next.tid} := {t}.(storeBuffer := {t}.storeBuffer[1..])],
+             mem := Armada_ApplyStoreBufferEntry({s}.mem, {t}.storeBuffer[0]))
+      ";
       next.SetNextState(s_updated);
-      symbols.AddNextRoutine(next);
+      symbols.AddNextRoutineConstructor(next);
     }
 
-    public void GenerateEnablingConditions(ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void GenerateEnablingConditions(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       foreach (var methodName in symbols.AllMethods.AllMethodNames) {
         var methodInfo = symbols.AllMethods.LookupMethod(methodName);
@@ -777,304 +725,171 @@ namespace Microsoft.Armada {
           if (collector == null || collector.Empty) {
             continue;
           }
-          var body = collector.Extract();
-          var formals = new List<Formal>{ AH.MakeFormal("s", "Armada_TotalState"), AH.MakeFormal("tid", "Armada_ThreadHandle") };
 
-          var threads = AH.MakeExprDotName(collector.s, "threads", AH.MakeThreadsType());
-          var tid_in_threads = AH.MakeInExpr(collector.tid, threads);
-          var conditionsPred = AH.MakePredicateWithReq($"Armada_EnablingConditions_{pc}", formals, tid_in_threads, body);
-          newDefaultClassDecls.Add(conditionsPred);
+          declCollector.AddItem($@"
+            predicate Armada_EnablingConditions_{pc}(s: Armada_TotalState, tid: Armada_ThreadHandle)
+              requires tid in s.threads
+              requires s.threads[tid].top.Armada_StackFrame_{methodName}?
+            {{
+              {collector.Extract()}
+            }}
+          ");
         }
       }
     }
 
-    public void GenerateTreeStructProperties(ModuleDefinition m, ArmadaStructs structs, List<MemberDecl> newDefaultClassDecls)
+    public void GenerateAddressableStaticVariablesPredicates(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      string overallFnBody = "";
-      foreach (var structName in structs.StructNames) {
-        var s = structs.GetStruct(structName);
-        overallFnBody += $"&& Armada_TreeStructProperties_{structName}(tree)";
-        string fieldsInChildren = "";
-        string childrenValid = "";
-        string fieldsCorrectType = "";
-        string fieldsOfType = "";
-        bool emptyStruct = true;
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          emptyStruct = false;
-          string objectType = GetObjectTypeAsString(m, fieldType, structs);
-          if (objectType == null) {
-            AH.PrintError(prog, $"Fields of struct can't have type {fieldType}, so you can't use that type for field {fieldName} of struct {structName}");
-            continue;
-          }
-          fieldsInChildren += $"&& Armada_FieldStruct(Armada_FieldType_{structName}'{fieldName}()) in children";
-          childrenValid += $"&& children[Armada_FieldStruct(Armada_FieldType_{structName}'{fieldName}())] in tree";
-          fieldsCorrectType += $"&& tree[children[Armada_FieldStruct(Armada_FieldType_{structName}'{fieldName}())]].ty == {objectType}";
-          fieldsOfType += $"|| f.f.Armada_FieldType_{structName}'{fieldName}?";
-        }
-
-        string fnDef;
-        if (emptyStruct) {
-          fnDef =   $"predicate Armada_TreeStructProperties_{structName}(tree:map<Armada_Pointer, Armada_Node>)"
-                  + "{"
-                  + $"forall p {{:trigger Armada_TriggerPointer(p)}} :: Armada_TriggerPointer(p) && p in tree && tree[p].ty.Armada_ObjectType_struct? && tree[p].ty.s.Armada_StructType_{structName}? ==> tree[p].children == map []"
-                  + "}";
-        }
-        else {
-          fnDef =   $"predicate Armada_TreeStructProperties_{structName}(tree:map<Armada_Pointer, Armada_Node>)"
-                  + "{"
-                  + $"&& (forall p {{:trigger Armada_TriggerPointer(p)}} :: Armada_TriggerPointer(p) && p in tree && tree[p].ty.Armada_ObjectType_struct? && tree[p].ty.s.Armada_StructType_{structName}? ==> var children := tree[p].children;"
-                  + fieldsInChildren
-                  + childrenValid
-                  + fieldsCorrectType
-                  + $") && (forall p, f {{:trigger Armada_TriggerPointer(p), Armada_TriggerField(f)}} :: Armada_TriggerPointer(p) && Armada_TriggerField(f) && p in tree && tree[p].ty.Armada_ObjectType_struct? && tree[p].ty.s.Armada_StructType_{structName}? && f in tree[p].children ==> f.Armada_FieldStruct? && ("
-                  + fieldsOfType
-                  + ")) }";
-        }
-        newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "TreeStructPropertiesSpecific", fnDef));
-      }
-
-      string overallFnDef;
-      if (overallFnBody.Length == 0) {
-        overallFnDef = "predicate Armada_TreeStructProperties(tree:map<Armada_Pointer, Armada_Node>) { true }";
-      }
-      else {
-        overallFnDef = "predicate Armada_TreeStructProperties(tree:map<Armada_Pointer, Armada_Node>) {" + overallFnBody + "}";
-      }
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "TreeStructProperties", overallFnDef));
-    }
-
-    public void GenerateAddressableStaticVariablesPredicates(ModuleDefinition m, ArmadaSymbolTable symbols,
-                                                             List<MemberDecl> newDefaultClassDecls)
-    {
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
-      var new_ptrs = AH.MakeNameSegment("new_ptrs", AH.MakePointerSetType());
-
       // Every addressable global variable is a root of the heap
-      var addrs = AH.MakeExprDotName(s, "addrs", "Armada_Addrs");
-      var h = AH.MakeNameSegment("h", "Armada_Heap");
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
 
-      var root_preds = new List<Expression>();
-      var validity_preds = new List<Expression>();
+      var root_preds = new List<string>();
+      var validity_preds = new List<string>();
 
-      var previouslySeenAddressableVariableAddrs = new List<Expression>();
+      var previouslySeenAddressableVariableAddrs = new List<string>();
       foreach (var varName in symbols.Globals.VariableNames) {
         var v = symbols.Globals.Lookup(varName);
         if (v is AddressableArmadaVariable) {
-          var addr = AH.MakeExprDotName(addrs, varName, "Armada_Pointer");
+          var addr = $"s.addrs.{varName}";
           foreach (var otherAddr in previouslySeenAddressableVariableAddrs) {
-            root_preds.Add(AH.MakeNeqExpr(addr, otherAddr));
+            root_preds.Add($"{addr} != {otherAddr}");
           }
           previouslySeenAddressableVariableAddrs.Add(addr);
-          var pointer_valid = AH.GetInvocationOfValidPointer(h, addr, v.ty);
+          var pointer_valid = AH.GetInvocationOfValidPointer("h", addr, v.ty);
           if (pointer_valid is null) {
-            AH.PrintError(prog, "Invalid type for static variable {varName}");
+            AH.PrintError(prog, $"Invalid type for static variable {varName}");
           }
           else {
             validity_preds.Add(pointer_valid);
           }
-          var addr_in_tree = AH.MakeInExpr(addr, tree);
-          root_preds.Add(addr_in_tree);
-          var node = AH.MakeSeqSelectExpr(tree, addr, "Armada_Node");
-          var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-          var field_none = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-          root_preds.Add(field_none);
-          var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-          var is_static_heap = AH.MakeExprDotName(root_type, "Armada_RootTypeStaticHeap?", new BoolType());
-          root_preds.Add(is_static_heap);
+          root_preds.Add($"{addr} in h.tree");
+          root_preds.Add($"h.tree[{addr}].child_type.Armada_ChildTypeRoot?");
+          root_preds.Add($"h.tree[{addr}].child_type.rt.Armada_RootTypeStaticHeap?");
         }
       }
 
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var body = AH.CombineExpressionsWithAnd(root_preds);
-      var formals = new List<Formal>() { AH.MakeFormal("s", "Armada_TotalState") };
-      body = AH.MakeLet1Expr("h", h, body);
-      var fn = AH.MakePredicate("Armada_AddressableStaticVariablesAreDistinctRoots", formals, body);
-      newDefaultClassDecls.Add(fn);
+      var root_pred_list = AH.CombineStringsWithAnd(root_preds);
+      declCollector.AddItem($@"
+        predicate Armada_AddressableStaticVariablesAreDistinctRoots(s: Armada_TotalState)
+        {{
+          var h := s.mem.heap;
+          {root_pred_list}
+        }}
+      ");
 
-      body = AH.CombineExpressionsWithAnd(validity_preds);
-      var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid_without_new_ptrs = AH.MakeSubExpr(valid, new_ptrs);
-      var h_without_new_ptrs = AH.MakeDatatypeUpdateExpr(h, "valid", valid_without_new_ptrs);
-      body = AH.MakeLet1Expr("h", h_without_new_ptrs, body);
-      formals = new List<Formal>() { AH.MakeFormal("s", "Armada_TotalState"), AH.MakeFormal("new_ptrs", AH.MakePointerSetType()) };
-      fn = AH.MakePredicate("Armada_AddressableStaticVariablesAreValid", formals, body);
-      newDefaultClassDecls.Add(fn);
+      var validity_pred_list = AH.CombineStringsWithAnd(validity_preds);
+      declCollector.AddItem($@"
+        predicate Armada_AddressableStaticVariablesAreValid(s: Armada_TotalState, new_ptrs: set<Armada_Pointer>)
+        {{
+          var h := s.mem.heap.(valid := s.mem.heap.valid - new_ptrs);
+          {validity_pred_list}
+        }}
+      ");
     }
 
-    public void GenerateInitPredicate(ModuleDefinition m, ArmadaSymbolTable symbols,
-                                      List<TopLevelDecl> newTopLevelDecls, List<MemberDecl> newDefaultClassDecls)
+    public void GenerateInitPredicate(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var config_formals = new List<Formal> { AH.MakeFormal("tid_init", "Armada_ThreadHandle"),
-                                              AH.MakeFormal("new_ptrs", AH.MakePointerSetType()) };
-      var config_ctor = AH.MakeDatatypeCtor("Armada_Config", config_formals);
-      var config_decl = AH.MakeDatatypeDecl(m, "Armada_Config", new List<DatatypeCtor> { config_ctor });
-      newTopLevelDecls.Add(config_decl);
+      var builder = new PredicateBuilder(prog, true);
 
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
-      var config = AH.MakeNameSegment("config", "Armada_Config");
-      var tid = AH.MakeExprDotName(config, "tid_init", "Armada_ThreadHandle");
-      var new_ptrs = AH.MakeExprDotName(config, "new_ptrs", AH.MakePointerSetType());
+      builder.AddConjunct("s.stop_reason.Armada_NotStopped?");
+      builder.AddConjunct("|s.joinable_tids| == 0");
+      builder.AddConjunct("util_collections_maps_i.MapHasUniqueKey(s.threads, config.tid_init)");
+      builder.AddConjunct("config.tid_init != 0");
 
-      var builder = new PredicateBuilder(prog);
+      // var tid := config.tid_init;
+      // var new_ptrs := config.new_ptrs;
+      // var t := s.threads[tid];
+      var tid = builder.AddVariableDeclaration("tid", "config.tid_init");
+      var new_ptrs = builder.AddVariableDeclaration("new_ptrs", "config.new_ptrs");
+      var t = builder.AddVariableDeclaration("t", "s.threads[tid]");
 
-      // s.stop_reason.Armada_NotStopped?
-      var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-      var not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-      builder.AddConjunct(not_stopped);
+      // t.pc.Armada_PC_main_Start?
+      var startPC = new ArmadaPC(symbols, "main", 0);
+      builder.AddConjunct($"t.pc.{startPC}?");
 
-      // util_collections_maps_i.MapHasUniqueKey(s.threads, config.tid_init)
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var only_one_thread = AH.MakeApply2("util_collections_maps_i.MapHasUniqueKey", threads, tid, new BoolType());
-      builder.AddConjunct(only_one_thread);
-
-      // tid_init != 0
-      var tid_nonzero = AH.MakeNeqExpr(tid, AH.MakeZero());
-      builder.AddConjunct(tid_nonzero);
-
-      // var t := s.threads[config.tid_init];
-      var t = AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread");
-      t = builder.AddVariableDeclaration("t", t);
-
-      // t.pc == Armada_PC_main'0
-      var current_pc = AH.MakeExprDotName(t, "pc", "Armada_PC");
-      var main_pc_0 = AH.MakeNameSegment(new ArmadaPC(symbols, "main", 0).ToString(), "Armada_PC");
-      var pc_correct = AH.MakeEqExpr(current_pc, main_pc_0);
-      builder.AddConjunct(pc_correct);
-
-      // t.top.Armada_StackFrame_main?
-      var top = AH.MakeExprDotName(t, "top", "Armada_StackFrame");
-      var method_running = AH.MakeExprDotName(top, "Armada_StackFrame_main?", new BoolType());
-      builder.AddConjunct(method_running);
-
-      // t.new_ptrs == new_ptrs;
-      var t_new_ptrs = AH.MakeExprDotName(t, "new_ptrs", AH.MakePointerSetType());
-      var t_new_ptrs_is_new_ptrs = AH.MakeEqExpr(t_new_ptrs, new_ptrs);
-      builder.AddConjunct(t_new_ptrs_is_new_ptrs);
-
-      // |t.stack| = 0
-      var stack = AH.MakeExprDotName(t, "stack", AH.MakeStackType());
-      var stack_size = AH.MakeCardinalityExpr(stack);
-      var stack_size_zero = AH.MakeEqExpr(stack_size, AH.MakeZero());
-      builder.AddConjunct(stack_size_zero);
-
-      // |t.storeBuffer| == 0
-      var store_buffer = AH.MakeExprDotName(t, "storeBuffer", AH.MakeStoreBufferType());
-      var store_buffer_size = AH.MakeCardinalityExpr(store_buffer);
-      var store_buffer_empty = AH.MakeEqExpr(store_buffer_size, AH.MakeZero());
-      builder.AddConjunct(store_buffer_empty);
+      builder.AddConjunct("t.top.Armada_StackFrame_main?");
+      builder.AddConjunct("t.new_ptrs == new_ptrs");
+      builder.AddConjunct("|t.stack| == 0");
+      builder.AddConjunct("|t.storeBuffer| == 0");
 
       // For each addressable stack variable in the main stack frame, it's valid and among new_ptrs
 
-      var mem = AH.MakeExprDotName(s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
       var smst = symbols.GetMethodSymbolTable("main");
       string p_in_new_ptrs = "";
       List<string> addressesOfAddressables = new List<string>();
       foreach (var v in smst.AllVariablesInOrder.Where(v => v.varType == ArmadaVarType.Local && v is AddressableArmadaVariable))
       {
-        var varName = v.name;
-        var new_ptr = AH.MakeExprDotName(top, $"main'AddrOf'{varName}", "Armada_Pointer");
+        var new_ptr = $"t.top.main.AddrOf'{v.name}";
 
         // new_ptr is among new_ptrs
 
-        var new_ptr_in_new_ptrs = AH.MakeInExpr(new_ptr, new_ptrs);
-        builder.AddConjunct(new_ptr_in_new_ptrs);
+        builder.AddConjunct($"{new_ptr} in new_ptrs");
 
         // new_ptr is in s.mem.heap.tree
 
-        var new_ptr_in_tree = AH.MakeInExpr(new_ptr, tree);
-        builder.AddConjunct(new_ptr_in_tree);
+        builder.AddConjunct($"{new_ptr} in s.mem.heap.tree");
 
         // new_ptr is a stack-based root in s.mem.heap, i.e.,
-        //    && s.mem.heap.tree[new_ptr].field_of_parent.Armada_FieldNone?
-        //    && s.mem.heap.tree[new_ptr].field_of_parent.rt.Armada_RootTypeStack?
+        //    && s.mem.heap.tree[new_ptr].child_type.Armada_ChildTypeRoot?
+        //    && s.mem.heap.tree[new_ptr].child_type.rt.Armada_RootTypeStack?
 
-        var node = AH.MakeSeqSelectExpr(tree, new_ptr, "Armada_Node");
-        var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-        var new_ptr_is_root = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-        var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-        var root_type_stack = AH.MakeExprDotName(root_type, "Armada_RootTypeStack?", new BoolType());
-        builder.AddConjunct(new_ptr_is_root);
-        builder.AddConjunct(root_type_stack);
-        
+        builder.AddConjunct($"s.mem.heap.tree[{new_ptr}].child_type.Armada_ChildTypeRoot?");
+        builder.AddConjunct($"s.mem.heap.tree[{new_ptr}].child_type.rt.Armada_RootTypeStack?");
+
         // new_ptr is a valid pointer in s.mem.heap
-        
-        var pointer_valid = AH.GetInvocationOfValidPointer(h, new_ptr, v.ty);
-        builder.AddConjunct(pointer_valid);
-        
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-          AH.MakeNameSegment("s.mem.heap", "Armada_Heap"),
-          AH.MakeNameSegment($"t.top.main'AddrOf'{varName}", "Armada_Pointer"),
-          v.ty
-        );
-        p_in_new_ptrs += $"|| p in {Printer.ExprToString(allocatedByExpr)}";
-        addressesOfAddressables.Add($"t.top.main'AddrOf'{varName}");
+
+        builder.AddConjunct(AH.GetInvocationOfValidPointer("s.mem.heap", new_ptr, v.ty));
+
+        var allocatedByExpr = AH.GetInvocationOfDescendants("s.mem.heap", $"t.top.main.AddrOf'{v.name}", v.ty);
+        p_in_new_ptrs += $"|| p in {allocatedByExpr}";
+        addressesOfAddressables.Add($"t.top.main.AddrOf'{v.name}");
       }
-      string str;
+
       if (p_in_new_ptrs.Length > 0) {
-        str = $"forall p :: p in config.new_ptrs <==> ({p_in_new_ptrs})";
+        builder.AddConjunct($"forall p :: p in new_ptrs <==> ({p_in_new_ptrs})");
       }
       else {
-        str = "config.new_ptrs == {}";
+        builder.AddConjunct("|new_ptrs| == 0");
       }
-      builder.AddConjunct(AH.ParseExpression(prog, "", str));
-      builder.AddConjunct(AH.ParseExpression(prog, "", str));
+
       for (int i = 0; i < addressesOfAddressables.Count; i++) {
         for (int j = i + 1; j < addressesOfAddressables.Count; j++) {
-          str = addressesOfAddressables[i] + " != " + addressesOfAddressables[j];
-          builder.AddConjunct(AH.ParseExpression(prog, "", str));
+          builder.AddConjunct(addressesOfAddressables[i] + " != " + addressesOfAddressables[j]);
         }
       }
 
       // Initialize stack variables in main
       foreach (var v in smst.AllVariablesInOrder.Where(v => v.InitialValue != null))
       {
-        var varName = v.name;
-        var ty = symbols.FlattenType(v.ty);
-        var resContext = new ResolutionContext(s, s, tid, "main", symbols, null);
-        Expression var_value = AH.MakeExprDotName(top, $"main'{varName}", "Armada_Pointer");
-        if (v is AddressableArmadaVariable) {
-          var_value = AH.MakeExprDotName(top, $"main'AddrOf'{varName}", "Armada_Pointer");
-          var_value = AH.GetInvocationOfDereferencePointer(h, var_value, ty);
-        }
+        var resContext = new ResolutionContext("s", "s", "tid", "main", symbols, null);
+        var lhsRVal = resContext.ResolveAsRValue(AH.MakeNameSegment(v.name, symbols.FlattenType(v.ty)));
         var rhsRVal = resContext.ResolveAsRValue(v.InitialValue);
-        var rhs = rhsRVal.Val;
-        var var_init_predicate = AH.MakeEqExpr(var_value, rhs);
-        builder.AddConjunct(var_init_predicate);
+        builder.AddConjunct($"({lhsRVal.Val}) == ({rhsRVal.Val})");
       }
 
       // The global static variables are valid, even if new_ptrs are excluded from the list of valid pointers.
 
-      var static_vars_valid = AH.MakeApply2("Armada_AddressableStaticVariablesAreValid", s, new_ptrs, new BoolType());
-      builder.AddConjunct(static_vars_valid);
+      builder.AddConjunct("Armada_AddressableStaticVariablesAreValid(s, new_ptrs)");
 
       // The global static variables are roots.
 
-      var static_vars_are_roots = AH.MakeApply1("Armada_AddressableStaticVariablesAreDistinctRoots", s, new BoolType());
-      builder.AddConjunct(static_vars_are_roots);
+      builder.AddConjunct("Armada_AddressableStaticVariablesAreDistinctRoots(s)");
 
       // Armada_HeapInvariant(s.mem.heap)
-      var heap_invariant = AH.MakeApply1("Armada_HeapInvariant", h, new BoolType());
-      builder.AddConjunct(heap_invariant);
+
+      builder.AddConjunct("Armada_HeapInvariant(s.mem.heap)");
 
       // Any global variable is initialized appropriately: if it's an
       // unaddressable array, it has the right length, and if it has
       // an initializer then it has that value.
 
       var failureReporter = new SimpleFailureReporter(prog);
-      var context = new GlobalInvariantResolutionContext(s, symbols, failureReporter, "");
+      var context = new GlobalInvariantResolutionContext("s", symbols, failureReporter, "");
       foreach (var globalVariableName in symbols.Globals.VariableNames) {
         var globalVar = symbols.Globals.Lookup(globalVariableName);
         if (globalVar is GlobalUnaddressableArmadaVariable && globalVar.ty is SizedArrayType) {
           var gv_expr = globalVar.GetRValue(Token.NoToken, context);
           var sz = ((SizedArrayType)globalVar.ty).Size;
-          var gv_cardinality = AH.MakeCardinalityExpr(gv_expr.Val);
-          var gv_has_correct_size = AH.MakeEqExpr(gv_cardinality, sz);
-          builder.AddConjunct(gv_has_correct_size);
+          builder.AddConjunct($"|{gv_expr.Val}| == ({Printer.ExprToString(sz)})");
         }
         if (globalVar.initialValue != null) {
           var gv_expr = globalVar.GetRValue(Token.NoToken, context);
@@ -1083,751 +898,420 @@ namespace Microsoft.Armada {
           // We don't crash if these rvalues aren't valid, since we can't crash at init time.
           // Instead, we just generate Dafny that won't satisfy validity checks if that's an issue.
           //
-          var gv_initialized_correctly = AH.MakeEqExpr(gv_expr.Val, val_expr.Val);
-          builder.AddConjunct(gv_initialized_correctly);
+          builder.AddConjunct($"({gv_expr.Val}) == ({val_expr.Val})");
         }
       }
 
-      var init_body = builder.Extract();
-      var init_formals = new List<Formal>() { AH.MakeFormal("s", "Armada_TotalState"), AH.MakeFormal("config", "Armada_Config") };
-      var init = AH.MakePredicate("Armada_InitConfig", init_formals, init_body);
-      newDefaultClassDecls.Add(init);
+      declCollector.AddItem($@"
+        predicate Armada_InitConfig(s: Armada_TotalState, config: Armada_Config)
+        {{
+          {builder.Extract()}
+        }}
+      ");
 
-      str = @"
+      declCollector.AddItem(@"
         predicate Armada_Init(s:Armada_TotalState)
         {
           exists config :: Armada_InitConfig(s, config)
         }
-      ";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "Armada_Init", str));
+      ");
     }
 
-    public void GenerateIsNonyieldingPCPredicate(ModuleDefinition m, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls)
+    public void GenerateIsNonyieldingPCPredicate(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       var nonyieldingPCs = new List<ArmadaPC>();
       symbols.AllMethods.AppendAllNonyieldingPCs(nonyieldingPCs);
 
-      string str = "predicate Armada_IsNonyieldingPC(pc:Armada_PC) {\n  false\n";
-      foreach (var pc in nonyieldingPCs) {
-        str += $"  || pc.{pc}?\n";
-      }
-      str += "}\n";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "IsNonyieldingPC", str));
+      string body = AH.CombineStringsWithOr(nonyieldingPCs.Select(pc => $"pc.{pc}?"));
+      declCollector.AddItem($@"
+        predicate Armada_IsNonyieldingPC(pc:Armada_PC)
+        {{
+          {body}
+        }}
+      ");
     }
 
-    public void GenerateNextBodies(ModuleDefinition m, ArmadaSymbolTable symbols,
-                                   List<TopLevelDecl> newTopLevelDecls, List<MemberDecl> newDefaultClassDecls)
+    public void GenerateNextBodies(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var entryCtors = new List<DatatypeCtor>();
-      var overallNextCases = new List<MatchCaseExpr>();
-      var validStepCases = new List<MatchCaseExpr>();
-      var crashAvoidanceCases = new List<MatchCaseExpr>();
-      var getNextStateCases = new List<MatchCaseExpr>();
-      foreach (var nextRoutine in symbols.NextRoutines) {
-        nextRoutine.Extract(m, symbols, newDefaultClassDecls, entryCtors, overallNextCases, validStepCases, crashAvoidanceCases,
-                            getNextStateCases);
+      var stepCtors = new List<string>();
+      foreach (var nrc in symbols.NextRoutineConstructors) {
+        nrc.Extract(symbols, declCollector, stepCtors);
       }
+      symbols.ClearNextRoutineConstructors();
 
-      if (overallNextCases.Count() == 0) {
+      if (stepCtors.Count() == 0) {
         return;
       }
 
-      var entryDecl = AH.MakeDatatypeDecl(m, "Armada_TraceEntry", entryCtors);
-      newTopLevelDecls.Add(entryDecl);
+      var stepDecl = "datatype Armada_Step = " + String.Join(" | ", stepCtors);
+      declCollector.AddItem(stepDecl);
 
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
-      var s_prime = AH.MakeNameSegment("s'", "Armada_TotalState");
-      var entry = AH.MakeNameSegment("entry", "Armada_TotalEntry");
-      var formal_s = AH.MakeFormal("s", "Armada_TotalState");
-      var formal_s_prime = AH.MakeFormal("s'", "Armada_TotalState");
-      var formal_entry = AH.MakeFormal("entry", "Armada_TraceEntry");
-
-      // predicate Armada_NextOneStep(s:Armada_TotalState, s':Armada_TotalState, entry:Armada_TraceEntry)
-      // {
-      //     match entry ...
-      // }
-
-      var overallNextFormals = new List<Formal> { formal_s, formal_s_prime, formal_entry };
-      var overallNextBody = AH.MakeMatchExpr(entry, overallNextCases, new BoolType());
-      var overallNext = AH.MakePredicate("Armada_NextOneStep", overallNextFormals, overallNextBody);
-      newDefaultClassDecls.Add(overallNext);
-
-      // predicate Armada_ValidStep(s:Armada_TotalState, entry:Armada_TraceEntry)
-      // {
-      //     match entry ...
-      // }
-
-      var validStepFormals = new List<Formal> { formal_s, formal_entry };
-      var validStepBody = AH.MakeMatchExpr(entry, validStepCases, new BoolType());
-      var validStep = AH.MakePredicate("Armada_ValidStep", validStepFormals, validStepBody);
-      newDefaultClassDecls.Add(validStep);
-
-      // predicate Armada_UndefinedBehaviorAvoidance(s:Armada_TotalState, entry:Armada_TraceEntry)
-      //     requires Armada_ValidStep(s, entry)
-      // {
-      //     match entry ...
-      // }
-
-      var crashAvoidanceFormals = new List<Formal> { formal_s, formal_entry };
-      var crashAvoidanceBody = AH.MakeMatchExpr(entry, crashAvoidanceCases, new BoolType());
-      var validStatePred = AH.MakeApply2("Armada_ValidStep", s, entry, new BoolType());
-      var crashAvoidance = AH.MakePredicateWithReq("Armada_UndefinedBehaviorAvoidance", crashAvoidanceFormals, validStatePred, crashAvoidanceBody);
-      newDefaultClassDecls.Add(crashAvoidance);
-
-      // function Armada_GetNextState(s:Armada_TotalState, entry:Armada_TraceEntry) : Armada_TotalState
-      //     requires Armada_ValidStep(s, entry) && Armada_UndefinedBehaviorAvoidance(s, entry)
-      // {
-      //     match entry ...
-      // }
-
-      var getNextStateFormals = new List<Formal> { formal_s, formal_entry };
-      var getNextStateBody = AH.MakeMatchExpr(entry, getNextStateCases, "Armada_TotalState");
-      var crashAvoidancePred = AH.MakeApply2("Armada_UndefinedBehaviorAvoidance", s, entry, new BoolType());
-      var getNextStateReq = AH.MakeAndExpr(validStatePred, crashAvoidancePred);
-      var getNextState = AH.MakeFunctionWithReq("Armada_GetNextState", getNextStateFormals, getNextStateReq, getNextStateBody);
-      newDefaultClassDecls.Add(getNextState);
-
-      string str;
-
-      str = @"
-        function Armada_GetNextStateAlways(s: Armada_TotalState, entry: Armada_TraceEntry): Armada_TotalState
+      var pr = new StepPrinter();
+      var matchBody = String.Concat(symbols.NextRoutines.Select(r => $"{pr.CaseEntry(r)} => {pr.ValidStepInvocation(r)}\n"));
+      declCollector.AddItem($@"
+        predicate {{:opaque}} Armada_ValidStepCases(s: Armada_TotalState, step: Armada_Step, tid: Armada_ThreadHandle)
+          requires tid in s.threads
+        {{
+          match step
+            {matchBody}
+        }}
+      ");
+      
+      declCollector.AddItem(@"
+        predicate Armada_ValidStep(s: Armada_TotalState, step: Armada_Step, tid: Armada_ThreadHandle)
         {
-          if Armada_ValidStep(s, entry) && Armada_UndefinedBehaviorAvoidance(s, entry) then
-            Armada_GetNextState(s, entry)
+          && tid in s.threads
+          && s.stop_reason.Armada_NotStopped?
+          && Armada_ValidStepCases(s, step, tid)
+        }
+      ");
+
+      matchBody = String.Concat(symbols.NextRoutines.Select(r => $"{pr.CaseEntry(r)} => {pr.GetNextStateInvocation(r)}\n"));
+      declCollector.AddItem($@"
+        function {{:opaque}} Armada_GetNextState(s: Armada_TotalState, step: Armada_Step, tid: Armada_ThreadHandle)
+          : Armada_TotalState
+        {{
+          reveal Armada_ValidStepCases();
+          if !Armada_ValidStep(s, step, tid) then
+            s
           else
-            s.(stop_reason := Armada_StopReasonUndefinedBehavior)
-        }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_GetNextStateAlways", str));
+            match step
+              {matchBody}
+        }}
+      ");
 
-      str = @"
-        predicate Armada_NextOneStepAlt(s:Armada_TotalState, s':Armada_TotalState, entry:Armada_TraceEntry)
-        {
-           && Armada_ValidStep(s, entry)
-           && s' == Armada_GetNextStateAlways(s, entry)
-        }
-      ";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "Armada_NextOneStepAlt", str));
-
-      str = @"
-        function Armada_GetSpecFunctions() : Armada_SpecFunctions<Armada_TotalState, Armada_TraceEntry, Armada_PC>
+      declCollector.AddItem(@"
+        function Armada_GetSpecFunctions() : Armada_SpecFunctions<Armada_TotalState, Armada_Step, Armada_PC>
         {
           Armada_SpecFunctions(Armada_Init,
                                Armada_ValidStep,
-                               Armada_GetNextStateAlways,
-                               (step:Armada_TraceEntry) => step.tid,
-                               (step:Armada_TraceEntry) => step.Armada_TraceEntry_Tau?,
+                               Armada_GetNextState,
+                               (step:Armada_Step) => step.Armada_Step_Tau?,
                                (s:Armada_TotalState) => s.stop_reason.Armada_NotStopped?,
                                (s:Armada_TotalState, tid:Armada_ThreadHandle) =>
                                  if tid in s.threads then util_option_s.Some(s.threads[tid].pc) else util_option_s.None,
                                Armada_IsNonyieldingPC)
         }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_GetSpecFunctions", str));
+      ");
 
-      str = @"
-        predicate Armada_Next(s: Armada_TotalState, s': Armada_TotalState, entry: Armada_Multistep<Armada_TraceEntry>)
+      declCollector.AddItem(@"
+        function Armada_Spec() : GeneralRefinementModule.Spec<Armada_TotalState>
         {
-          Armada_NextMultistep(Armada_GetSpecFunctions(), s, s', entry.steps, entry.tid, entry.tau)
+          Armada_SpecFunctionsToSpec(Armada_GetSpecFunctions())
         }
-      ";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "Armada_Next", str));
-
-      // function Armada_Spec() : GeneralRefinementModule.Spec<Armada_TotalState> {
-      //     GeneralRefinementModule.Spec(iset s | Armada_Init(s),
-      //                                  iset s, s', entry | Armada_Next(s, s', entry) :: GeneralRefinementModule.StatePair(s, s'))
-      // }
-
-      var bv_s = AH.MakeBoundVar("s", "Armada_TotalState");
-      var bv_s_prime = AH.MakeBoundVar("s'", "Armada_TotalState");
-      var bv_entry = AH.MakeBoundVar("entry", "Armada_Multistep<Armada_TraceEntry>");
-      var init_set = AH.MakeIsetComprehension(new List<BoundVar> { bv_s },
-                                              AH.MakeApply1("Armada_Init", s, new BoolType()),
-                                              s);
-      var next_set = AH.MakeIsetComprehension(new List<BoundVar> { bv_s, bv_s_prime, bv_entry },
-                                              AH.MakeApply3("Armada_Next", s, s_prime, entry, new BoolType()),
-                                              AH.MakeApply2("GeneralRefinementModule.StatePair", s, s_prime, "StatePair"));
-      var spec_body = AH.MakeApply2("GeneralRefinementModule.Spec", init_set, next_set,
-                                    AH.MakeGenericTypeSpecific("GeneralRefinementModule.Spec", "Armada_TotalState"));
-      var spec_function = AH.MakeFunction("Armada_Spec", new List<Formal>(), spec_body);
-      newDefaultClassDecls.Add(spec_function);
+      ");
     }
 
-    public void GenerateStructAllocatedByFunctions(ModuleDefinition m, ArmadaStructs structs,
-                                                    List<MemberDecl> newDefaultClassDecls, List<TopLevelDecl> newTopLevelDecls)
+    private string GetStructUpdateConstraints(Type innerType, int numArrayDimensions, int whichField, string fieldName)
     {
-      foreach (var structName in structs.StructNames) {
-        var builder = new PredicateBuilder(prog);
-        var s = structs.GetStruct(structName);
-        List<string> allocatorCalls = new List<string>();
-        allocatorCalls.Add("{p}");
-        foreach (var fieldName in s.FieldNames) {
-          var ty = s.GetFieldType(fieldName);
-          var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-            AH.MakeNameSegment("h", "Armada_Heap"),
-            AH.MakeNameSegment($"h.tree[p].children[Armada_FieldStruct(Armada_FieldType_{structName}'{fieldName})]", "Armada_Pointer"),
-            ty
-          );
-          allocatorCalls.Add(Printer.ExprToString(allocatedByExpr));
-        }
-        string body = String.Join(" + ", allocatorCalls);
+      var constraints = new List<string>();
+      if (AH.IsPrimitiveType(innerType)) {
+        constraints.Add($"|fields| == {numArrayDimensions + 1}");
+      }
+      else {
+        constraints.Add($"|fields| >= {numArrayDimensions + 1}");
+      }
+      constraints.Add($"fields[0] == {whichField}");
+      var value = $"v.{fieldName}";
+      for (int i = 0; i < numArrayDimensions; ++i) {
+        constraints.Add($"0 <= fields[{i + 1}] < |{value}|");
+        value += $"[fields[{i + 1}]]";
+      }
+      if (AH.IsPrimitiveType(innerType)) {
+        constraints.Add($"value.Armada_PrimitiveValue_{innerType}?");
+      }
+      return AH.CombineStringsWithAnd(constraints);
+    }
 
-        string str = $@"
-        function Armada_AllocatedByStruct_{structName}(h: Armada_Heap, p: Armada_Pointer): set<Armada_Pointer>
-          requires Armada_ValidPointerToStruct_{structName}(h, p)
+    private void GenerateStructDatatypesAndFunctions(ArmadaStructs structs, ArmadaStruct s, DeclCollector declCollector)
+    {
+      var structFields =
+        $"datatype Armada_Struct_{s.Name} = Armada_Struct_{s.Name}("
+        + String.Join(", ", s.FieldNames.Select(fieldName => $"{fieldName}: {structs.FlattenType(s.GetFieldType(fieldName)).ToString()}"))
+        + ")";
+      declCollector.AddItem(structFields);
+
+      var fieldNames = s.FieldNames.ToArray();
+      var fieldTypes = fieldNames.Select(fieldName => s.GetFieldType(fieldName)).ToArray();
+      var numFields = fieldNames.Length;
+
+      var fieldTypeConstructors = fieldTypes.Select(AH.GetObjectType);
+      declCollector.AddItem($@"
+        function Armada_StructType_{s.Name}() : Armada_ObjectType
         {{
-          {body}
+          Armada_ObjectTypeStruct([{AH.CombineStringsWithCommas(fieldTypeConstructors)}])
         }}
-        ";
-        newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, $"Armada_AllocatedByStructArray_{structName}", str));
+      ");
 
-        str = $@"
-          function Armada_RecAllocatedByStructArray_{structName}(h: Armada_Heap, p: Armada_Pointer, j: int): set<Armada_Pointer>
-            requires Armada_ValidPointerToStructArray_{structName}(h, p)
-            requires 0 <= j <= h.tree[p].ty.sz
-            decreases h.tree[p].ty.sz - j
-          {{
-            if j == h.tree[p].ty.sz then
-            {{}}
-            else
-            Armada_AllocatedByStruct_{structName}(h, h.tree[p].children[Armada_FieldArrayIndex(j)]) + Armada_RecAllocatedByStructArray_{structName}(h, p, j + 1)
-          }}
-        ";
-        newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, $"Armada_RecAllocatedByStructArray_{structName}", str));
+      var fields = String.Join(", ", Enumerable.Range(0, numFields).Select(fieldIndex =>
+                     AH.GetInvocationOfDereferencePointer("h", $"h.tree[p].children[{fieldIndex}]", fieldTypes[fieldIndex])));
+      declCollector.AddItem($@"
+        function Armada_DereferenceStructPointer_{s.Name}(h: Armada_Heap, p: Armada_Pointer) : Armada_Struct_{s.Name}
+          requires Armada_ValidPointerToObjectType(h, p, Armada_StructType_{s.Name}())
+        {{
+          Armada_Struct_{s.Name}({fields})
+        }}
+      ");
 
-        str = $@"
-          function {{:opaque}} Armada_AllocatedByStructArray_{structName}(h: Armada_Heap, p: Armada_Pointer): set<Armada_Pointer>
-            requires Armada_ValidPointerToStructArray_{structName}(h, p)
-          {{
-            {{p}} + Armada_RecAllocatedByStructArray_{structName}(h, p, 0)
-          }}
+      var updater = $@"
+        function Armada_UpdateStruct_{s.Name}(v: Armada_Struct_{s.Name}, fields: seq<int>, value: Armada_PrimitiveValue)
+          : Armada_Struct_{s.Name}
+        {{
+      ";
+      for (var fieldIndex = 0; fieldIndex < numFields; ++fieldIndex) {
+        var fieldType = fieldTypes[fieldIndex];
+        var fieldName = fieldNames[fieldIndex];
+        Type innerType;
+        var numArrayDimensions = AH.GetNumArrayDimensions(fieldType, out innerType);
+        var vDotFieldName = $"v.{fieldName}";
+        updater += $@"
+          if {GetStructUpdateConstraints(innerType, numArrayDimensions, fieldIndex, fieldName)} then
+            v.({fieldName} := {GetStructFieldUpdate(innerType, numArrayDimensions, vDotFieldName, 1)})
+          else
         ";
-        newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, $"Armada_AllocatedByStructARray_{structName}", str));
       }
+      updater += "v }";
+      declCollector.AddItem(updater);
+
+      var updates = AH.CombineStringsWithSetAddition(
+                      Enumerable.Range(0, numFields).Select(fieldIndex =>
+                        AH.GetInvocationOfUpdateValuesViaPointer("h", $"h.tree[p].children[{fieldIndex}]",
+                                                                 $"value.{fieldNames[fieldIndex]}", fieldTypes[fieldIndex])));
+      updater = $@"
+        function Armada_UpdateHeapValuesWithStruct_{s.Name}(
+          h: Armada_Heap,
+          p: Armada_Pointer,
+          value: Armada_Struct_{s.Name}
+          ) : (
+          set<(Armada_Pointer, Armada_PrimitiveValue)>
+          )
+        {{
+          if Armada_ValidPointerToObjectType(h, p, Armada_StructType_{s.Name}()) then
+            {updates}
+          else
+            {{ }}
+        }}
+      ";
+      declCollector.AddItem(updater);
     }
 
-    public void GenerateStructDatatypesAndFunctions(ModuleDefinition m, ArmadaStructs structs,
-                                                    List<MemberDecl> newDefaultClassDecls, List<TopLevelDecl> newTopLevelDecls)
+    public void GenerateStructDatatypesAndFunctions(ArmadaStructs structs, DeclCollector declCollector)
     {
-      GenerateStructAllocatedByFunctions(m, structs, newDefaultClassDecls, newTopLevelDecls);
-      var structTypes = new List<string> { "Armada_StructTypeNone" };
-      var structFieldTypes = new List<string> { "Armada_FieldTypeNone" };
-      GenerateStructDatatypes(m, structs, newTopLevelDecls, structTypes, structFieldTypes);
-
-      var dtDecl = AH.MakeDatatypeDecl(m, "Armada_FieldType",
-                                       structFieldTypes.Select(s => AH.MakeDatatypeCtor(s, new List<Formal>())).ToList());
-      newTopLevelDecls.Add(dtDecl);
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_StructType",
-                                   structTypes.Select(s => AH.MakeDatatypeCtor(s, new List<Formal>())).ToList());
-      newTopLevelDecls.Add(dtDecl);
-
-      var synDecl = AH.MakeTypeSynonymDecl(m, "Armada_ObjectType",
-                                           new UserDefinedType(Token.NoToken, "Armada_ObjectTypeGeneric",
-                                                               new List<Type> { AH.ReferToType("Armada_StructType") }));
-      newTopLevelDecls.Add(synDecl);
-
-      synDecl = AH.MakeTypeSynonymDecl(m, "Armada_Field",
-                                       new UserDefinedType(Token.NoToken, "Armada_FieldGeneric",
-                                                           new List<Type> { AH.ReferToType("Armada_FieldType") }));
-      newTopLevelDecls.Add(synDecl);
-
-      synDecl = AH.MakeTypeSynonymDecl(m, "Armada_Node",
-                                       new UserDefinedType(Token.NoToken, "Armada_NodeGeneric",
-                                                           new List<Type> { AH.ReferToType("Armada_StructType"),
-                                                                            AH.ReferToType("Armada_FieldType") }));
-      newTopLevelDecls.Add(synDecl);
-
-      synDecl = AH.MakeTypeSynonymDecl(m, "Armada_Heap",
-                                       new UserDefinedType(Token.NoToken, "Armada_HeapGeneric",
-                                                           new List<Type> { AH.ReferToType("Armada_StructType"),
-                                                                            AH.ReferToType("Armada_FieldType") }));
-      newTopLevelDecls.Add(synDecl);
-
-      synDecl = AH.MakeTypeSynonymDecl(m, "Armada_Tree",
-                                       AH.MakeMapType("Armada_Pointer",
-                                                      new UserDefinedType(Token.NoToken, "Armada_NodeGeneric",
-                                                                          new List<Type> {
-                                                                            AH.ReferToType("Armada_StructType"),
-                                                                            AH.ReferToType("Armada_FieldType")
-                                                                          })));
-      newTopLevelDecls.Add(synDecl);
-
-      var fnDef = @"
-    predicate Armada_TreeProperties(tree:Armada_Tree)
-    {
-        && Armada_TreeForestProperties(tree)
-        && Armada_TreeStructProperties(tree)
-        && Armada_TreeArrayProperties(tree)
-        && Armada_TreePrimitiveProperties(tree)
-    }
-          ";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "Armada_TreeProperties", fnDef));
-
-      fnDef = @"
-    predicate Armada_HeapInvariant(h:Armada_Heap)
-    {
-        // There's no overlap between valid and freed pointers
-        && h.valid * h.freed == {}
-
-        // The special pointer value 0 is always freed, so it's never valid
-        && 0 in h.freed
-
-        // This seems redundant, given the above two, but Dafny has a hard time deducing this without it being in the invariant
-        && !(0 in h.valid)
-
-        && Armada_TreeProperties(h.tree)
-
-        // Every pointer has the same validity as its parent. So, every tree in the forest has the
-        // same validity for all its pointers.
-        && (forall p {:trigger Armada_TriggerPointer(p)} ::
-                Armada_TriggerPointer(p) && p in h.tree
-                && Armada_TriggerPointer(h.tree[p].parent) && Armada_TriggerField(h.tree[p].field_of_parent)
-                  ==> (p in h.valid <==> h.tree[p].parent in h.valid))
-
-        // If a pointer is to a primitive object type, then its corresponding value matches that
-        // type.
-        && (forall p {:trigger Armada_TriggerPointer(p)} ::
-                Armada_TriggerPointer(p) && p in h.tree && h.tree[p].ty.Armada_ObjectType_primitive?
-                ==> p in h.values && Armada_PrimitiveValueMatchesType(h.values[p], h.tree[p].ty.pty))
-    }
-          ";
-      newDefaultClassDecls.Add((Predicate)AH.ParseTopLevelDecl(prog, "HeapInvariant", fnDef));
-
       foreach (var structName in structs.StructNames) {
         var s = structs.GetStruct(structName);
-
-        var h = AH.MakeNameSegment("h", "Armada_Heap");
-        var p = AH.MakeNameSegment("p", "Armada_Pointer");
-
-        var preds = new List<Expression>();
-
-        var trigger_pointer = AH.MakeApply1("Armada_TriggerPointer", p, new BoolType());
-        preds.Add(trigger_pointer);
-
-        var valid_set = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-        var valid = AH.MakeInExpr(p, valid_set);
-        preds.Add(valid);
-
-        var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-        var p_in_tree = AH.MakeInExpr(p, tree);
-        preds.Add(p_in_tree);
-
-        var node = AH.MakeSeqSelectExpr(tree, p, "Armada_Node");
-        var node_ty = AH.MakeExprDotName(node, "ty", "Armada_ObjectType");
-        var struct_type = AH.MakeNameSegment($"Armada_StructType_{structName}", "Armada_StructType");
-        var obj_type = AH.MakeApply1("Armada_ObjectType_struct", struct_type, "Armada_ObjectType");
-        var correct_obj_type = AH.MakeEqExpr(node_ty, obj_type);
-        preds.Add(correct_obj_type);
-
-        var children = AH.MakeExprDotName(node, "children", AH.MakeChildrenType());
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          var struct_field_type = AH.MakeNameSegment($"Armada_FieldType_{structName}'{fieldName}", "Armada_FieldType");
-          var field_type = AH.MakeApply1("Armada_FieldStruct", struct_field_type, "Armada_FieldStruct");
-          var trigger_field = AH.MakeApply1("Armada_TriggerField", field_type, new BoolType());
-          preds.Add(trigger_field);
-          var field_among_children = AH.MakeInExpr(field_type, children);
-          preds.Add(field_among_children);
-          var child = AH.MakeSeqSelectExpr(children, field_type, "Armada_Pointer");
-          var subpred = AH.GetInvocationOfValidPointer(h, child, fieldType);
-          if (subpred == null) {
-            AH.PrintError(prog, $"Type {fieldType} isn't a valid type to have a pointer to");
-          }
-          else {
-            preds.Add(subpred);
-          }
-        }
-        var body = AH.CombineExpressionsWithAnd(preds);
-        var pred = AH.MakePredicate($"Armada_ValidPointerToStruct_{structName}",
-                                    new List<Formal> {
-                                      AH.MakeFormal("h", "Armada_Heap"),
-                                      AH.MakeFormal("p", "Armada_Pointer")
-                                    },
-                                    body);
-        newDefaultClassDecls.Add(pred);
-
-        fnDef = $@"
-            predicate Armada_ValidPointerToStructArray_{structName}(h:Armada_Heap, p:Armada_Pointer)
-            {{
-              && Armada_TriggerPointer(p)
-              && p in h.valid
-              && p in h.tree
-              && var ty := h.tree[p].ty;
-              && ty.Armada_ObjectType_array?
-              && ty.subtype.Armada_ObjectType_struct?
-              && ty.subtype.s.Armada_StructType_{structName}?
-              && ty.sz >= 0
-              && (forall i :: 0 <= i < ty.sz ==> var idx := Armada_FieldArrayIndex(i);
-                                      && Armada_TriggerField(idx)
-                                      && idx in h.tree[p].children
-                                      && Armada_ValidPointerToStruct_{structName}(h, h.tree[p].children[idx]))
-            }}
-        ";
-        newDefaultClassDecls.Add((Predicate) AH.ParseTopLevelDecl(prog, $"Armada_ValidPointerToStructArray_{structName}", fnDef));
-
-        fnDef = $@"
-            predicate Armada_ValidPointerToStructSizedArray_{structName}(h:Armada_Heap, p:Armada_Pointer, sz:int)
-            {{
-              && Armada_TriggerPointer(p)
-              && Armada_ValidPointerToStructArray_{structName}(h, p)
-              && h.tree[p].ty.sz == sz >= 0
-            }}
-        ";
-        newDefaultClassDecls.Add((Predicate) AH.ParseTopLevelDecl(prog, $"Armada_ValidPointerToStructArray_{structName}", fnDef));
-
-        var constructor_params = new List<Expression>();
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          var struct_field_type = AH.MakeNameSegment($"Armada_FieldType_{structName}'{fieldName}", "Armada_FieldType");
-          var field_type = AH.MakeApply1("Armada_FieldStruct", struct_field_type, "Armada_FieldStruct");
-          var child = AH.MakeSeqSelectExpr(children, field_type, "Armada_Pointer");
-          var dereferenced_child = AH.GetInvocationOfDereferencePointer(h, child, fieldType);
-          if (dereferenced_child == null) {
-            AH.PrintError(prog, $"Type {fieldType} is an invalid type to have in a struct");
-          }
-          else {
-            constructor_params.Add(dereferenced_child);
-          }
-        }
-        var constructed_value = AH.SetExprType(new ApplySuffix(Token.NoToken,
-                                                               AH.MakeNameSegment($"Armada_Struct_{structName}", (Type)null),
-                                                               constructor_params),
-                                               AH.ReferToType($"Armada_Struct_{structName}"));
-
-        var req = AH.MakeApply2($"Armada_ValidPointerToStruct_{structName}", h, p, new BoolType());
-        var fn = AH.MakeFunctionWithReq($"Armada_DereferencePointerToStruct_{structName}",
-                                        new List<Formal> {
-                                          AH.MakeFormal("h", "Armada_Heap"),
-                                          AH.MakeFormal("p", "Armada_Pointer")
-                                        },
-                                        req,
-                                        constructed_value);
-        newDefaultClassDecls.Add(fn);
-
-        fnDef = $@"
-            function Armada_DereferencePointerToStructArray_{structName}(h:Armada_Heap, p:Armada_Pointer) : seq<Armada_Struct_{structName}>
-              requires Armada_ValidPointerToStructArray_{structName}(h, p)
-            {{
-                util_collections_seqs_i.ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToStruct_{structName}(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-            }}
-        ";
-        newDefaultClassDecls.Add((Function) AH.ParseTopLevelDecl(prog, $"Armada_DereferencePointerToStructArray_{structName}", fnDef));
-
-        var value = AH.MakeNameSegment("value", $"Armada_Struct_{structName}");
-        var h_cur = h;
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          var struct_field_type = AH.MakeNameSegment($"Armada_FieldType_{structName}'{fieldName}", "Armada_FieldType");
-          var field_type = AH.MakeApply1("Armada_FieldStruct", struct_field_type, "Armada_FieldStruct");
-          var subvalue = AH.MakeExprDotName(value, fieldName, fieldType);
-          h_cur = AH.GetInvocationOfUpdateChild(h_cur, p, field_type, subvalue, fieldType);
-          if (h_cur == null) {
-            AH.PrintError(prog, $"Can't have child of type {fieldType} in structure");
-            break;
-          }
-        }
-        if (h_cur != null) {
-          fn = AH.MakeFunction($"Armada_UpdatePointerToStruct_{structName}",
-                               new List<Formal> {
-                                 AH.MakeFormal("h", "Armada_Heap"),
-                                 AH.MakeFormal("p", "Armada_Pointer"),
-                                 AH.MakeFormal("value", $"Armada_Struct_{structName}")
-                               },
-                               h_cur);
-          newDefaultClassDecls.Add(fn);
-        }
-
-        fnDef = $@"
-            function Armada_UpdateChildToStruct_{structName}(h:Armada_Heap, p:Armada_Pointer, field:Armada_Field, value:Armada_Struct_{structName}) : Armada_Heap
-            {{
-              if p in h.tree && field in h.tree[p].children then Armada_UpdatePointerToStruct_{structName}(h, h.tree[p].children[field], value) else h
-            }}
-        ";
-        newDefaultClassDecls.Add((Function) AH.ParseTopLevelDecl(prog, $"Armada_UpdateChildToStruct_{structName}", fnDef));
-
-        fnDef = $@"
-            function Armada_UpdatePointerToStructArray_{structName}(h:Armada_Heap, p:Armada_Pointer, a:seq<Armada_Struct_{structName}>) : Armada_Heap
-              decreases |a|
-            {{
-              if |a| == 0 then
-                  h
-              else
-                  var new_heap := Armada_UpdateChildToStruct_{structName}(h, p, Armada_FieldArrayIndex(|a|-1), a[|a|-1]);
-                  Armada_UpdatePointerToStructArray_{structName}(new_heap, p, a[..|a|-1])
-            }}
-        ";
-        newDefaultClassDecls.Add((Function) AH.ParseTopLevelDecl(prog, $"Armada_UpdatePointerToStructArray_{structName}", fnDef));
-
-        fnDef = $@"
-            function Armada_UpdateChildToStructArray_{structName}(h:Armada_Heap, p:Armada_Pointer, field:Armada_Field, a:seq<Armada_Struct_{structName}>) : Armada_Heap
-            {{
-              if p in h.tree && field in h.tree[p].children then Armada_UpdatePointerToStructArray_{structName}(h, h.tree[p].children[field], a) else h
-            }}
-        ";
-        newDefaultClassDecls.Add((Function) AH.ParseTopLevelDecl(prog, $"Armada_UpdateChildToStructArray_{structName}", fnDef));
-
-        var v = AH.MakeNameSegment("v", $"Armada_Struct_{structName}");
-        value = AH.MakeNameSegment("value", "Armada_PrimitiveValue");
-        var fields = AH.MakeNameSegment("fields", AH.MakeSeqType("Armada_Field"));
-        body = v;
-
-        var fields_size = AH.MakeCardinalityExpr(fields);
-        var fields_size_gt_0 = AH.MakeGtExpr(fields_size, AH.MakeZero());
-        var field0 = AH.MakeSeqSelectExpr(fields, AH.MakeZero(), "Armada_Field");
-        var fields1dotdot = AH.MakeSeqSliceExpr(fields, AH.MakeOne(), null);
-        Expression cs, v_field, v_field_updated, v_updated;
-
-        foreach (var fieldName in s.FieldNames) {
-          var fieldType = s.GetFieldType(fieldName);
-          var field0_is_struct = AH.MakeExprDotName(field0, "Armada_FieldStruct?", new BoolType());
-          var field0_f = AH.MakeExprDotName(field0, "f", "Armada_FieldType");
-          var field0_is_correct_field = AH.MakeExprDotName(field0_f, $"Armada_FieldType_{structName}'{fieldName}?", new BoolType());
-          cs = AH.CombineExpressionsWithAnd(new List<Expression>{fields_size_gt_0, field0_is_struct, field0_is_correct_field});
-          v_field = AH.MakeExprDotName(v, fieldName, fieldType);
-          v_field_updated = AH.GetInvocationOfPerformFieldUpdate(v_field, fields1dotdot, value);
-          v_updated = AH.MakeDatatypeUpdateExpr(v, fieldName, v_field_updated);
-          body = AH.MakeIfExpr(cs, v_updated, body);
-        }
-        fn = AH.MakeFunction($"Armada_PerformFieldUpdateForStruct_{structName}",
-                             new List<Formal> {
-                               AH.MakeFormal("v", $"Armada_Struct_{structName}"),
-                               AH.MakeFormal("fields", AH.MakeSeqType("Armada_Field")),
-                               AH.MakeFormal("value", "Armada_PrimitiveValue")
-                             },
-                             body);
-        newDefaultClassDecls.Add(fn);
-
-        v = AH.MakeNameSegment("v", AH.MakeSeqType($"Armada_Struct_{structName}"));
-        body = AH.MakeNameSegment("v", AH.MakeSeqType($"Armada_Struct_{structName}"));
-        var field0_is_array_index = AH.MakeExprDotName(field0, "Armada_FieldArrayIndex?", new BoolType());
-        var field0_index = AH.MakeExprDotName(field0, "i", new IntType());
-        var field0_ge_0 = AH.MakeGeExpr(field0_index, AH.MakeZero());
-        v_field = AH.MakeSeqSelectExpr(v, field0_index, $"Armada_Struct_{structName}");
-        var field0_not_too_high = AH.MakeLtExpr(field0_index, AH.MakeCardinalityExpr(v));
-        cs = AH.CombineExpressionsWithAnd(new List<Expression>{fields_size_gt_0, field0_is_array_index, field0_ge_0, field0_not_too_high});
-        v_field_updated = AH.MakeApply3($"Armada_PerformFieldUpdateForStruct_{structName}", v_field, fields1dotdot, value,
-                                        AH.MakeSeqType($"Armada_Struct_{structName}"));
-        v_updated = AH.MakeSeqUpdateExpr(v, field0_index, v_field_updated);
-        body = AH.MakeIfExpr(cs, v_updated, body);
-        fn = AH.MakeFunction($"Armada_PerformFieldUpdateForStructArray_{structName}",
-                             new List<Formal> {
-                               AH.MakeFormal("v", AH.MakeSeqType($"Armada_Struct_{structName}")),
-                               AH.MakeFormal("fields", AH.MakeSeqType("Armada_Field")),
-                               AH.MakeFormal("value", "Armada_PrimitiveValue")
-                             },
-                             body);
-        newDefaultClassDecls.Add(fn);
+        GenerateStructDatatypesAndFunctions(structs, s, declCollector);
       }
-
-      GenerateTreeStructProperties(m, structs, newDefaultClassDecls);
     }
 
-    public void GenerateTotalState(ModuleDefinition m, ArmadaSymbolTable symbols,
-                                   List<MemberDecl> newDefaultClassDecls, List<TopLevelDecl> newTopLevelDecls)
+    public void GenerateTotalState(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
       var listOfPCs = new List<ArmadaPC>{ };
       symbols.AllMethods.AppendAllPCs(listOfPCs);
-      var pcDatatypeCtors = listOfPCs.Select(x => AH.MakeDatatypeCtor(x.ToString(), new List<Formal>())).ToList();
-      var pc = AH.MakeDatatypeDecl(m, "Armada_PC", pcDatatypeCtors);
-      newTopLevelDecls.Add(pc);
+      declCollector.AddItem("datatype Armada_PC = " + String.Join(" | ", listOfPCs.Select(pc => pc.ToString())));
 
-      var listOfStackFrames = new List<DatatypeCtor>();
       foreach (var methodName in symbols.MethodNames) {
-        listOfStackFrames.Add(CreateMethodStackFrame(methodName, symbols));
+        CreateMethodStackFrame(methodName, symbols, declCollector);
       }
-      var stack = AH.MakeDatatypeDecl(m, "Armada_StackFrame", listOfStackFrames);
-      newTopLevelDecls.Add(stack);
+      declCollector.AddItem(
+        "datatype Armada_StackFrame = "
+        + String.Join(" | ", symbols.MethodNames.Select(methodName =>
+                                                        $"Armada_StackFrame_{methodName}({methodName}: Armada_StackVars_{methodName})"))
+      );
 
-      List<Formal> globalFields = new List<Formal>();
-      List<Formal> addrFields = new List<Formal>();
-      List<Formal> ghostFields = new List<Formal>();
-      List<DatatypeCtor> staticGlobalVars = new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_GlobalStaticVarNone", new List<Formal>()) };
+      List<string> globalFields = new List<string>();
+      List<string> addrFields = new List<string>();
+      List<string> ghostFields = new List<string>();
+      var staticGlobalVars = "datatype Armada_GlobalStaticVar = Armada_GlobalStaticVarNone";
       foreach (var varName in symbols.Globals.VariableNames) {
         var v = symbols.Globals.Lookup(varName);
         if (v is GlobalUnaddressableArmadaVariable) {
-          globalFields.Add(AH.MakeFormal(varName, symbols.FlattenType(v.ty)));
-          staticGlobalVars.Add(AH.MakeDatatypeCtor($"Armada_GlobalStaticVar_{varName}", new List<Formal>()));
+          globalFields.Add($"{varName}: {symbols.FlattenType(v.ty)}");
+          staticGlobalVars += $" | Armada_GlobalStaticVar_{varName}";
         }
         else if (v is GlobalAddressableArmadaVariable) {
-          addrFields.Add(AH.MakeFormal(varName, AH.ReferToType("Armada_Pointer")));
+          addrFields.Add($"{varName}: Armada_Pointer");
         }
         else if (v is GlobalGhostArmadaVariable) {
-          ghostFields.Add(AH.MakeFormal(varName, symbols.FlattenType(v.ty)));
+          ghostFields.Add($"{varName}: {symbols.FlattenType(v.ty)}");
         }
         else {
           AH.PrintError(prog, "Internal error:  variable of unexpected type");
         }
       }
 
-      var dtDecl = AH.MakeDatatypeDecl(m, "Armada_Globals", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_Globals", globalFields) });
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem("datatype Armada_Globals = Armada_Globals(" + String.Join(", ", globalFields) + ")");
+      declCollector.AddItem(staticGlobalVars);
+      declCollector.AddItem("datatype Armada_Ghosts = Armada_Ghosts(" + String.Join(", ", ghostFields) + ")");
+      declCollector.AddItem("datatype Armada_Addrs = Armada_Addrs(" + String.Join(", ", addrFields) + ")");
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_GlobalStaticVar", staticGlobalVars);
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem(@"
+        datatype Armada_StoreBufferLocation = Armada_StoreBufferLocation_Unaddressable(v: Armada_GlobalStaticVar, fields: seq<int>)
+                                            | Armada_StoreBufferLocation_Addressable(p: Armada_Pointer)
+      ");
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_Ghosts", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_Ghosts", ghostFields) });
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem(@"
+        datatype Armada_StoreBufferEntry = Armada_StoreBufferEntry(loc: Armada_StoreBufferLocation, value: Armada_PrimitiveValue,
+                                                                   pc: Armada_PC)
+      ");
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_Addrs", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_Addrs", addrFields) });
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem("datatype Armada_SharedMemory = Armada_SharedMemory(heap: Armada_Heap, globals: Armada_Globals)");
+      declCollector.AddItem(@"
+        datatype Armada_ExtendedFrame =
+          Armada_ExtendedFrame(return_pc: Armada_PC, frame: Armada_StackFrame, new_ptrs:set<Armada_Pointer>)
+      ");
+      declCollector.AddItem(@"
+        datatype Armada_Thread = Armada_Thread(pc: Armada_PC, top: Armada_StackFrame, new_ptrs: set<Armada_Pointer>,
+                                               stack: seq<Armada_ExtendedFrame>, storeBuffer: seq<Armada_StoreBufferEntry>)
+      ");
+      declCollector.AddItem(@"
+        datatype Armada_TotalState = Armada_TotalState(stop_reason: Armada_StopReason, threads: map<Armada_ThreadHandle, Armada_Thread>,
+                                                       mem: Armada_SharedMemory, ghosts: Armada_Ghosts, addrs: Armada_Addrs,
+                                                       joinable_tids: set<Armada_ThreadHandle>)
+      ");
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_StoreBufferLocation", new List<DatatypeCtor> {
-          AH.MakeDatatypeCtor("Armada_StoreBufferLocation_Unaddressable",
-                              new List<Formal> { AH.MakeFormal("v", "Armada_GlobalStaticVar"),
-                                                 AH.MakeFormal("fields", new SeqType(AH.ReferToType("Armada_Field"))) }),
-          AH.MakeDatatypeCtor("Armada_StoreBufferLocation_Addressable",
-                              new List<Formal> { AH.MakeFormal("p", "Armada_Pointer") })
-        });
-      newTopLevelDecls.Add(dtDecl);
+      GenerateAddressableStaticVariablesPredicates(symbols, declCollector);
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_StoreBufferEntry", new List<DatatypeCtor> {
-          AH.MakeDatatypeCtor("Armada_StoreBufferEntry",
-                              new List<Formal> { AH.MakeFormal("loc", "Armada_StoreBufferLocation"),
-                                                 AH.MakeFormal("value", "Armada_PrimitiveValue") })
-        });
-      newTopLevelDecls.Add(dtDecl);
+      GenerateInitPredicate(symbols, declCollector);
 
-      var memFormals = new List<Formal>();
-      memFormals.Add(AH.MakeFormal("heap", "Armada_Heap"));
-      memFormals.Add(AH.MakeFormal("globals", "Armada_Globals"));
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_SharedMemory", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_SharedMemory", memFormals) });
-      newTopLevelDecls.Add(dtDecl);
+      GenerateIsNonyieldingPCPredicate(symbols, declCollector);
 
-      var extendedFrameFormals = new List<Formal>();
-      extendedFrameFormals.Add(AH.MakeFormal("return_pc", "Armada_PC"));
-      extendedFrameFormals.Add(AH.MakeFormal("frame", "Armada_StackFrame"));
-      extendedFrameFormals.Add(AH.MakeFormal("new_ptrs", AH.MakePointerSetType()));
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_ExtendedFrame", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_ExtendedFrame", extendedFrameFormals) });
-      newTopLevelDecls.Add(dtDecl);
+      GenerateNextBodies(symbols, declCollector);
 
-      var threadFormals = new List<Formal>();
-      threadFormals.Add(AH.MakeFormal("pc", "Armada_PC"));
-      threadFormals.Add(AH.MakeFormal("top", "Armada_StackFrame"));
-      threadFormals.Add(AH.MakeFormal("new_ptrs", AH.MakePointerSetType()));
-      threadFormals.Add(AH.MakeFormal("stack", AH.MakeStackType()));
-      threadFormals.Add(AH.MakeFormal("storeBuffer", AH.MakeStoreBufferType()));
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_Thread", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_Thread", threadFormals) });
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem(@"
+        function Armada_UpdatePC(s:Armada_TotalState, tid:Armada_ThreadHandle, pc:Armada_PC) : Armada_TotalState
+          requires tid in s.threads
+        {
+          s.(threads := s.threads[tid := s.threads[tid].(pc := pc)])
+        }
+      ");
 
-      var totalFormals = new List<Formal>();
-      totalFormals.Add(AH.MakeFormal("stop_reason", "Armada_StopReason"));
-      totalFormals.Add(AH.MakeFormal("threads", AH.MakeThreadsType()));
-      totalFormals.Add(AH.MakeFormal("mem", "Armada_SharedMemory"));
-      totalFormals.Add(AH.MakeFormal("ghosts", "Armada_Ghosts"));
-      totalFormals.Add(AH.MakeFormal("addrs", "Armada_Addrs"));
+      declCollector.AddItem(@"
+        function Armada_UpdateTSFrame(s:Armada_TotalState, tid:Armada_ThreadHandle, frame:Armada_StackFrame) : Armada_TotalState
+          requires tid in s.threads
+        {
+          s.(threads := s.threads[tid := s.threads[tid].(top := frame)])
+        }
+      ");
 
-      dtDecl = AH.MakeDatatypeDecl(m, "Armada_TotalState", new List<DatatypeCtor> { AH.MakeDatatypeCtor("Armada_TotalState", totalFormals) });
-      newTopLevelDecls.Add(dtDecl);
+      declCollector.AddItem(@"
+        function Armada_StoreBufferAppend(buf:seq<Armada_StoreBufferEntry>, entry:Armada_StoreBufferEntry) : seq<Armada_StoreBufferEntry>
+        {
+          buf + [entry]
+        }
+      ");
 
-      GenerateAddressableStaticVariablesPredicates(m, symbols, newDefaultClassDecls);
-
-      GenerateInitPredicate(m, symbols, newTopLevelDecls, newDefaultClassDecls);
-
-      GenerateIsNonyieldingPCPredicate(m, symbols, newDefaultClassDecls);
-
-      GenerateNextBodies(m, symbols, newTopLevelDecls, newDefaultClassDecls);
-
-      string str = @"
-          function Armada_UpdatePC(s:Armada_TotalState, tid:Armada_ThreadHandle, pc:Armada_PC) : Armada_TotalState
-            requires tid in s.threads
-          {
-            s.(threads := s.threads[tid := s.threads[tid].(pc := pc)])
-          }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_UpdatePC", str));
-
-      str = @"
-          function Armada_UpdateTSFrame(s:Armada_TotalState, tid:Armada_ThreadHandle, frame:Armada_StackFrame) : Armada_TotalState
-            requires tid in s.threads
-          {
-            s.(threads := s.threads[tid := s.threads[tid].(top := frame)])
-          }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_UpdateTSFrame", str));
-
-      str = @"
-          function Armada_StoreBufferAppend(buf:seq<Armada_StoreBufferEntry>, entry:Armada_StoreBufferEntry) : seq<Armada_StoreBufferEntry>
-          {
-            buf + [entry]
-          }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_AppendToThreadStoreBuffer", str));
-
-      str = @"
-          function Armada_AppendToThreadStoreBuffer(s:Armada_TotalState, tid:Armada_ThreadHandle, entry:Armada_StoreBufferEntry)
-            : Armada_TotalState
-            requires tid in s.threads
-          {
-            s.(threads := s.threads[tid := s.threads[tid].(storeBuffer := Armada_StoreBufferAppend(s.threads[tid].storeBuffer, entry))])
-          }
-      ";
-      newDefaultClassDecls.Add((Function)AH.ParseTopLevelDecl(prog, "Armada_AppendToThreadStoreBuffer", str));
+      declCollector.AddItem(@"
+        function Armada_AppendToThreadStoreBuffer(s:Armada_TotalState, tid:Armada_ThreadHandle, entry:Armada_StoreBufferEntry)
+          : Armada_TotalState
+          requires tid in s.threads
+        {
+          s.(threads := s.threads[tid := s.threads[tid].(storeBuffer := Armada_StoreBufferAppend(s.threads[tid].storeBuffer, entry))])
+        }
+      ");
     }
 
-    public void TranslateGlobalInvariants(ModuleDefinition m, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls,
-                                          List<TopLevelDecl> newTopLevelDecls)
+    public void TranslateGlobalInvariants(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
       foreach (var globalInvariant in symbols.GlobalInvariants.Values) {
         var gid = globalInvariant.Decl;
         var failureReporter = new SimpleFailureReporter(prog);
-        var context = new GlobalInvariantResolutionContext(s, symbols, failureReporter, null);
+        var context = new GlobalInvariantResolutionContext("s", symbols, failureReporter, null);
         var bodyRValue = context.ResolveAsRValue(gid.Body);
         if (!failureReporter.Valid)
         {
           continue;
         }
 
-        var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-        var not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-        Expression antecedent = not_stopped;
+        var antecedent = "s.stop_reason.Armada_NotStopped?";
         if (bodyRValue.CanCauseUndefinedBehavior) {
-          antecedent = AH.MakeAndExpr(antecedent, bodyRValue.UndefinedBehaviorAvoidance.Expr);
+          antecedent = $"{antecedent} && ({bodyRValue.UndefinedBehaviorAvoidance.Expr})";
         }
-        var body = AH.MakeImpliesExpr(antecedent, bodyRValue.Val);
 
-        var predName = $"Armada_GlobalInv_{gid.Name}";
-        var formals = new List<Formal> { AH.MakeFormal("s", "Armada_TotalState") };
-        var pred = AH.MakePredicate(predName, formals, body);
-        newDefaultClassDecls.Add(pred);
-
-        globalInvariant.TranslatedName = predName;
+        globalInvariant.TranslatedName = $"Armada_GlobalInv_{gid.Name}";
+        declCollector.AddItem($@"
+          predicate {globalInvariant.TranslatedName}(s: Armada_TotalState)
+          {{
+            {antecedent} ==> ({bodyRValue.Val})
+          }}
+        ");
       }
     }
 
-    public void TranslateYieldPredicates(ModuleDefinition m, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls,
-                                         List<TopLevelDecl> newTopLevelDecls)
+    public void TranslateYieldPredicates(ArmadaSymbolTable symbols, DeclCollector declCollector)
     {
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
-      var s_prime = AH.MakeNameSegment("s'", "Armada_TotalState");
-
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var threads_prime = AH.MakeExprDotName(s_prime, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      var tid_in_threads_prime = AH.MakeInExpr(tid, threads_prime);
-      var req = AH.MakeAndExpr(tid_in_threads, tid_in_threads_prime);
-
       foreach (var yieldPredicate in symbols.YieldPredicates.Values) {
         var yd = yieldPredicate.Decl;
         var failureReporter = new SimpleFailureReporter(prog);
-        var context = new YieldPredicateResolutionContext(s, s_prime, tid, symbols, failureReporter, null);
+        var context = new YieldPredicateResolutionContext("s", "s'", "tid", symbols, failureReporter, null);
         var rvalue = context.ResolveAsRValue(yd.Body);
         if (!failureReporter.Valid)
         {
           continue;
         }
-        var body = rvalue.CanCauseUndefinedBehavior ? AH.MakeImpliesExpr(rvalue.UndefinedBehaviorAvoidance.Expr, rvalue.Val) : rvalue.Val;
 
-        var predName = $"Armada_YieldPredicate_{yd.Name}";
-        var formals = new List<Formal> { AH.MakeFormal("s", "Armada_TotalState"),
-                                         AH.MakeFormal("s'", "Armada_TotalState"),
-                                         AH.MakeFormal("tid", "Armada_ThreadHandle") };
-        var pred = AH.MakePredicateWithReq(predName, formals, req, body);
-        newDefaultClassDecls.Add(pred);
-
-        yieldPredicate.TranslatedName = predName;
+        var body = rvalue.CanCauseUndefinedBehavior ? $"({rvalue.UndefinedBehaviorAvoidance.Expr}) ==> ({rvalue.Val})" : rvalue.Val;
+        yieldPredicate.TranslatedName = $"Armada_YieldPredicate_{yd.Name}";
+        declCollector.AddItem($@"
+          predicate {yieldPredicate.TranslatedName}(s: Armada_TotalState, s': Armada_TotalState, tid: Armada_ThreadHandle)
+            requires tid in s.threads
+            requires tid in s'.threads
+          {{
+            {body}
+          }}
+        ");
       }
+    }
+
+    public void TranslateUniversalStepConstraints(ArmadaSymbolTable symbols, DeclCollector declCollector)
+    {
+      string body;
+
+      foreach (var stepConstraint in symbols.UniversalStepConstraints.Values)
+      {
+        var usc = stepConstraint.Decl;
+
+        if (usc.Body == null) {
+          stepConstraint.TranslatedName = $"Armada_UniversalStepConstraint_{usc.Name}";
+          declCollector.AddItem($@"
+            predicate {stepConstraint.TranslatedName}(s: Armada_TotalState, tid: Armada_ThreadHandle)
+              requires tid in s.threads
+            {{
+              var threads := s.threads;
+              var globals := s.mem.globals;
+              var ghosts := s.ghosts;
+              { usc.Code }
+            }}
+          ");
+          continue;
+        }
+        
+        var failureReporter = new SimpleFailureReporter(prog);
+        var context = new RequiresResolutionContext("s", "tid", null, symbols, failureReporter, null);
+        var rvalue = context.ResolveAsRValue(usc.Body);
+        if (!failureReporter.Valid)
+        {
+          continue;
+        }
+
+        body = rvalue.CanCauseUndefinedBehavior ? $"({rvalue.UndefinedBehaviorAvoidance.Expr}) && ({rvalue.Val})" : rvalue.Val;
+        stepConstraint.TranslatedName = $"Armada_UniversalStepConstraint_{usc.Name}";
+        declCollector.AddItem($@"
+          predicate {stepConstraint.TranslatedName}(s: Armada_TotalState, tid: Armada_ThreadHandle)
+            requires tid in s.threads
+          {{
+            {body}
+          }}
+        ");
+      }
+
+      body = AH.CombineStringsWithAnd(symbols.UniversalStepConstraints.Values.Select(sc => $"{sc.TranslatedName}(s, tid)"));
+      declCollector.AddItem($@"
+        predicate Armada_UniversalStepConstraint(s: Armada_TotalState, tid: Armada_ThreadHandle)
+          requires tid in s.threads
+        {{
+          {body}
+        }}
+      ");
     }
 
     public void RemoveProofElements(ModuleDefinition m)
@@ -1866,22 +1350,31 @@ namespace Microsoft.Armada {
           structs.AddRefinementConstraint(((RefinementConstraintDecl)d).Body);
         }
       }
+      if (!CheckForConcreteStructDefinitions(structs)) {
+        return;
+      }
       if (!CheckForCyclicStructDefinitions(structs)) {
         return;
       }
 
       // Create m.ArmadaTranslation to hold state-machine translation.
 
-      var newTopLevelDecls = new List<TopLevelDecl>();
-      var newDefaultClassDecls = new List<MemberDecl>();
+      var declCollector = new DeclCollector(prog);
 
-      CopyMathematicalDefaultClassMembers(defaultClass, newDefaultClassDecls);
-      CopyMathematicalTopLevelDecls(m, newTopLevelDecls);
+      declCollector.CopyMathematicalDefaultClassMembers(defaultClass);
+      declCollector.CopyMathematicalTopLevelDecls(m);
       m.ArmadaStructs = structs;
-      m.ArmadaTranslation = new ModuleDefinition(Token.NoToken, m.Name, new List<IToken>(), false, false, false, null, m.Module /* parent */, null, false);
+      m.ArmadaTranslation = new ModuleDefinition(Token.NoToken, m.Name, new List<IToken>(), false, false, false, null,
+                                                 m.Module /* parent */, null, false);
       m.ArmadaIncludes = new List<string>();
-      m.ArmadaIncludes.Add(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/ArmadaCommonDefinitions.dfy");
       m.ArmadaIncludes.Add(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy");
+      foreach (var include in m.Module.Includes)
+      {
+        if (include.includerFilename == prog.Name && include.includedFullPath.EndsWith(".dfy"))
+        {
+          m.ArmadaIncludes.Add(include.includedFilename);
+        }
+      }
 
       // Start using m.ArmadaTranslation as our new module definition.
 
@@ -1889,19 +1382,18 @@ namespace Microsoft.Armada {
 
       // Generate the struct-related datatypes and all their attendant definitions
 
-      GenerateStructDatatypesAndFunctions(m, structs, newDefaultClassDecls, newTopLevelDecls);
+      GenerateStructDatatypesAndFunctions(structs, declCollector);
 
       // Add headers to the new module.
 
-      m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("ArmadaCommonDefinitions", m, true));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_collections_maps_i", m, false));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_collections_seqs_i", m, false));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_option_s", m, false));
 
       // Add all the definitions we've created to the module.
 
-      m.TopLevelDecls.Add(new DefaultClassDecl(m, newDefaultClassDecls));
-      m.TopLevelDecls.AddRange(newTopLevelDecls);
+      m.TopLevelDecls.Add(new DefaultClassDecl(m, declCollector.NewDefaultClassDecls));
+      m.TopLevelDecls.AddRange(declCollector.NewTopLevelDecls);
     }
 
     private void CreateStateMachineTranslation(ModuleDefinition m)
@@ -1930,19 +1422,26 @@ namespace Microsoft.Armada {
 
       // Create m.ArmadaTranslation to hold state-machine translation.
 
-      var newTopLevelDecls = new List<TopLevelDecl>();
-      var newDefaultClassDecls = new List<MemberDecl>();
+      var declCollector = new DeclCollector(prog);
 
-      CopyMathematicalDefaultClassMembers(symbols.DefaultClass, newDefaultClassDecls);
-      CopyMathematicalTopLevelDecls(m, newTopLevelDecls);
+      declCollector.CopyMathematicalDefaultClassMembers(symbols.DefaultClass);
+      declCollector.CopyMathematicalTopLevelDecls(m);
+
       m.ArmadaSymbols = symbols;
-      m.ArmadaTranslation = new ModuleDefinition(Token.NoToken, m.Name, new List<IToken>(), false, false, false, null, m.Module /* parent */, null, false);
+      m.ArmadaTranslation = new ModuleDefinition(Token.NoToken, m.Name, new List<IToken>(), false, false, false, null,
+                                                 m.Module /* parent */, null, false);
       m.ArmadaIncludes = new List<string>();
-      m.ArmadaIncludes.Add(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/ArmadaCommonDefinitions.dfy");
       m.ArmadaIncludes.Add(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy");
       m.ArmadaIncludes.Add(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/spec/refinement.s.dfy");
       if (symbols.StructsModuleName != null) {
         m.ArmadaIncludes.Add($"{symbols.StructsModuleName}.dfy");
+      }
+      foreach (var include in m.Module.Includes)
+      {
+        if (include.includerFilename == prog.Name && include.includedFullPath.EndsWith(".dfy"))
+        {
+          m.ArmadaIncludes.Add(include.includedFilename);
+        }
       }
 
       // Copy the default class members into symbols.DefaultClass, then remove all the methods from m,
@@ -1956,34 +1455,31 @@ namespace Microsoft.Armada {
 
       // Create definitions for methods' next routines
 
-      ProcessMethods(symbols, newDefaultClassDecls, newTopLevelDecls);
-      CreateTauNext(symbols, newDefaultClassDecls);
-      GenerateEnablingConditions(symbols, newDefaultClassDecls);
+      ProcessMethods(symbols, declCollector);
+      CreateTauNext(symbols, declCollector);
+      GenerateEnablingConditions(symbols, declCollector);
 
       // Generate the total state datatype and all its attendant definitions
 
-      GenerateTotalState(m, symbols, newDefaultClassDecls, newTopLevelDecls);
+      GenerateTotalState(symbols, declCollector);
 
-      // Translate global invariants and yield predicates
+      // Translate global invariants, yield predicates, and universal step constraints
 
-      TranslateGlobalInvariants(m, symbols, newDefaultClassDecls, newTopLevelDecls);
-      TranslateYieldPredicates(m, symbols, newDefaultClassDecls, newTopLevelDecls);
+      TranslateGlobalInvariants(symbols, declCollector);
+      TranslateYieldPredicates(symbols, declCollector);
+      TranslateUniversalStepConstraints(symbols, declCollector);
 
       // Add headers to the new module.
 
-      m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("ArmadaCommonDefinitions", m, true));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_collections_maps_i", m, false));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_collections_seqs_i", m, false));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("util_option_s", m, false));
       m.TopLevelDecls.Add(AH.MakeAliasModuleDecl("GeneralRefinementModule", m, false));
-      if (symbols.StructsModuleName != null) {
-        m.TopLevelDecls.Add(AH.MakeAliasModuleDecl(symbols.StructsModuleName, m, true));
-      }
 
       // Add all the definitions we've created to the module.
 
-      m.TopLevelDecls.Add(new DefaultClassDecl(m, newDefaultClassDecls));
-      m.TopLevelDecls.AddRange(newTopLevelDecls);
+      m.TopLevelDecls.Add(new DefaultClassDecl(m, declCollector.NewDefaultClassDecls));
+      m.TopLevelDecls.AddRange(declCollector.NewTopLevelDecls);
     }
 
     private bool CheckTypeReferenceCompilationCompatible(ArmadaSymbolTable symbols, Type type) {
@@ -2042,6 +1538,7 @@ namespace Microsoft.Armada {
           if (symbols.Lookup(methodName, varName) is AddressableArmadaVariable) {
             // Either access to addressable local variable, or any global variable
             // is counted as access to shared memory
+            ++ memoryAccess;
           }
           break;
         case LiteralExpr literal:
@@ -2069,11 +1566,18 @@ namespace Microsoft.Armada {
             BinaryExpr.ResolvedOpcode.Gt, BinaryExpr.ResolvedOpcode.Ge,
             BinaryExpr.ResolvedOpcode.Add, BinaryExpr.ResolvedOpcode.Sub,
             BinaryExpr.ResolvedOpcode.Mul, BinaryExpr.ResolvedOpcode.Div,
-            BinaryExpr.ResolvedOpcode.Mod};
+            BinaryExpr.ResolvedOpcode.Mod, BinaryExpr.ResolvedOpcode.LeftShift,
+            BinaryExpr.ResolvedOpcode.RightShift, BinaryExpr.ResolvedOpcode.BitwiseAnd,
+            BinaryExpr.ResolvedOpcode.BitwiseOr, BinaryExpr.ResolvedOpcode.BitwiseXor
+          };
           if (! allowedList.Contains(binary.ResolvedOp)) {
             AH.PrintWarning(prog, expr.tok, $"Binary Operator {binary.ResolvedOp} is not compilation-compatible");
             compatible = false;
           }
+          break;
+        case ConversionExpr _:
+          break;
+        case ITEExpr _:
           break;
         case ApplySuffix AS:
           /* I don't know why this is not filled with resolution results... */
@@ -2145,13 +1649,19 @@ namespace Microsoft.Armada {
       }
 
       if (expr is MeExpr) {
-        // FIXME
-        return true;
+        return false;
       }
 
       if (expr is StoreBufferEmptyExpr) {
-        // FIXME
-        return true;
+        return false;
+      }
+
+      if (expr is TotalStateExpr) {
+        return false;
+      }
+
+      if (expr is IfUndefinedExpr) {
+        return false;
       }
 
       if (expr is IdentifierExpr) {
@@ -2351,12 +1861,13 @@ namespace Microsoft.Armada {
       return CheckExprAtomic(methodSymbolTable.InputVariableNames.Concat(globalGhostVariables).Concat(symbols.AllFunctions), expr);
     }
 
-    private bool CheckMethodCompilationCompatible(ArmadaSymbolTable symbols, string methodName, MethodInfo methodInfo, ArmadaSingleMethodSymbolTable methodSymbols) {
+    private bool CheckMethodCompilationCompatible(ArmadaSymbolTable symbols, string methodName, MethodInfo methodInfo,
+                                                  ArmadaSingleMethodSymbolTable methodSymbols) {
       bool compatible = true;
 
       // checking return arguments
       if (methodInfo.method.Outs.Count > 1) {
-        AH.PrintWarning(prog, methodInfo.method.tok, $"Method {methodInfo.method.Name} have more than one return values");
+        AH.PrintWarning(prog, methodInfo.method.tok, $"Method {methodInfo.method.Name} has more than one return value");
         compatible = false;
       }
 
@@ -2386,7 +1897,7 @@ namespace Microsoft.Armada {
         }
         switch (stmt.Stmt) {
           case SomehowStmt somehow:
-            AH.PrintWarning(prog, somehow.Tok, "Somehow statement is not compilation-compatible");
+            AH.PrintWarning(prog, somehow.Tok, "Somehow statements aren't compilation-compatible");
             compatible = false;
             break;
 
@@ -2400,7 +1911,7 @@ namespace Microsoft.Armada {
               compatible = false;
             }
             if (update.BypassStoreBuffers) {
-              AH.PrintWarning(prog, update.Tok, "TSO-bypassing update is not compilation-compatible");
+              AH.PrintWarning(prog, update.Tok, "TSO-bypassing updates aren't compilation-compatible");
               compatible = false;
             }
             break;
@@ -2426,33 +1937,39 @@ namespace Microsoft.Armada {
               }
             }
             else if (varDecl.Update != null) {
-              AH.PrintWarning(prog, varDecl.Tok, "non-update initialization is not compilation-compatible");
+              AH.PrintWarning(prog, varDecl.Tok, "Non-update initializations aren't compilation-compatible");
               compatible = false;
             }
             if (varDecl.BypassStoreBuffers) {
-              AH.PrintWarning(prog, varDecl.Tok, "TSO-bypassing initialization is not compilation-compatible");
+              AH.PrintWarning(prog, varDecl.Tok, "TSO-bypassing initializations aren't compilation-compatible");
               compatible = false;
             }
             if (! initStage) {
-              AH.PrintWarning(prog, varDecl.Tok, "Declaration of variables at non-entry locations is not supported");
+              AH.PrintWarning(prog, varDecl.Tok, "Declaration of variables at non-entry locations isn't supported");
               compatible = false;
             }
             break;
           case ExplicitYieldBlockStmt atomic:
-            AH.PrintWarning(prog, atomic.Tok, "Explicit-yield block is not compilation-compatible");
+            AH.PrintWarning(prog, atomic.Tok, "Explicit-yield blocks aren't compilation-compatible");
             compatible = false;
             break;
           case YieldStmt yieldStmt:
-            AH.PrintWarning(prog, yieldStmt.Tok, "Yield statement is not compilation-compatible");
+            AH.PrintWarning(prog, yieldStmt.Tok, "Yield statements aren't compilation-compatible");
             compatible = false;
             break;
           case AssertStmt assert:
-            AH.PrintWarning(prog, assert.Tok, "Assert statement is not compilation-compatible");
+            AH.PrintWarning(prog, assert.Tok, "Assert statements aren't compilation-compatible");
             compatible = false;
             break;
           case AssumeStmt assume:
-            AH.PrintWarning(prog, assume.Tok, "Assume statement is not compilation-compatible");
+            AH.PrintWarning(prog, assume.Tok, "Assume statements aren't compilation-compatible");
             compatible = false;
+            break;
+          case WhileStmt whileStmt:
+            if (whileStmt.Invariants.Any()) {
+              AH.PrintWarning(prog, whileStmt.Tok, "Invariants on while statements aren't compilation-compatible");
+              compatible = false;
+            }
             break;
         }
         initStage = initStage && (stmt.Stmt is VarDeclStmt || stmt.Stmt is BlockStmt);
@@ -2463,6 +1980,12 @@ namespace Microsoft.Armada {
 
     private bool CheckCompilationCompatible(ArmadaSymbolTable symbols) {
       bool compatible = true;
+
+      foreach (var stepConstraint in symbols.UniversalStepConstraints.Values)
+      {
+        AH.PrintWarning(prog, stepConstraint.Decl.tok, "Universal step constraints aren't compilation-compatible");
+        compatible = false;
+      }
 
       // check all structs
       foreach (var structName in symbols.StructNames) {
@@ -2502,24 +2025,6 @@ namespace Microsoft.Armada {
             return;
           }
           prog.CompileModules.Add(m);
-        }
-      }
-    }
-
-    private void CopyMathematicalDefaultClassMembers(ClassDecl defaultClass, List<MemberDecl> newDefaultClassDecls)
-    {
-      foreach (var m in defaultClass.Members) {
-        if (m is Function || m is Lemma && ! m.Name.StartsWith("reveal_")) { // fix for duplicate export of opaque functions
-          newDefaultClassDecls.Add(m);
-        }
-      }
-    }
-
-    private void CopyMathematicalTopLevelDecls(ModuleDefinition m, List<TopLevelDecl> newTopLevelDecls)
-    {
-      foreach (var d in m.TopLevelDecls) {
-        if (d is DatatypeDecl || d is NewtypeDecl || d is TypeSynonymDecl) {
-          newTopLevelDecls.Add(d);
         }
       }
     }

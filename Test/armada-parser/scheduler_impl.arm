@@ -3,9 +3,6 @@ include "../../Armada/ArmadaCommonDefinitions.dfy"
 include "../../Armada/option.s.dfy"
 
 level impl_level {
-    import opened ArmadaCommonDefinitions
-	import opened util_option_s
-
     type Tid = uint64
     
     type Mutex = Option<Tid>

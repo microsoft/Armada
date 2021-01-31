@@ -5,9 +5,6 @@ include "../../Armada/option.s.dfy"
 // The level after replacing all locks and cvs with explicit_yield block.
 // Also add some annotation for the servicer.
 level atomic_level {
-    import opened ArmadaCommonDefinitions
-	import opened util_option_s
-
     type Tid = uint64
     
     // the data structure for disk schedule requests.

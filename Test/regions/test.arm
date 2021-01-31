@@ -2,7 +2,7 @@
 
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs SharedStructs1 {
+structs SharedStructs {
 
 }
 
@@ -13,7 +13,7 @@ structs SharedStructs1 {
 // Initialize region_map[AddrOf'x] == Region_X
 // Initialize region_map[AddrOf'y] == Region_X
 //
-layer A using SharedStructs1 {
+layer A using SharedStructs {
     var x:int32;
     var y:int32;
 
@@ -39,7 +39,7 @@ layer A using SharedStructs1 {
     }
 }
 
-layer B using SharedStructs1 {
+layer B using SharedStructs {
     var x:int32;
     var y:int32;
 

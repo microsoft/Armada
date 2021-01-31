@@ -1,13 +1,13 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs test6structs
+structs SharedStructs6
 {
     struct S1 {
         var x:int32[10];
     }
 }
 
-level test6 using test6structs {
+level F using SharedStructs6 {
     noaddr var my_tid:uint64;
     var g:S1;
 

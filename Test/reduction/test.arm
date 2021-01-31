@@ -16,6 +16,11 @@ label lbl1:
         y ::= 4;
 label lbl2:
         z ::= 5;
+        atomic {
+            z ::= 7;
+label lbl3:
+            goto lbl3;
+        }
     }
 }
 
@@ -31,6 +36,11 @@ level B using SharedStructs {
             y ::= 4;
             z ::= 5;
         }
+        atomic {
+            z ::= 7;
+label lbl3:
+            goto lbl3;
+        }
     }
 }
 
@@ -39,6 +49,6 @@ proof AB {
     reduction phase1 main_1, main_2
 
     inductive_invariant MyGlobalInvariant @"
-      forall tid :: tid in s.s.threads ==> s.s.threads[tid].storeBuffer == []
+      forall tid :: tid in threads ==> threads[tid].storeBuffer == []
     "
 }

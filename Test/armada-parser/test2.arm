@@ -1,6 +1,6 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs test2structs
+structs SharedStructs2
 {
     struct S1 {
        var a:int32;
@@ -8,7 +8,7 @@ structs test2structs
     }
 }
 
-level test2 using test2structs
+level B using SharedStructs2
 {
     noaddr var v: int32 := 0;
     noaddr var w: int32 := 56;
@@ -17,11 +17,11 @@ level test2 using test2structs
     var s: S1;
     ghost var g: seq<int32>;
 
-    predicate TriggerInt(x:int) { true }
+    function TriggerInt(x: int) : int { x }
 
     method {:extern} ExternalMethod(p: ptr<S1>)
-        requires x > 0
-        requires forall i :: 0 <= i < 10 ==> allocated(p+i)
+        undefined_unless x > 0
+        undefined_unless forall i {:trigger TriggerInt(i)} :: 0 <= TriggerInt(i) < 10 ==> allocated(p+i)
         ensures  $sb_empty  // fence
 
     method main()
@@ -38,13 +38,17 @@ level test2 using test2structs
             y := &s.b[3];
             z := *y;
         }
-        somehow awaits $sb_empty;  // fence
+        fence;
+        z := if_undefined(*y, 42);            // If *y isn't defined (e.g., if y is null or freed), then 42
+        s ::= if_undefined(sarr[v], sarr[w]); // If sarr[v] isn't defined (e.g., if v is out of the array's bounds), then sarr[w]
+        z := if_undefined(0, 42);             // Always 0 since 0 is always defined
+        z := global_view(*y);
         g := a[1..4];
         a[a[x]] ::= a[z];
 
         assert 0 <= z < 10 ==> *(y+z) == *y;
-        assert exists i :: TriggerInt(i) && 0 <= i < 20 && *(y+i) == 0;
-        z := if (exists i :: 0 <= i < 30 && allocated(&y) && allocated_array(y) && allocated(y+i) && *(y+i) > 0) then 55 else 66;
+        assert exists i {:trigger TriggerInt(i)} :: 0 <= TriggerInt(i) < 20 && *(y+i) == 0;
+        z := if (exists i {:trigger TriggerInt(i)} :: 0 <= TriggerInt(i) < 30 && allocated(&y) && allocated_array(y) && allocated(y+i) && *(y+i) > 0) then 55 else 66;
         res := set i | 0 <= i < 40 && allocated(&y) && allocated_array(y) && allocated(y+i) && *(y+i) > 0 :: *(y+i);
         ExternalMethod(&sarr[0]);
     }

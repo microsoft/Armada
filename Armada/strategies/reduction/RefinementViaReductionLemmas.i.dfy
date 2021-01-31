@@ -696,7 +696,7 @@ module RefinementViaReductionLemmasModule {
       assert trace[i].Low?;
     }
 
-    var random_step:LStep;
+    var random_step:LStep :| true;
     var htrace := MapSeqToSeq(trace, (s:CrossLevelStep<State, Actor, LStep>) => if s.Low? then s.step else random_step);
     hstep := Reducible(actor, states, htrace);
 

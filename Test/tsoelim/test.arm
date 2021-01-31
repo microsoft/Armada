@@ -29,13 +29,10 @@ level A using SharedStructs {
   noaddr var y:int32 := 0;
   noaddr var z:int32 := 0;
 
-  import opened util_option_s
-
   method Worker(i:int)
   {
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+    assume 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
 
     label lb1:
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
@@ -50,8 +47,8 @@ level A using SharedStructs {
     z ::= z + 1;
 
     label lb4:
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadNone];
 
     w := w + 1;
 
@@ -62,9 +59,13 @@ level A using SharedStructs {
   {
     create_thread Worker(1);
     create_thread Worker(2);
-    w := w + 1;
-    y ::= y + 1;
-    z := z + 1;
+    atomic {
+      w := w + 1;
+      while (*) {
+        y ::= y + 1;
+        z := z + 1;
+      }
+    }
   }
 
 }
@@ -77,13 +78,10 @@ level B using SharedStructs {
   noaddr var y:int32 := 0;
   noaddr var z:int32 := 0;
 
-  import opened util_option_s
-
   method Worker(i:int)
   {
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?
-            modifies lock_holder
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
+    assume 0 <= i < |lock_holder| && lock_holder[i].OptionalThreadNone?;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadSome($me)];
 
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
     x[4].a[7].c[i].e[3] ::= x[4].a[7].c[i].e[3] + 1;
@@ -94,8 +92,8 @@ level B using SharedStructs {
     assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me);
     z ::= z + 1;
 
-    somehow awaits 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me)
-            ensures lock_holder == old(lock_holder)[i := OptionalThreadNone] && $sb_empty;
+    assume 0 <= i < |lock_holder| && lock_holder[i] == OptionalThreadSome($me) && $sb_empty;
+    somehow modifies lock_holder ensures lock_holder == old(lock_holder)[i := OptionalThreadNone];
 
     w := w + 1;
 
@@ -106,9 +104,13 @@ level B using SharedStructs {
   {
     create_thread Worker(1);
     create_thread Worker(2);
-    w := w + 1;
-    y ::= y + 1;
-    z := z + 1;
+    atomic {
+      w := w + 1;
+      while (*) {
+        y ::= y + 1;
+        z := z + 1;
+      }
+    }
   }
 
 }
@@ -118,18 +120,18 @@ proof AB
   refinement A B
 
   tso_elim x.a.c.e @"
-    && tid in s.s.threads
-    && (var pc := s.s.threads[tid].pc;
+    && tid in threads
+    && (var pc := threads[tid].pc;
        || pc.Armada_PC_Worker_lb1?
        || pc.Armada_PC_Worker_lb2?
        || pc.Armada_PC_Worker_lb3?
        || pc.Armada_PC_Worker_lb4?)
-    && s.s.threads[tid].top.Armada_StackFrame_Worker?
+    && threads[tid].top.Armada_StackFrame_Worker?
     && idx0 == 4
     && idx1 == 7
-    && idx2 == s.s.threads[tid].top.Worker'i
+    && idx2 == threads[tid].top.Worker.i
     && idx3 == 3
-    && 0 <= idx2 < |s.s.ghosts.lock_holder|
-    && s.s.ghosts.lock_holder[idx2] == OptionalThreadSome(tid)
+    && 0 <= idx2 < |ghosts.lock_holder|
+    && ghosts.lock_holder[idx2] == OptionalThreadSome(tid)
   "
 }

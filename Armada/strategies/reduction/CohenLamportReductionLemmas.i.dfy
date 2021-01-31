@@ -719,6 +719,11 @@ module CohenLamportReductionLemmasModule {
     assert StateNextSeq(mstates, mtrace, clrr.spec.next);
 
     hstates, htrace := lemma_BringLeftMoverToStart(clrr, mstates, mtrace, step_actor, left_mover_pos-1);
+    calc {
+      mstates[left_mover_pos-1+1];
+      (lstates[..prev] + mstates_trunc)[left_mover_pos];
+      mstates_trunc[left_mover_pos - prev];
+    }
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 

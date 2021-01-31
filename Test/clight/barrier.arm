@@ -1,3 +1,5 @@
+// Compile with:  ../../Binaries/Armada.exe /compile:0 /spillTargetCode:3 /compileTarget:clight extern.h barrier.arm
+
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
 structs SharedStructs
@@ -14,12 +16,9 @@ level {:concrete} Impl using SharedStructs
 {
   noaddr var barrier:uint32[10];
 
-  method {:extern} fence()
-    ensures $sb_empty
-
   method {:extern} print_uint32(i:uint32)
   {
-    log := old(log) + [i];
+    log := log + [i];
   }
 
   method worker(id:uint32)
@@ -59,7 +58,7 @@ level {:concrete} Impl using SharedStructs
       i := i + 1;
     }
 
-    fence();
+    fence;
 
     i := 0;
     while i < 10

@@ -45,17 +45,31 @@ namespace Microsoft.Armada
       }
     }
 
-    private string InsertExtraMaterial(string name, string contents)
+    private string InsertExtraMaterial(string name, string contents, int minPos = 0)
     {
+      // Remove any "ProofCustomizationGoesHere();" and note its position.
+      
+      int insertionPos = contents.IndexOf("ProofCustomizationGoesHere();", minPos);
+      if (insertionPos >= 0) {
+        contents = contents.Substring(0, insertionPos) + contents.Substring(insertionPos + 29);
+      }
+
       if (extraMaterial.ContainsKey(name))
       {
         string extra = extraMaterial[name];
-        int pos = contents.IndexOf("{");
-        if (pos < 0) {
-          AH.PrintError(prog, $"Could not find open brace in contents of {name} to insert extra material into");
-          return contents;
+
+        // If there was no "ProofCustomizationGoesHere();", use the position right after the first open brace.
+
+        if (insertionPos < 0) {
+          var bracePos = contents.IndexOf("{", minPos);
+          if (bracePos < 0) {
+            AH.PrintError(prog, $"Could not find place in contents of {name} to insert extra material");
+            return contents;
+          }
+          insertionPos = bracePos + 1;
         }
-        return contents.Substring(0, pos+1) + "\n" + extra + "\n" + contents.Substring(pos+1);
+
+        return contents.Substring(0, insertionPos) + "\n" + extra + "\n" + contents.Substring(insertionPos);
       }
       else
       {
@@ -75,11 +89,12 @@ namespace Microsoft.Armada
 
     public void AddLemma(string contents, string auxName = null)
     {
-      Match match = Regex.Match(contents, @"^\s*lemma\s+([^\s<(]+)");
+      Match match = Regex.Match(contents, @"^\s*lemma\s+({[^}]*}\s*)*([^\s<(]+)");
       if (match.Success)
       {
-        string name = match.Groups[1].Value;
-        string expandedContents = InsertExtraMaterial(name, contents);
+        string name = match.Groups[2].Value;
+        int pos = match.Groups[2].Index;
+        string expandedContents = InsertExtraMaterial(name, contents, pos);
         AddDefaultClassDecl((Lemma)AH.ParseTopLevelDecl(prog, name, expandedContents), auxName);
       }
       else {
@@ -116,7 +131,7 @@ namespace Microsoft.Armada
 
     public void AddDatatype(string contents, string auxName = null)
     {
-      Match match = Regex.Match(contents, @"^\s*datatype\s+([^\s<(]+)");
+      Match match = Regex.Match(contents, @"^\s*datatype\s+([^\s<(=]+)");
       if (match.Success)
       {
         string name = match.Groups[1].Value;
@@ -128,14 +143,18 @@ namespace Microsoft.Armada
       }
     }
 
-    public void AddTypeSynonymDecl(string typeName, Type t, string auxName = null)
+    public void AddTypeSynonym(string contents, string auxName = null)
     {
-      proofFiles.AddTypeSynonymDecl(typeName, t, auxName);
-    }
-
-    public void AddDatatypeDecl(string typeName, List<DatatypeCtor> ctors, string auxName = null)
-    {
-      proofFiles.AddDatatypeDecl(typeName, ctors, auxName);
+      Match match = Regex.Match(contents, @"^\s*type\s+([^\s<(=]+)");
+      if (match.Success)
+      {
+        string name = match.Groups[1].Value;
+        AddTopLevelDecl((TypeSynonymDecl)AH.ParseTopLevelDecl(prog, name, contents), auxName);
+      }
+      else
+      {
+        AH.PrintError(prog, $"Could not find type synonym name in {contents}");
+      }
     }
 
     public void AddInclude(string fileName, string auxName = null)

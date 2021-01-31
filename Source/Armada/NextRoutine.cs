@@ -14,153 +14,138 @@ namespace Microsoft.Armada {
   public class NextFormal {
     public readonly string GloballyUniqueVarName;
     public readonly string LocalVarName;
-    public readonly Type VarType;
+    public readonly string VarType;
 
-    public NextFormal(string globallyUniqueVarName, string localVarName, Type varType)
+    public NextFormal(string globallyUniqueVarName, string localVarName, Type varType, ArmadaSymbolTable symbols)
     {
       GloballyUniqueVarName = globallyUniqueVarName;
       LocalVarName = localVarName;
-      VarType = varType;
+      VarType = symbols.FlattenType(varType).ToString();
     }
 
     public NextFormal(string globallyUniqueVarName, string localVarName, string varTypeName)
     {
       GloballyUniqueVarName = globallyUniqueVarName;
       LocalVarName = localVarName;
-      VarType = AH.ReferToType(varTypeName);
+      VarType = varTypeName;
     }
   }
 
-  public enum NextType { Update, Call, Return, CreateThread, Malloc, Calloc, Dealloc,
+  public enum NextType { Update, Call, Return, CreateThread, MallocSuccess, MallocFailure, CallocSuccess, CallocFailure, Dealloc,
                          IfTrue, IfFalse, JumpPastElse, WhileTrue, WhileFalse, WhileEnd, WhileBreak, WhileContinue,
-                         Assert, Somehow, Join, ExternStart, ExternContinue, ExternEnd, Terminate, Tau }
+                         AssertTrue, AssertFalse, Somehow, Fence, Goto, CompareAndSwap, AtomicExchange, Join,
+                         ExternStart, ExternContinue, ExternEnd, TerminateThread, TerminateProcess, Tau }
 
-  public class NextRoutine : IConstraintCollector {
+  public class NextRoutineConstructor : IConstraintCollector {
     private Program prog;
     private ArmadaSymbolTable symbols;
-    private PredicateBuilder validStepBuilder;
-    private PredicateBuilder crashAvoidanceBuilder;
+    private PredicateBuilder validDefinedStepBuilder;
+    private PredicateBuilder validUndefinedStepBuilder;
     private ExpressionBuilder getNextStateBuilder;
-    public ArmadaPC pc;
-    public ArmadaPC endPC;
+    private ArmadaPC startPC;
+    private ArmadaPC endPC;
     private List<NextFormal> formals;
     private bool valid;
+    private bool hasUndefinedBehaviorAvoidanceConstraint;
+    private NextType nextType;
+    private MethodInfo methodInfo;
+    private ArmadaStatement armadaStatement;
+    private Statement stmt;
+    private NextRoutine definedBehaviorNextRoutine;
+    private NextRoutine undefinedBehaviorNextRoutine;
 
-    public NextType nextType;
+    public string s;
+    public string entry;
+    public string tid;
+    public string t;
+    public string locv;
     public Method method;
-    public ArmadaStatement armadaStatement;
-    public Statement stmt;
-    public Expression s;
-    public Expression tid;
-    public Expression t;
-    public Expression locv;
 
-    public NextRoutine(Program i_prog, ArmadaSymbolTable i_symbols, NextType i_nextType, MethodInfo methodInfo,
-                       ArmadaStatement i_armadaStatement, Statement i_stmt, ArmadaPC i_pc, ArmadaPC i_endPC)
+    public NextRoutineConstructor(Program i_prog, ArmadaSymbolTable i_symbols, NextType i_nextType, MethodInfo i_methodInfo,
+                                  ArmadaStatement i_armadaStatement, Statement i_stmt, ArmadaPC i_startPC, ArmadaPC i_endPC)
     {
       prog = i_prog;
       symbols = i_symbols;
       nextType = i_nextType;
-      validStepBuilder = new PredicateBuilder(i_prog);
-      crashAvoidanceBuilder = new PredicateBuilder(i_prog);
+      validDefinedStepBuilder = new PredicateBuilder(i_prog, true);
+      validUndefinedStepBuilder = new PredicateBuilder(i_prog, false);
       getNextStateBuilder = new ExpressionBuilder(i_prog);
-      method = methodInfo != null ? methodInfo.method : null;
+      methodInfo = i_methodInfo;
+      method = methodInfo == null ? null : methodInfo.method;
       armadaStatement = i_armadaStatement;
       stmt = i_stmt;
-      pc = i_pc;
+      startPC = i_startPC;
       endPC = i_endPC;
       formals = new List<NextFormal>();
       valid = true;
+      hasUndefinedBehaviorAvoidanceConstraint = false;
+      definedBehaviorNextRoutine = null;
+      undefinedBehaviorNextRoutine = null;
 
-      s = ReserveVariableName("s", "Armada_TotalState");
-      tid = ReserveVariableName("tid", "Armada_ThreadHandle");
-      locv = null;
+      s = ReserveVariableName("s");
+      entry = ReserveVariableName("entry");
+      tid = ReserveVariableName("tid");
+      t = ReserveVariableName("t");
+      locv = ReserveVariableName("locv");
 
-      // s.stop_reason.Armada_NotStopped?
-      var stop_reason = AH.MakeExprDotName(s, "stop_reason", "Armada_StopReason");
-      var not_stopped = AH.MakeExprDotName(stop_reason, "Armada_NotStopped?", new BoolType());
-      AddConjunct(not_stopped);
-
-      // tid in s.threads
-      var threads = AH.MakeExprDotName(s, "threads", AH.MakeThreadsType());
-      var tid_in_threads = AH.MakeInExpr(tid, threads);
-      AddConjunct(tid_in_threads);
-
-      // var t := s.threads[tid];
-      t = AddVariableDeclaration("t", AH.MakeSeqSelectExpr(threads, tid, "Armada_Thread"));
-
-      // var locv := Armada_GetThreadLocalView(s, tid);
-      locv = AH.MakeApply2("Armada_GetThreadLocalView", s, tid, "Armada_SharedMemory");
-      locv = AddVariableDeclaration("locv", locv);
-
-      if (pc != null) {
-        var current_pc = AH.MakeExprDotName(t, "pc", "Armada_PC");
-        var pc_correct = AH.MakeEqExpr(current_pc, AH.MakeNameSegment(pc.ToString(), "Armada_PC"));
-        AddConjunct(pc_correct);
-
-        // t.top.Armada_StackFrame_{methodName}?
-        var top = AH.MakeExprDotName(t, "top", "Armada_StackFrame");
-        var top_frame_correct = AH.MakeExprDotName(top, $"Armada_StackFrame_{pc.methodName}?", new BoolType());
-        AddConjunct(top_frame_correct);
+      if (startPC != null) {
+        AddConjunct($"{t}.pc.{startPC}?");
+        AddConjunct($"{t}.top.Armada_StackFrame_{startPC.methodName}?");
 
         if (methodInfo != null) {
-          var constraints = methodInfo.GetEnablingConstraintCollector(pc);
+          var constraints = methodInfo.GetEnablingConstraintCollector(startPC);
           if (constraints != null && !constraints.Empty) {
-            var enabling_condition = AH.MakeApply2($"Armada_EnablingConditions_{pc}", s, tid, new BoolType());
-            AddConjunct(enabling_condition);
+            AddConjunct($"Armada_EnablingConditions_{startPC}(s, tid)");
           }
         }
+
+        AddConjunct("Armada_UniversalStepConstraint(s, tid)");
       }
     }
 
-    public void AddFormal(NextFormal formal) { formals.Add(formal); }
+    public string AddFormal(NextFormal formal)
+    {
+      formals.Add(formal);
+      return formal.LocalVarName;
+    }
+    
     public IEnumerable<NextFormal> Formals { get { return formals; } }
+    public NextRoutine DefinedBehaviorNextRoutine { get { return definedBehaviorNextRoutine; } }
+    public NextRoutine UndefinedBehaviorNextRoutine { get { return undefinedBehaviorNextRoutine; } }
 
-    public string GetNameSuffix()
+    private string MakeNameSuffix()
     {
       switch (nextType) {
         case NextType.Tau:
           return "Tau";
         case NextType.Return:
-          return "ReturnFrom_" + pc.methodName + "_" + pc.Name + "_To_" + endPC.methodName + "_" + endPC.Name;
+          return "ReturnFrom_" + startPC.methodName + "_" + startPC.Name + "_To_" + endPC.methodName + "_" + endPC.Name;
         default:
-          return nextType.ToString("g") + "_" + pc.methodName + "_" + pc.Name;
-      }
-    }
-
-    public string NameSuffix
-    {
-      get {
-        return GetNameSuffix();
+          return nextType.ToString("g") + "_" + startPC.methodName + "_" + startPC.Name;
       }
     }
 
     public bool Valid { get { return valid; } }
 
-    public Expression ReserveVariableName(string varName, Type ty)
+    public string ReserveVariableName(string varName)
     {
-      validStepBuilder.ReserveVariableName(varName, ty);
-      crashAvoidanceBuilder.ReserveVariableName(varName, ty);
-      return getNextStateBuilder.ReserveVariableName(varName, ty);
+      validDefinedStepBuilder.ReserveVariableName(varName);
+      validUndefinedStepBuilder.ReserveVariableName(varName);
+      return getNextStateBuilder.ReserveVariableName(varName);
     }
 
-    public Expression ReserveVariableName(string varName, string typeName)
+    public string AddVariableDeclaration(string varName, string value)
     {
-      validStepBuilder.ReserveVariableName(varName, typeName);
-      crashAvoidanceBuilder.ReserveVariableName(varName, typeName);
-      return getNextStateBuilder.ReserveVariableName(varName, typeName);
-    }
-
-    public Expression AddVariableDeclaration(string varName, Expression value)
-    {
-      validStepBuilder.AddVariableDeclaration(varName, value);
-      crashAvoidanceBuilder.AddVariableDeclaration(varName, value);
+      validDefinedStepBuilder.AddVariableDeclaration(varName, value);
+      validUndefinedStepBuilder.AddVariableDeclaration(varName, value);
       return getNextStateBuilder.AddVariableDeclaration(varName, value);
     }
 
-    public void AddUndefinedBehaviorAvoidanceConstraint(Expression constraint)
+    public void AddUndefinedBehaviorAvoidanceConstraint(string constraint)
     {
-      crashAvoidanceBuilder.AddConjunct(constraint);
+      hasUndefinedBehaviorAvoidanceConstraint = true;
+      validDefinedStepBuilder.AddConjunct(constraint);
+      validUndefinedStepBuilder.AddDisjunct($"!({constraint})");
     }
 
     public void AddUndefinedBehaviorAvoidanceConstraint(UndefinedBehaviorAvoidanceConstraint constraint)
@@ -170,20 +155,34 @@ namespace Microsoft.Armada {
         AddUndefinedBehaviorAvoidanceConstraint(e);
       }
     }
-    
-    public void AddConjunct(Expression conjunct)
+
+    public void AddConjunct(string conjunct)
     {
-      validStepBuilder.AddConjunct(conjunct);
+      validDefinedStepBuilder.AddConjunct(conjunct);
+      validUndefinedStepBuilder.AddConjunct(conjunct);
     }
-    
-    public void AddConjunct(UndefinedBehaviorAvoidanceConstraint constraint)
+
+    public void AddUBAvoidanceConstraintAsConjunct(UndefinedBehaviorAvoidanceConstraint constraint)
     {
       foreach (var e in constraint.AsList) {
-        validStepBuilder.AddConjunct(e);
+        validDefinedStepBuilder.AddConjunct(e);
+        validUndefinedStepBuilder.AddConjunct(e);
       }
     }
 
-    public void SetNextState(Expression e)
+    public void AddDefinedBehaviorConjunct(string conjunct)
+    {
+      validDefinedStepBuilder.AddConjunct(conjunct);
+    }
+
+    public void AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(UndefinedBehaviorAvoidanceConstraint constraint)
+    {
+      foreach (var e in constraint.AsList) {
+        validDefinedStepBuilder.AddConjunct(e);
+      }
+    }
+
+    public void SetNextState(string e)
     {
       getNextStateBuilder.SetBody(e);
     }
@@ -199,94 +198,147 @@ namespace Microsoft.Armada {
       Fail(Token.NoToken, reason);
     }
 
-    public void Extract(ModuleDefinition m, ArmadaSymbolTable symbols, List<MemberDecl> newDefaultClassDecls,
-                        List<DatatypeCtor> entryCtors, List<MatchCaseExpr> overallNextCases,
-                        List<MatchCaseExpr> validStepCases, List<MatchCaseExpr> crashAvoidanceCases,
-                        List<MatchCaseExpr> getNextStateCases)
+    private void ExtractInternal(ArmadaSymbolTable symbols, DeclCollector declCollector, List<string> stepCtors, bool ub)
+    {
+      var nameSuffix = MakeNameSuffix();
+      if (ub) {
+        nameSuffix = "UB_" + nameSuffix;
+      }
+
+      if (formals.Any()) {
+        var paramsFormalsList = String.Join(", ", formals.Select(f => $"{f.LocalVarName}: {f.VarType}"));
+        var paramsTypeDecl = $"datatype Armada_StepParams_{nameSuffix} = Armada_StepParams_{nameSuffix}({paramsFormalsList})";
+        declCollector.AddItem(paramsTypeDecl);
+      }
+
+      stepCtors.Add($"Armada_Step_{nameSuffix}("
+                    + (formals.Any() ? $"params_{nameSuffix}: Armada_StepParams_{nameSuffix}" : "")
+                    + ")");
+      
+      var extraParameterDecls = formals.Any() ? $", params: Armada_StepParams_{nameSuffix}" : "";
+      var extraParameterArgs = formals.Any() ? $", params" : "";
+      var paramDecls = String.Concat(formals.Select(f => $"var {f.LocalVarName} := params.{f.LocalVarName};\n"));
+      var validState = ub ? validUndefinedStepBuilder.Extract() : validDefinedStepBuilder.Extract();
+      var nextState = ub ? $"s.(stop_reason := Armada_StopReasonUndefinedBehavior)" : $"{paramDecls}{getNextStateBuilder.Extract()}";
+
+      declCollector.AddItem($@"
+        predicate Armada_ValidStep_{nameSuffix}(s: Armada_TotalState, tid: Armada_ThreadHandle{extraParameterDecls})
+          requires tid in s.threads
+        {{
+          var t := s.threads[tid];
+          var locv := Armada_GetThreadLocalView(s, tid);
+          {paramDecls}
+          {validState}
+        }}
+      ");
+
+      declCollector.AddItem($@"
+        function Armada_GetNextState_{nameSuffix}(s: Armada_TotalState, tid: Armada_ThreadHandle{extraParameterDecls})
+          : Armada_TotalState
+          requires tid in s.threads
+          requires Armada_ValidStep_{nameSuffix}(s, tid{extraParameterArgs})
+        {{
+          var t := s.threads[tid];
+          var locv := Armada_GetThreadLocalView(s, tid);
+          {nextState}
+        }}
+      ");
+
+      var stopping = (nextType == NextType.TerminateProcess || nextType == NextType.AssertFalse || ub);
+      var nextRoutine = new NextRoutine(prog, symbols, nextType, methodInfo, armadaStatement, stmt, startPC, endPC,
+                                        formals, nameSuffix, ub, stopping);
+      symbols.AddNextRoutine(nextRoutine);
+      if (ub) {
+        undefinedBehaviorNextRoutine = nextRoutine;
+      }
+      else {
+        definedBehaviorNextRoutine = nextRoutine;
+      }
+    }
+
+    public void Extract(ArmadaSymbolTable symbols, DeclCollector declCollector, List<string> stepCtors)
     {
       if (!valid) {
         return;
       }
 
-      var entryFormals = new List<Formal> { AH.MakeFormal("tid", "Armada_ThreadHandle") };
-      var commonFormals = new List<Formal> {
-        AH.MakeFormal("s", "Armada_TotalState"),
-        AH.MakeFormal("tid", "Armada_ThreadHandle")
-      };
-      var overallNextFormals = new List<Formal> {
-        AH.MakeFormal("s", "Armada_TotalState"),
-        AH.MakeFormal("s'", "Armada_TotalState"),
-        AH.MakeFormal("tid", "Armada_ThreadHandle")
-      };
-      var caseArguments = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      var commonMatchBodyArguments = new List<Expression>() {
-        AH.MakeNameSegment("s", "Armada_TotalState"),
-        AH.MakeNameSegment("tid", "Armada_ThreadHandle")
-      };
-      var overallNextMatchBodyArguments = new List<Expression>() {
-        AH.MakeNameSegment("s", "Armada_TotalState"),
-        AH.MakeNameSegment("s'", "Armada_TotalState"),
-        AH.MakeNameSegment("tid", "Armada_ThreadHandle")
-      };
-      foreach (var f in formals) {
-        var flattened_type = symbols.FlattenType(f.VarType);
-        commonFormals.Add(AH.MakeFormal(f.LocalVarName, flattened_type));
-        overallNextFormals.Add(AH.MakeFormal(f.LocalVarName, flattened_type));
-        entryFormals.Add(AH.MakeFormal(f.GloballyUniqueVarName, flattened_type));
-        caseArguments.Add(AH.MakeBoundVar(f.LocalVarName, flattened_type));
-        commonMatchBodyArguments.Add(AH.MakeNameSegment(f.LocalVarName, flattened_type));
-        overallNextMatchBodyArguments.Add(AH.MakeNameSegment(f.LocalVarName, flattened_type));
+      ExtractInternal(symbols, declCollector, stepCtors, false);
+      if (hasUndefinedBehaviorAvoidanceConstraint) {
+        ExtractInternal(symbols, declCollector, stepCtors, true);
       }
+    }
 
-      var nameSuffix = NameSuffix;
-      var entryName = $"Armada_TraceEntry_{nameSuffix}";
-      entryCtors.Add(AH.MakeDatatypeCtor(entryName, entryFormals));
+    public bool Nonyielding { get { return symbols.IsNonyieldingPC(endPC); } }
+  }
 
-      var validStepFn = AH.MakeNameSegment($"Armada_ValidStep_{nameSuffix}", (Type)null);
-      var validStepMatchBody = AH.SetExprType(new ApplySuffix(Token.NoToken, validStepFn, commonMatchBodyArguments), new BoolType());
-      validStepCases.Add(AH.MakeMatchCaseExpr(entryName, caseArguments, validStepMatchBody));
-      var validStepPredBody = validStepBuilder.Extract();
-      var validStepName = $"Armada_ValidStep_{nameSuffix}";
-      var validStepPred = AH.MakePredicate(validStepName, commonFormals, validStepPredBody);
-      newDefaultClassDecls.Add(validStepPred);
+  public class NextRoutine {
+    private Program prog;
+    private ArmadaSymbolTable symbols;
 
-      var crashAvoidanceFn = AH.MakeNameSegment($"Armada_UndefinedBehaviorAvoidance_{nameSuffix}", (Type)null);
-      var crashAvoidanceMatchBody = AH.SetExprType(new ApplySuffix(Token.NoToken, crashAvoidanceFn, commonMatchBodyArguments), new BoolType());
-      crashAvoidanceCases.Add(AH.MakeMatchCaseExpr(entryName, caseArguments, crashAvoidanceMatchBody));
-      var crashAvoidanceName = $"Armada_UndefinedBehaviorAvoidance_{nameSuffix}";
-      var crashAvoidancePredBody = crashAvoidanceBuilder.Extract();
-      var crashAvoidancePred = AH.MakePredicateWithReq(crashAvoidanceName, commonFormals, validStepMatchBody, crashAvoidancePredBody);
-      newDefaultClassDecls.Add(crashAvoidancePred);
+    public NextType nextType;
+    public MethodInfo methodInfo;
+    public ArmadaStatement armadaStatement;
+    public Statement stmt;
+    public ArmadaPC startPC;
+    public ArmadaPC endPC;
+    private List<NextFormal> formals;
+    public string nameSuffix;
 
-      var getNextStateFn = AH.MakeNameSegment($"Armada_GetNextState_{nameSuffix}", (Type)null);
-      var getNextStateMatchBody = AH.SetExprType(new ApplySuffix(Token.NoToken, getNextStateFn, commonMatchBodyArguments), "Armada_TotalState");
-      getNextStateCases.Add(AH.MakeMatchCaseExpr(entryName, caseArguments, getNextStateMatchBody));
-      var getNextStateName = $"Armada_GetNextState_{nameSuffix}";
-      var getNextStateFnBody = getNextStateBuilder.Extract();
-      var getNextStateReq = AH.MakeAndExpr(validStepMatchBody, crashAvoidanceMatchBody);
-      var getNextStateFunc = AH.MakeFunctionWithReq(getNextStateName, commonFormals, getNextStateReq, getNextStateFnBody);
-      newDefaultClassDecls.Add(getNextStateFunc);
+    private bool undefinedBehavior;
+    private bool stopping;
 
-      // predicate Armada_Next_{nameSuffix}(s:Armada_TotalState, s':Armada_TotalState, ...) {
-      //     && Armada_ValidStep_{nameSuffix}(s, ...)
-      //     && s' == if Armada_UndefinedBehaviorAvoidance(s, ...) then Armada_GetNextState(s, ...)
-      //              else s.(stop_reason := Armada_StopReasonUndefinedBehavior)
-      // }
+    public NextRoutine(Program i_prog, ArmadaSymbolTable i_symbols, NextType i_nextType, MethodInfo i_methodInfo,
+                       ArmadaStatement i_armadaStatement, Statement i_stmt, ArmadaPC i_startPC, ArmadaPC i_endPC,
+                       List<NextFormal> i_formals, string i_nameSuffix, bool i_undefinedBehavior, bool i_stopping)
+    {
+      prog = i_prog;
+      symbols = i_symbols;
+      nextType = i_nextType;
+      methodInfo = i_methodInfo;
+      armadaStatement = i_armadaStatement;
+      stmt = i_stmt;
+      startPC = i_startPC;
+      endPC = i_endPC;
+      formals = new List<NextFormal>(i_formals);
+      nameSuffix = i_nameSuffix;
+      undefinedBehavior = i_undefinedBehavior;
+      stopping = i_stopping;
+    }
 
-      var s_with_undefined_behavior =
-        AH.MakeDatatypeUpdateExpr(s, "stop_reason", AH.MakeNameSegment("Armada_StopReasonUndefinedBehavior", "Armada_StopReason"));
-      var target_s_prime = AH.MakeIfExpr(crashAvoidanceMatchBody, getNextStateMatchBody, s_with_undefined_behavior);
-      var s_prime = AH.MakeNameSegment("s'", "Armada_TotalState");
-      var s_prime_correct = AH.MakeEqExpr(s_prime, target_s_prime);
-      var overallNextBody = AH.MakeAndExpr(validStepMatchBody, s_prime_correct);
-      var overallNextName = $"Armada_Next_{nameSuffix}";
-      var overallNextPred = AH.MakePredicate(overallNextName, overallNextFormals, overallNextBody);
-      newDefaultClassDecls.Add(overallNextPred);
+    public IEnumerable<NextFormal> Formals { get { return formals; } }
+    public bool HasFormals { get { return formals.Any(); } }
+    public string NameSuffix { get { return nameSuffix; } }
+    public bool Tau { get { return nextType == NextType.Tau; } }
+    public Method method { get { return methodInfo.method; } }
 
-      var overallNextFn = AH.MakeNameSegment(overallNextName, (Type)null);
-      var overallNextMatchBody = AH.SetExprType(new ApplySuffix(Token.NoToken, overallNextFn, overallNextMatchBodyArguments),
-                                                new BoolType());
-      overallNextCases.Add(AH.MakeMatchCaseExpr(entryName, caseArguments, overallNextMatchBody));
+    public bool Nonyielding { get { return symbols.IsNonyieldingPC(endPC); } }
+    public bool UndefinedBehavior { get { return undefinedBehavior; } }
+    public bool Stopping { get { return stopping; } }
+
+    public bool TryGetBranchOutcome(out bool outcome)
+    {
+      outcome = BranchOutcome;
+      return nextType == NextType.IfTrue ||
+             nextType == NextType.WhileTrue ||
+             nextType == NextType.AssertTrue ||
+             nextType == NextType.IfFalse ||
+             nextType == NextType.WhileFalse ||
+             nextType == NextType.AssertFalse ||
+             nextType == NextType.MallocSuccess ||
+             nextType == NextType.MallocFailure ||
+             nextType == NextType.CallocSuccess ||
+             nextType == NextType.CallocFailure;
+    }
+
+    public bool BranchOutcome
+    {
+      get {
+        return nextType != NextType.IfFalse &&
+               nextType != NextType.WhileFalse &&
+               nextType != NextType.AssertFalse &&
+               nextType != NextType.MallocFailure &&
+               nextType != NextType.CallocFailure;
+      }
     }
   }
 }

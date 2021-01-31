@@ -32,11 +32,11 @@ label lb_to_be_weakened:
       if (g <= best_guess) {
         continue;
       }
-      //somehow awaits mutex == 0 modifies mutex ensures mutex == $me;
+      // assume mutex == 0; somehow modifies mutex ensures mutex == $me;
       if (g > best_guess) {
         best_guess := g;
       }
-      //somehow awaits mutex == $me modifies mutex ensures mutex == 0 && $sb_empty;
+      // assume mutex == $me && $sb_empty; somehow modifies mutex ensures mutex == 0;
     }
   }
 

@@ -13,38 +13,37 @@ namespace Microsoft.Armada {
 
   public class UndefinedBehaviorAvoidanceConstraint
   {
-    private List<Expression> constraints;
+    private List<string> constraints;
 
     public UndefinedBehaviorAvoidanceConstraint()
     {
-      constraints = new List<Expression>();
+      constraints = new List<string>();
     }
 
-    public UndefinedBehaviorAvoidanceConstraint(Expression e)
+    public UndefinedBehaviorAvoidanceConstraint(string e)
     {
-      constraints = new List<Expression>();
+      constraints = new List<string>();
       if (e != null)
       {
-        e = AH.SetExprType(e, new BoolType());
         constraints.Add(e);
       }
     }
 
-    public UndefinedBehaviorAvoidanceConstraint(List<Expression> es)
+    public UndefinedBehaviorAvoidanceConstraint(List<string> es)
     {
-      constraints = new List<Expression>(es);
+      constraints = new List<string>(es);
     }
 
     public UndefinedBehaviorAvoidanceConstraint(UndefinedBehaviorAvoidanceConstraint other)
     {
-      constraints = new List<Expression>(other.AsList);
+      constraints = new List<string>(other.AsList);
     }
 
-    public Expression Expr
+    public string Expr
     {
       get
       {
-        return AH.CombineExpressionsWithAnd(constraints);
+        return AH.CombineStringsWithAnd(constraints);
       }
     }
 
@@ -56,14 +55,14 @@ namespace Microsoft.Armada {
       }
     }
 
-    public void Add(Expression other)
+    public void Add(string other)
     {
       if (other != null) {
         constraints.Add(other);
       }
     }
 
-    public void Add(List<Expression> other)
+    public void Add(List<string> other)
     {
       foreach (var e in other) {
         constraints.Add(e);
@@ -75,7 +74,7 @@ namespace Microsoft.Armada {
       Add(other.AsList);
     }
 
-    public List<Expression> AsList { get { return constraints; } }
+    public List<string> AsList { get { return constraints; } }
 
     public static UndefinedBehaviorAvoidanceConstraint operator+(UndefinedBehaviorAvoidanceConstraint c1, UndefinedBehaviorAvoidanceConstraint c2)
     {
@@ -84,7 +83,7 @@ namespace Microsoft.Armada {
       return ret;
     }
 
-    public static UndefinedBehaviorAvoidanceConstraint operator+(UndefinedBehaviorAvoidanceConstraint c1, Expression c2)
+    public static UndefinedBehaviorAvoidanceConstraint operator+(UndefinedBehaviorAvoidanceConstraint c1, string c2)
     {
       var ret = new UndefinedBehaviorAvoidanceConstraint(c1);
       ret.Add(c2);
@@ -95,45 +94,35 @@ namespace Microsoft.Armada {
   public class ArmadaRValue
   {
     private UndefinedBehaviorAvoidanceConstraint crashAvoidance;
-    private Expression val;
+    private string val;
 
-    public ArmadaRValue(UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, Expression i_val)
+    public ArmadaRValue(UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, string i_val)
     {
       Debug.Assert(i_crashAvoidance != null);
       crashAvoidance = i_crashAvoidance;
       val = i_val;
     }
 
-    public ArmadaRValue(Expression i_val)
+    public ArmadaRValue(string i_val)
     {
       crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
       val = i_val;
     }
 
-    public ArmadaRValue(UndefinedBehaviorAvoidanceConstraint i_crashAvoidance, Expression i_val, Type i_ty)
-    {
-      crashAvoidance = i_crashAvoidance;
-      val = i_val;
-      if (val != null)
-      {
-        val = AH.SetExprType(val, i_ty);
-      }
-    }
-
     public UndefinedBehaviorAvoidanceConstraint UndefinedBehaviorAvoidance { get { return crashAvoidance; } }
-    public Expression Val { get { return val; } }
+    public string Val { get { return val; } }
     public bool CanCauseUndefinedBehavior { get { return crashAvoidance.CanCauseUndefinedBehavior; } }
   }
 
   public class ArmadaRValueList
   {
     private UndefinedBehaviorAvoidanceConstraint crashAvoidance;
-    private List<Expression> vals;
+    private List<string> vals;
 
     public ArmadaRValueList()
     {
       crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
-      vals = new List<Expression>();
+      vals = new List<string>();
     }
 
     public void Add(ArmadaRValue rvalue)
@@ -150,7 +139,7 @@ namespace Microsoft.Armada {
     }
 
     public UndefinedBehaviorAvoidanceConstraint UndefinedBehaviorAvoidance { get { return crashAvoidance; } }
-    public List<Expression> Vals { get { return vals; } }
+    public List<string> Vals { get { return vals; } }
     public bool CanCauseUndefinedBehavior { get { return crashAvoidance.CanCauseUndefinedBehavior; } }
   }
 

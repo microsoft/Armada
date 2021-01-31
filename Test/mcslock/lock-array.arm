@@ -20,23 +20,14 @@ level pseudo_impl using MCSLock {
   noaddr var locks: lock[18446744073709551616];
   noaddr var tail: uint64 := 0;
   method acquire(myLock: uint64) {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
+    noaddr var prev: uint64 := 0;
     locks[myLock].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    readTail, tail ::= tail, if tail == oldTail then myLock else tail;
-    while readTail != oldTail
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      tail, readTail ::= if tail == oldTail then myLock else tail, tail;
-    }
+    prev := atomic_exchange(tail, myLock);
 
-    if oldTail != 0 {
+    if prev != 0 {
       locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+      locks[prev].next := myLock;
       label wait:
         while (locks[myLock].wait != 0) {}
     }
@@ -45,8 +36,7 @@ level pseudo_impl using MCSLock {
   method release(myLock: uint64) {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    assume $sb_empty;
-    readTail, tail ::= tail, if tail == myLock then 0 else tail;
+    readTail := compare_and_swap(tail, myLock, 0);
     if readTail != myLock {
       while (locks[myLock].next == 0) {}
 
@@ -78,51 +68,28 @@ level pseudo_impl using MCSLock {
 level L1 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
   noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
   method acquire(myLock: uint64) {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    atomic {
-      readTail, tail ::= tail, if tail == oldTail then myLock else tail;
-      tidQueue ::= if readTail == oldTail then tidQueue + [$me] else tidQueue;
-    }
-    while readTail != oldTail
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      atomic {
-        label begin:
-        tail, readTail ::= if tail == oldTail then myLock else tail, tail;
-        label end:
-        tidQueue ::= if oldTail == readTail then tidQueue + [$me] else tidQueue;
-      }
-    }
+    prev := atomic_exchange(tail, $me);
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0) {}
+        while (locks[$me].wait != 0) {}
     }
   }
 
   method release(myLock: uint64) {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    assume $sb_empty;
-    atomic {
-      readTail, tail ::= tail, if tail == myLock then 0 else tail;
-      tidQueue ::= if readTail == myLock then [] else tidQueue;
-    }
-    if readTail != myLock {
-      while (locks[myLock].next == 0) {}
+    readTail := compare_and_swap(tail, $me, 0);
+    if readTail != $me {
+      while (locks[$me].next == 0) {}
 
-      nextLock := locks[myLock].next;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
+      nextLock := locks[$me].next;
       locks[nextLock].wait := 0;
     }
   }
@@ -150,62 +117,57 @@ level L1 using MCSLock {
 level L2 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
   noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
+  ghost var ghost_tail: uint64 := 0;
+  ghost var old_owner: uint64 := 0;
+  ghost var Q: seq<uint64> := [];
+  ghost var placeholder: uint64 := 0;
   method acquire(myLock: uint64) {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
     atomic {
-      label begin:
-      readTail, tail ::= tail, if tail == oldTail then myLock else tail;
-      label end:
-      tidQueue ::= if readTail == oldTail then tidQueue + [$me] else tidQueue;
-    }
-    while readTail != oldTail
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      label single:
-      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+      prev := atomic_exchange(tail, $me);
+      ghost_tail := $me;
+      Q ::= Q + [$me];
     }
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0) {}
+        while (locks[$me].wait != 0) {}
     }
   }
 
   method release(myLock: uint64) {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    assume $sb_empty;
     atomic {
-      readTail, tail ::= tail, if tail == myLock then 0 else tail;
-      tidQueue ::= if readTail == myLock then [] else tidQueue;
+      readTail := compare_and_swap(tail, $me, 0);
+      ghost_tail := if readTail == $me then 0 else ghost_tail;
+      Q ::= if readTail == $me then [] else Q;
     }
-    if readTail != myLock {
-      while (locks[myLock].next == 0) {}
+    if readTail != $me {
+      while (locks[$me].next == 0) {}
 
-      nextLock := locks[myLock].next;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
-      locks[nextLock].wait := 0;
+      nextLock := locks[$me].next;
+      atomic {
+        Q, old_owner ::= if |Q| == 0 then [] else Q[1..], $me;
+        locks[nextLock].wait := 0;
+      }
     }
   }
 
   method client() {
     while true {
       acquire($me);
+      placeholder := 0;
       label first:
         log ::= log + [Left($me)];
       label second:
         log ::= log + [Right($me)];
       label third:
-      release($me);
+        release($me);
     }
   }
 
@@ -220,59 +182,57 @@ level L2 using MCSLock {
 level L3 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
   noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
+  ghost var ghost_tail: uint64 := 0;
+  ghost var old_owner: uint64 := 0;
+  ghost var Q: seq<uint64> := [];
+  ghost var placeholder: uint64 := 0;
   method acquire(myLock: uint64) {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    label single:
-    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
-    while readTail != oldTail
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    atomic {
+      prev := atomic_exchange(ghost_tail, $me);
+      tail ::= $me;
+      Q ::= Q + [$me];
     }
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0) {}
+        while (locks[$me].wait != 0) {}
     }
   }
 
   method release(myLock: uint64) {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    assume $sb_empty;
     atomic {
-      label begin:
-      readTail, tail ::= tail, if tail == myLock then 0 else tail;
-      label end:
-      tidQueue ::= if readTail == myLock then [] else tidQueue;
+      readTail := compare_and_swap(ghost_tail, $me, 0);
+      tail ::= if readTail == $me then 0 else tail;
+      Q ::= if readTail == $me then [] else Q;
     }
-    if readTail != myLock {
-      while (locks[myLock].next == 0) {}
+    if readTail != $me {
+      while (locks[$me].next == 0) {}
 
-      nextLock := locks[myLock].next;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
-      locks[nextLock].wait := 0;
+      nextLock := locks[$me].next;
+      atomic {
+        Q, old_owner ::= if |Q| == 0 then [] else Q[1..], $me;
+        locks[nextLock].wait := 0;
+      }
     }
   }
 
   method client() {
     while true {
       acquire($me);
+      placeholder := 0;
       label first:
         log ::= log + [Left($me)];
       label second:
         log ::= log + [Right($me)];
       label third:
-      release($me);
+        release($me);
     }
   }
 
@@ -286,55 +246,55 @@ level L3 using MCSLock {
 
 level L4 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
-  noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
+  ghost var ghost_tail: uint64 := 0;
+  ghost var old_owner: uint64 := 0;
+  ghost var Q: seq<uint64> := [];
+  ghost var placeholder: uint64 := 0;
   method acquire(myLock: uint64) {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
-    while readTail != oldTail
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    atomic {
+      prev := atomic_exchange(ghost_tail, $me);
+      Q ::= Q + [$me];
     }
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0) {}
+        while (locks[$me].wait != 0) {}
     }
   }
 
   method release(myLock: uint64) {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    assume $sb_empty;
-    label single:
-    readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
-    if readTail != myLock {
-      while (locks[myLock].next == 0) {}
+    atomic {
+      readTail := compare_and_swap(ghost_tail, $me, 0);
+      Q ::= if readTail == $me then [] else Q;
+    }
+    if readTail != $me {
+      while (locks[$me].next == 0) {}
 
-      nextLock := locks[myLock].next;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
-      locks[nextLock].wait := 0;
+      nextLock := locks[$me].next;
+      atomic {
+        Q, old_owner ::= if |Q| == 0 then [] else Q[1..], $me;
+        locks[nextLock].wait := 0;
+      }
     }
   }
 
   method client() {
     while true {
       acquire($me);
+      placeholder := 0;
       label first:
         log ::= log + [Left($me)];
       label second:
         log ::= log + [Right($me)];
       label third:
-      release($me);
+        release($me);
     }
   }
 
@@ -348,92 +308,74 @@ level L4 using MCSLock {
 
 level L5 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
-  noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
-
+  ghost var ghost_tail: uint64 := 0;
+  ghost var old_owner: uint64 := 0;
+  ghost var Q: seq<uint64> := [];
+  ghost var placeholder: uint64 := 0;
   method acquire(myLock: uint64)
-    requires myLock == $me
-    requires $me !in tidQueue
-    ensures |tidQueue| != 0 && tidQueue[0] == $me
+    requires $me !in Q
+    ensures |Q| != 0 && Q[0] == $me
+    ensures $sb_empty
   {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    // hard to see when store buffer flushed, value is changed accordingly
-    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
-    while readTail != oldTail
-      invariant myLock == $me
-      invariant readTail != oldTail ==> $me !in tidQueue
-      invariant readTail == 0 && oldTail == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
-      invariant readTail == oldTail ==> $me in tidQueue
-      invariant $sb_empty
-      invariant oldTail != $me
-      invariant readTail == oldTail && oldTail != 0 ==> oldTail in tidQueue && exists i :: 0 <= i < |tidQueue|-1 && tidQueue[i] == oldTail && tidQueue[i+1] == $me
-      invariant $me !in tidQueue ==> locks[myLock].next == 0
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    atomic {
+      prev := atomic_exchange(ghost_tail, $me);
+      Q ::= Q + [$me];
     }
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0)
-          invariant myLock == $me
-          invariant $me in tidQueue
-          invariant locks[$me].wait == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+        while (locks[$me].wait != 0)
         {}
     }
-    assume |tidQueue| != 0 && tidQueue[0] == $me;
   }
 
   method release(myLock: uint64)
-    requires myLock == $me
-    requires |tidQueue| != 0 && tidQueue[0] == $me
-    ensures $me !in tidQueue
+    requires $sb_empty
+    requires |Q| != 0 && Q[0] == $me
+    ensures $me !in Q
   {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    label single:
-      assume $sb_empty;
-      assume |tidQueue| != 0 && tidQueue[0] == $me;
-      readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
-    if readTail != myLock {
-      while (locks[myLock].next == 0)
-        invariant myLock == $me
-        invariant |tidQueue| != 0 && tidQueue[0] == $me
-        invariant $sb_empty
+    assume |Q| != 0 && Q[0] == $me;
+    atomic {
+      readTail := compare_and_swap(ghost_tail, $me, 0);
+      Q ::= if readTail == $me then [] else Q;
+    }
+    if readTail != $me {
+      while (locks[$me].next == 0)
       {}
 
-      nextLock := locks[myLock].next;
-      assume |tidQueue| > 0 && tidQueue[0] == $me;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
-      locks[nextLock].wait := 0;
+      nextLock := locks[$me].next;
+      assume |Q| > 0 && Q[0] == $me;
+      atomic {
+        Q, old_owner ::= if |Q| == 0 then [] else Q[1..], $me;
+        locks[nextLock].wait := 0;
+      }
     }
   }
 
-  // testing
-
   method client()
-    requires $me !in tidQueue
+    requires $me !in Q
   {
     while true
-    invariant $me !in tidQueue
+      invariant $me !in Q
     {
       acquire($me);
+      assume |Q| > 0 && Q[0] == $me;
+      placeholder := 0;
       label first:
-        assume |tidQueue| > 0 && tidQueue[0] == $me;
+        assume |Q| > 0 && Q[0] == $me;
         log ::= log + [Left($me)];
-      label second:
-        assume |tidQueue| > 0 && tidQueue[0] == $me;
+        label second:
+          assume |Q| > 0 && Q[0] == $me;
         log ::= log + [Right($me)];
       label third:
-      release($me);
+        release($me);
     }
   }
 
@@ -447,94 +389,77 @@ level L5 using MCSLock {
 
 level L6 using MCSLock {
   noaddr var locks: lock[18446744073709551616];
-  noaddr var tail: uint64 := 0;
-  ghost var tidQueue: seq<uint64> := [];
-
+  ghost var ghost_tail: uint64 := 0;
+  ghost var old_owner: uint64 := 0;
+  ghost var Q: seq<uint64> := [];
+  ghost var placeholder: uint64 := 0;
   method acquire(myLock: uint64)
-    requires myLock == $me
-    requires $me !in tidQueue
-    ensures |tidQueue| != 0 && tidQueue[0] == $me
+    requires $me !in Q
+    ensures |Q| != 0 && Q[0] == $me
+    ensures $sb_empty
   {
-    noaddr var oldTail: uint64 := 0;
-    noaddr var readTail: uint64 := 0;
-    locks[myLock].next := 0;
+    noaddr var prev: uint64 := 0;
+    locks[$me].next := 0;
 
-    oldTail := tail;
-    assume $sb_empty;
-    // hard to see when store buffer flushed, value is changed accordingly
-    readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
-    while readTail != oldTail
-      invariant myLock == $me
-      invariant readTail != oldTail ==> $me !in tidQueue
-      invariant readTail == 0 && oldTail == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
-      invariant readTail == oldTail ==> $me in tidQueue
-      invariant $sb_empty
-      invariant oldTail != $me
-      invariant readTail == oldTail && oldTail != 0 ==> oldTail in tidQueue && exists i :: 0 <= i < |tidQueue|-1 && tidQueue[i] == oldTail && tidQueue[i+1] == $me
-      invariant $me !in tidQueue ==> locks[myLock].next == 0
-    {
-      oldTail := tail;
-      assume $sb_empty;
-      readTail, tail, tidQueue ::= tail, if tail == oldTail then myLock else tail, if oldTail == tail then tidQueue + [$me] else tidQueue;
+    atomic {
+      prev := atomic_exchange(ghost_tail, $me);
+      Q ::= Q + [$me];
     }
 
-    if oldTail != 0 {
-      locks[myLock].wait := 1;
-      locks[oldTail].next := myLock;
+    if prev != 0 {
+      locks[$me].wait := 1;
+      locks[prev].next := $me;
       label wait:
-        while (locks[myLock].wait != 0)
-          invariant myLock == $me
-          invariant $me in tidQueue
-          invariant locks[$me].wait == 0 ==> |tidQueue| != 0 && tidQueue[0] == $me
+        while (locks[$me].wait != 0)
         {}
     }
-    assume |tidQueue| != 0 && tidQueue[0] == $me;
   }
 
   method release(myLock: uint64)
-    requires myLock == $me
-    requires |tidQueue| != 0 && tidQueue[0] == $me
-    ensures $me !in tidQueue
+    requires $sb_empty
+    requires |Q| != 0 && Q[0] == $me
+    ensures $me !in Q
   {
     noaddr var nextLock: uint64 := 0;
     noaddr var readTail: uint64 := 0;
-    label single:
-      assume $sb_empty;
-      assume |tidQueue| != 0 && tidQueue[0] == $me;
-      readTail, tail, tidQueue ::= tail, if tail == myLock then 0 else tail, if tail == myLock then [] else tidQueue;
-    if readTail != myLock {
-      while (locks[myLock].next == 0)
-        invariant myLock == $me
-        invariant |tidQueue| != 0 && tidQueue[0] == $me
-        invariant $sb_empty
+    assume |Q| != 0 && Q[0] == $me;
+    atomic {
+      readTail := compare_and_swap(ghost_tail, $me, 0);
+      Q ::= if readTail == $me then [] else Q;
+    }
+    if readTail != $me {
+      while (locks[$me].next == 0)
       {}
 
-      nextLock := locks[myLock].next;
-      assume |tidQueue| > 0 && tidQueue[0] == $me;
-      tidQueue ::= if |tidQueue| > 0 then tidQueue[1..] else [];
-      locks[nextLock].wait := 0;
+      nextLock := locks[$me].next;
+      assume |Q| > 0 && Q[0] == $me;
+      atomic {
+        Q, old_owner ::= if |Q| == 0 then [] else Q[1..], $me;
+        // Q ::= if |Q| == 0 then [] else Q[1..];
+        locks[nextLock].wait := 0;
+      }
     }
   }
 
-  // testing
-
   method client()
-    requires $me !in tidQueue
+    requires $me !in Q
   {
     while true
-    invariant $me !in tidQueue
+      invariant $me !in Q
     {
       acquire($me);
+      assume |Q| > 0 && Q[0] == $me;
+      placeholder := 0;
       atomic {
         label first:
-          assume |tidQueue| > 0 && tidQueue[0] == $me;
+          assume |Q| > 0 && Q[0] == $me;
           log ::= log + [Left($me)];
         label second:
-          assume |tidQueue| > 0 && tidQueue[0] == $me;
+          assume |Q| > 0 && Q[0] == $me;
           log ::= log + [Right($me)];
       }
       label third:
-      release($me);
+        release($me);
     }
   }
 
@@ -548,22 +473,37 @@ level L6 using MCSLock {
 
 proof pseudo_impl_L1 {
   refinement pseudo_impl L1
-  var_intro tidQueue
+  weakening
+
+  inductive_invariant acquire_myLock @"
+    forall tid :: tid in threads && threads[tid].top.Armada_StackFrame_acquire? ==>
+      threads[tid].top.acquire.myLock == tid
+  "
+
+  inductive_invariant release_myLock @"
+    forall tid :: tid in threads && threads[tid].top.Armada_StackFrame_release? ==>
+      threads[tid].top.release.myLock == tid
+  "
 }
 
 proof L1_L2 {
   refinement L1 L2
-  combining acquire_begin acquire_end acquire_single
+  var_intro Q, ghost_tail, old_owner, placeholder
 }
 
 proof L2_L3 {
   refinement L2 L3
-  combining acquire_begin acquire_end acquire_single
+  weakening
+
+  inductive_invariant tail_match @"
+    ghosts.ghost_tail == globals.tail &&
+    forall tid, entry :: tid in threads && entry in threads[tid].storeBuffer ==> entry.loc.Armada_StoreBufferLocation_Unaddressable? && !entry.loc.v.Armada_GlobalStaticVar_tail?
+  "
 }
 
 proof L3_L4 {
   refinement L3 L4
-  combining release_begin release_end release_single
+  var_hiding tail
 }
 
 proof L4_L5 {
@@ -571,145 +511,247 @@ proof L4_L5 {
   assume_intro
 
   include_file "L4_L5_helper.dfy"
-  import_module L4_L5_Helper
+  import_module Helper
 
-  extra lemma_ActorlessActionsMaintainYieldPredicate_ghost_yp
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  inductive_invariant trivial_inv "Helper.inv_trivial(s.s)"
 
-  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_waiting_facts
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  inductive_invariant inv_wf "Helper.inv_wf(s.s)" depends_on trivial_inv
 
-  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_sb_facts
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  chl_yield_pred {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_nolocks "Helper.yp_nolocks(s.s, s'.s, tid)"
 
-  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_ok_inv
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  chl_yield_pred {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_locks "Helper.yp_locks(s.s, s'.s, tid)"
 
-  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_list_facts
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  chl_invariant inv_Q "Helper.inv_Q(s.s)"
 
-  extra lemma_ActorlessActionsMaintainSpecificGlobalInv_ghost_mem_inv
-        "L4_L5_Helper.sb_entry_fact_unfold(s.s);"
+  chl_invariant inv_sb "Helper.inv_sb(s.s)"
 
-  extra lemma_SpecificGlobalInv_sb_facts_PathLemma_release_TF_5
-        "L4_L5_Helper.sb_entry_fact_unfold(ss0.state.s);"
+  chl_invariant inv_wait_clear "Helper.inv_wait_clear(s.s)"
 
-  extra lemma_SpecificYieldPredicateForOtherActor_ghost_yp_PathLemma_release_TF_5
-        "L4_L5_Helper.sb_entry_fact_unfold(ss4.state.s);"
+  chl_invariant inv_next_deliver "Helper.inv_next_deliver(s.s)"
 
-  chl_invariant waiting_facts @"
-    var locks := s.s.mem.globals.locks;
-    forall tid :: tid in s.s.threads && 0 < tid as int < |locks| && s.s.threads[tid].pc.Armada_PC_acquire_wait? ==>
-      L4_L5_Helper.waiting_facts(tid, s.s)
+  chl_local_invariant acquire_1 inv_Q_tail "(|ghosts.Q| == 0 <==> ghosts.ghost_tail == 0) && (|ghosts.Q| != 0 ==> ghosts.ghost_tail == ghosts.Q[|s.s.ghosts.Q|-1])"
+
+  chl_local_invariant acquire_3 inv_prev "tid in ghosts.Q && threads[tid].top.acquire.prev == if owner_of(tid, ghosts.Q) then 0 else Helper.pred(tid, ghosts.Q)"
+
+  chl_local_invariant release_5 inv_next_correct "|ghosts.Q| > 1 && globals.locks[tid].next == ghosts.Q[1]"
+
+  chl_local_invariant release_6 inv_head_waiting "|ghosts.Q| > 1 && owner_of(tid, ghosts.Q) && globals.locks[ghosts.Q[1]].wait != 0 && ghosts.Q[1] in threads && waiting_pc(threads[ghosts.Q[1]].pc)"
+
+  // loop entry
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_acquire_Y_Yielded_wait "reveal yp_storebuffer();"
+
+  // loop back
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_acquire_YY_YieldedRevisited_wait "yp_storebuffer_trans();"
+
+  // postconditions
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesPostcondition_release_YN_Yielded_End "Q_pop_facts(s11.s.ghosts.Q);"
+
+  // local invs
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_From_release_6_To_release_End "unique_Q_facts(s11.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_UB_From_release_6_To_release_End "unique_Q_facts(s11.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_5_Then_From_release_5_To_release_6 "unique_Q_facts(s9.s.ghosts.Q);"
+
+  // inv_wf
+
+  extra lemma_InvariantPredicateMaintainedByPath_inv_wf_From_main_1_To_main_JumpBack_2 "assert new_tid_trigger(steps.step0.params_CreateThread_main_1.newtid);"
+
+  // inv_sb
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait "assert waiting_pc(s11.s.threads[tid].pc);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_release_Yielded_Start_Then_From_release_Start_To_release_2 "unique_Q_singleton(s1.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    Q_pop_facts(s11.s.ghosts.Q);
+    unique_Q_facts(s11.s.ghosts.Q);
+
+    forall other_tid {:trigger s13.s.threads[other_tid].storeBuffer} | other_tid in s13.s.threads
+      ensures inv_sb_thread(other_tid, s13.s.threads[other_tid].storeBuffer, s13.s)
+    {
+    }
   "
 
-  chl_invariant sb_facts @"
-    forall tid :: tid in s.s.threads ==>
-    forall entry :: entry in s.s.threads[tid].storeBuffer ==>
-    L4_L5_Helper.sb_entry_fact(tid, entry, s.s)
-    "
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_client_Y_Yielded_JumpBack_6_Then_From_client_JumpBack_6_To_client_Start "assert !waiting_pc(s19.s.threads[tid].pc);"
 
-  chl_yield_pred ghost_yp @"
-    var queue, queue', locks, locks' := s.s.ghosts.tidQueue, s'.s.ghosts.tidQueue, s.s.mem.globals.locks, s'.s.mem.globals.locks;
-    tid in s.s.threads && tid in s'.s.threads && 0 < tid as int < |locks| ==>
-    0 < tid as int < |locks'| &&
-    // trivial yield predicates
-    (L4_L5_Helper.is_owner(tid, queue) ==> L4_L5_Helper.is_owner(tid, queue')) &&
-    (tid in queue <==> tid in queue') &&
-    (s.s.threads[tid].pc == s'.s.threads[tid].pc) &&
-    (s.s.threads[tid].top.Armada_StackFrame_acquire? <==> s'.s.threads[tid].top.Armada_StackFrame_acquire?) &&
-    (|s.s.threads[tid].storeBuffer| >= |s'.s.threads[tid].storeBuffer|) &&
+  // inv_next_deliver
 
-    // rule for becoming owner
-    (!L4_L5_Helper.is_owner(tid, queue) && L4_L5_Helper.is_owner(tid, queue') ==>
-     s.s.threads[tid].pc.Armada_PC_acquire_wait? && |s'.s.threads[tid].storeBuffer| == 0) &&
-    // rule for predecessor in queue
-    (tid in queue && !L4_L5_Helper.is_owner(tid, queue) ==>
-     L4_L5_Helper.is_owner(tid, queue') ||
-     (tid in queue' && L4_L5_Helper.prev(tid, queue) == L4_L5_Helper.prev(tid, queue'))) &&
-    (L4_L5_Helper.is_owner(tid, queue) ==>
-      queue <= queue' && (s.s.mem.globals.tail != 0 ==> s'.s.mem.globals.tail != 0)) &&
-    (tid !in queue ==> locks[tid].next == 0 ==> locks'[tid].next == 0) &&
-    (locks[tid].next != 0 && !s.s.threads[tid].top.Armada_StackFrame_acquire? ==> locks[tid].next == locks'[tid].next)
+  extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_next_deliver @"
+
+    forall tid' | tid' in s'.s.ghosts.Q && !owner_of(tid', s'.s.ghosts.Q) && s'.s.mem.globals.locks[pred(tid', s'.s.ghosts.Q)].next != 0
+      ensures s'.s.mem.globals.locks[tid'].wait != 0
+      ensures waiting_pc(s'.s.threads[tid'].pc)
+      ensures |s'.s.threads[tid'].storeBuffer| == 0
+      ensures forall tid'' :: tid'' in s'.s.threads ==> next_entry(pred(tid', s'.s.ghosts.Q), tid'', L.Armada_PC_acquire_5) !in s'.s.threads[tid''].storeBuffer
+    {
+      assert tid' in s.s.ghosts.Q;
+      assert !owner_of(tid', s.s.ghosts.Q);
+      if tid' == tid {
+        var entry := s.s.threads[tid].storeBuffer[0];
+        if inv_entry_acquire_5(tid, entry, s.s) {
+          assert s'.s.mem.globals.locks[tid'].wait != 0;
+
+          forall tid'' | tid'' in s'.s.threads && tid'' != tid'
+            ensures next_entry(pred(tid', s'.s.ghosts.Q), tid'', L.Armada_PC_acquire_5) !in s'.s.threads[tid''].storeBuffer
+          {
+            if next_entry(pred(tid', s'.s.ghosts.Q), tid'', L.Armada_PC_acquire_5) in s'.s.threads[tid''].storeBuffer {
+              assert inv_entry_acquire_5(tid'', next_entry(pred(tid', s'.s.ghosts.Q), tid'', L.Armada_PC_acquire_5), s'.s);
+              assert pred(tid', s'.s.ghosts.Q) == pred(tid'', s'.s.ghosts.Q);
+              unique_Q_facts(s'.s.ghosts.Q);
+            }
+          }
+        }
+      } else {
+        assert s.s.ghosts.Q == s'.s.ghosts.Q;
+
+        var entry := s.s.threads[tid].storeBuffer[0];
+        if inv_entry_acquire_5(tid, entry, s.s) {
+          forall
+            ensures pred(tid', s.s.ghosts.Q) != pred(tid, s.s.ghosts.Q)
+          {
+            unique_Q_facts(s.s.ghosts.Q);
+          }
+          assert s.s.mem.globals.locks[pred(tid', s.s.ghosts.Q)].next == s'.s.mem.globals.locks[pred(tid', s.s.ghosts.Q)].next;
+        }
+      }
+    }"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    var threads, Q := s11.s.threads, s11.s.ghosts.Q;
+    var threads', Q' := s13.s.threads, s13.s.ghosts.Q;
+
+    Q_pop_facts(Q);
+    simple_unique_Q_facts(Q);
+
+    forall other_tid {:trigger pred(other_tid, Q')}
+      | other_tid in Q' && !owner_of(other_tid, Q') && s13.s.mem.globals.locks[pred(other_tid, Q')].next != 0
+      ensures s13.s.mem.globals.locks[other_tid].wait != 0
+      ensures waiting_pc(threads[other_tid].pc)
+      ensures |threads[other_tid].storeBuffer| == 0
+      ensures forall tid' {:trigger threads'[tid'].storeBuffer} ::
+        tid' in threads' ==> next_entry(pred(other_tid, Q'), tid', L.Armada_PC_acquire_5) !in threads'[tid'].storeBuffer
+    {
+      assert s11.s.mem.globals.locks[pred(other_tid, Q)].next != 0;
+      forall tid' {:trigger threads'[tid'].storeBuffer} | tid' in threads'
+        ensures next_entry(pred(other_tid, Q'), tid', L.Armada_PC_acquire_5) !in threads'[tid'].storeBuffer
+      {
+        assert next_entry(pred(other_tid, Q), tid', L.Armada_PC_acquire_5) !in threads[tid'].storeBuffer;
+      }
+    }
+
+    assert inv_next_deliver(s13.s);
   "
 
-  inductive_invariant trivial_inv @"
-    (forall tid :: tid in s.s.threads ==>
-      !s.s.threads[tid].pc.Armada_PC_main_End? && !s.s.threads[tid].pc.Armada_PC_client_End?) &&
-    (forall tid :: tid in s.s.threads ==>
-      s.s.threads[tid].top.Armada_StackFrame_main? ==> |s.s.threads[tid].storeBuffer| == 0 && tid !in s.s.ghosts.tidQueue)
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Y_Yielded_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 "assert waiting_pc(s12.s.threads[tid].pc);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait "assert waiting_pc(s15.s.threads[tid].pc);"
+
+  // inv_Q
+  extra lemma_GlobalInvariantSatisfiedInitially_inv_Q "empty_Q_unique();"
+
+  extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_Q "unique_Q_facts(s'.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_YN_Yielded_6_Then_From_release_6_To_release_End "Q_pop_facts(s11.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_Yielded_Start_Then_From_release_Start_To_release_2 "empty_Q_unique();"
+
+  // inv_wait_clear
+
+  extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_wait_clear @"
+    forall tid' | tid' in s'.s.threads
+      ensures Armada_GetThreadLocalViewLength(s'.s, tid').globals.locks[tid'].wait == 0 ==> s'.s.mem.globals.locks[tid'].wait == 0
+      ensures Armada_GetThreadLocalViewLength(s'.s, tid').globals.locks[tid'].wait == 0 && waiting_pc(s'.s.threads[tid'].pc) ==> owner_of(tid', s'.s.ghosts.Q)
+    {
+      if Armada_GetThreadLocalViewLength(s'.s, tid').globals.locks[tid'].wait == 0 &&
+         Armada_GetThreadLocalViewLength(s.s, tid').globals.locks[tid'].wait != 0 {
+        reveal Armada_ApplyStoreBufferEntryLength();
+        wait_cleared_shared_memory_changed(s.s.mem, s'.s.mem, s.s.threads[tid'].storeBuffer, tid');
+        wait_cleared_entry_release_7(s.s, tid, tid');
+        assert owner_of(tid', s.s.ghosts.Q);
+      }
+    }"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_Start_Then_From_acquire_Start_To_acquire_1 "next_wait_non_interference(s1.s, tid, next_entry(tid, 0, L.Armada_PC_acquire_Start));"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "storebuffer_same_localview_general(s3.s, s5.s);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_4_Then_From_acquire_4_To_acquire_5 "var mem' := apply_storebuffer_snoc(s9.s.mem, s8.s.threads[tid].storeBuffer, wait_entry(tid, 1, L.Armada_PC_acquire_4)); reveal Armada_ApplyStoreBufferEntryLength(); assert Armada_ApplyStoreBufferEntryLength(mem', wait_entry(tid, 1, L.Armada_PC_acquire_4)).globals.locks[tid].wait != 0;"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait "next_wait_non_interference(s10.s, tid, next_entry(s10.s.threads[tid].top.acquire.prev, tid, L.Armada_PC_acquire_5)); reveal Armada_GetThreadLocalViewLength(); reveal Armada_ApplyStoreBufferLength(); reveal Armada_ApplyStoreBufferEntryLength();"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_release_YN_Yielded_6_Then_From_release_6_To_release_End "wait_wait_non_interference(s12.s, tid, wait_entry(s12.s.threads[tid].top.release.nextLock, 0, L.Armada_PC_release_7));"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 "reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s6.s.mem, s7.s.mem);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 "reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s16.s.mem, s17.s.mem);"
+
+  // yp_nolocks
+
+  extra lemma_YieldPredicateTransitive_yp_nolocks @"
+    forall ensures yp_storebuffer(s1.s.threads[actor].storeBuffer, s3.s.threads[actor].storeBuffer) {
+      reveal yp_storebuffer();
+    }
   "
 
-  chl_invariant ok_inv @"
-    // tid
-    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
-    (|s.s.mem.globals.locks| == 18446744073709551616) &&
-    (forall tid :: tid in s.s.threads ==>
-     var thread := s.s.threads[tid];
-     thread.pc.Armada_PC_acquire_1? || thread.pc.Armada_PC_acquire_2? ==>
-      tid !in s.s.ghosts.tidQueue && ((|thread.storeBuffer| != 0 && thread.storeBuffer[|thread.storeBuffer|-1] ==
-       L.Armada_StoreBufferEntry(L.Armada_StoreBufferLocation_Unaddressable(L.Armada_GlobalStaticVar_locks, [Armada_FieldArrayIndex(tid as int), Armada_FieldStruct(Armada_FieldType_lock'next)]), Armada_PrimitiveValue_uint64(0))) ||
-      (|thread.storeBuffer| == 0 && s.s.mem.globals.locks[tid].next == 0))) &&
-    var tidQueue, tail := s.s.ghosts.tidQueue, s.s.mem.globals.tail;
-    && (forall i, j :: 0 <= i < j < |tidQueue| ==> tidQueue[i] != tidQueue[j])
-    && (tail == 0 <==> |tidQueue| == 0)
-    && (tail != 0 ==> tail == tidQueue[|tidQueue|-1])
+  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_nolocks "reveal yp_storebuffer();"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_Yielded_Start_Then_From_release_Start_To_release_2 "empty_Q_unique(); unique_Q_singleton(s1.s.ghosts.Q);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_YN_Yielded_6_Then_From_release_6_To_release_End "Q_pop_facts(s11.s.ghosts.Q);unique_Q_facts(s11.s.ghosts.Q);"
+
+  // yp_locks
+  extra lemma_YieldPredicateTransitive_yp_locks @"
+  reveal yp_storebuffer();
+  var sb1, sb2, sb3 := s1.s.threads[actor].storeBuffer, s2.s.threads[actor].storeBuffer,s3.s.threads[actor].storeBuffer;
+  if !owner_of(actor, s1.s.ghosts.Q) && actor in s1.s.ghosts.Q && 0 < pred(actor, s1.s.ghosts.Q) as int < |s1.s.mem.globals.locks| {
+    if Armada_ApplyStoreBufferLength(s1.s.mem, sb1).globals.locks[actor].wait != 0 &&
+      Armada_ApplyStoreBufferLength(s3.s.mem, sb3).globals.locks[actor].wait == 0 {
+    }
+  }
   "
 
-  chl_invariant list_facts @"
-    // tid
-    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
-    (|s.s.mem.globals.locks| == 18446744073709551616) &&
-    (forall tid :: tid in s.s.ghosts.tidQueue ==> tid in s.s.threads) &&
-    var tidQueue, tail, locks := s.s.ghosts.tidQueue, s.s.mem.globals.tail, s.s.mem.globals.locks;
-    // linked-list correctness
-    && (forall tid :: tid in tidQueue && !L4_L5_Helper.is_owner(tid, tidQueue) ==>
-          locks[L4_L5_Helper.prev(tid, tidQueue)].next == 0 ||
-          (locks[L4_L5_Helper.prev(tid, tidQueue)].next == tid && s.s.threads[tid].pc.Armada_PC_acquire_wait?))
-    && (forall tid :: |tidQueue| != 0 && tid == tidQueue[|tidQueue|-1] ==> locks[tid].next == 0)
-  "
+  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_locks "reveal Armada_GetThreadLocalViewLength();reveal Armada_ApplyStoreBufferLength();reveal Armada_ApplyStoreBufferEntryLength();"
 
-  chl_invariant ghost_mem_inv @"
-    // tid
-    (forall tid :: tid in s.s.threads ==> 0 < tid as int < 18446744073709551616) &&
-    (|s.s.mem.globals.locks| == 18446744073709551616) &&
-    // tidQueue residency
-    (forall tid :: tid in s.s.ghosts.tidQueue ==> tid in s.s.threads) &&
-    // thread local boundary check
-    var tidQueue, tail := s.s.ghosts.tidQueue, s.s.mem.globals.tail;
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
 
-    // there is no next pointer to itself
-    && (forall tid :: tid in s.s.ghosts.tidQueue ==>
-        s.s.mem.globals.locks[tid].next != tid)
-    // release's nextLock never points to itself
-    && (forall tid :: tid in s.s.threads ==>
-        s.s.threads[tid].top.Armada_StackFrame_release? ==>
-        s.s.threads[tid].top.release'nextLock != tid)
-  "
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 "locks_independence(s6.s.mem, s7.s.mem, s6.s.threads[other_tid].storeBuffer);"
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 "locks_independence(s16.s.mem, s17.s.mem, s16.s.threads[other_tid].storeBuffer);"
+
 }
 
 proof L5_L6 {
   refinement L5 L6
-  reduction phase2 client_second
+    reduction phase2 client_second
 
-  include_file "L5_L6_helper.dfy"
-  import_module L5_L6_Helper
+    include_file "L5_L6_helper.dfy"
+    import_module Helper
 
-  inductive_invariant non_terminate_inv @"
-    forall tid :: tid in s.s.threads ==>
-    var thread := s.s.threads[tid];
-    !thread.pc.Armada_PC_main_End? && !thread.pc.Armada_PC_client_End?
-  "
+    inductive_invariant non_terminate_inv @"
+      forall tid :: tid in s.s.threads ==>
+        var thread := s.s.threads[tid];
+        !thread.pc.Armada_PC_main_End? && !thread.pc.Armada_PC_client_End?
+    "
 
-  inductive_invariant length_inv @"
-    forall tid :: tid in s.s.threads ==>
-    L5_L6_Helper.Armada_GetThreadLocalViewLength(s.s, tid) == L.Armada_GetThreadLocalView(s.s, tid) &&
-    |s.s.mem.globals.locks| == 18446744073709551616
-  "
+    inductive_invariant length_inv @"
+      forall tid :: tid in s.s.threads ==>
+        Helper.Armada_GetThreadLocalViewLength(s.s, tid) == L.Armada_GetThreadLocalView(s.s, tid) &&
+        |s.s.mem.globals.locks| == 18446744073709551616
+    "
 
-  inductive_invariant ownership_inv @"
-    forall tid :: tid in s.s.threads ==>
-    (s.s.threads[tid].pc.Armada_PC_client_first? || s.s.threads[tid].pc.Armada_PC_client_second?) ==>
-    |s.s.ghosts.tidQueue| > 0 && s.s.ghosts.tidQueue[0] == tid
-  "
+    inductive_invariant ownership_inv @"
+      forall tid :: tid in s.s.threads ==>
+        (s.s.threads[tid].pc.Armada_PC_client_first? || s.s.threads[tid].pc.Armada_PC_client_second?) ==>
+        |s.s.ghosts.Q| > 0 && s.s.ghosts.Q[0] == tid
+    "
 }

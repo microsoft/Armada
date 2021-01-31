@@ -95,35 +95,35 @@ namespace Microsoft.Armada {
 
       ProofGenerationParams pgp = new ProofGenerationParams(prog, mProof, mLow, mHigh);
       AbstractProofGenerator pg = null;
-      if (strategy is StackVariableHidingStrategyDecl) {
-        pg = new StackVarHidingProofGenerator(pgp, (StackVariableHidingStrategyDecl)strategy);
+      if (strategy is GlobalVariableHidingStrategyDecl gvhsd) {
+        pg = new GlobalVarHidingProofGenerator(pgp, gvhsd);
       }
-      else if (strategy is VariableHidingStrategyDecl) {
-        pg = new VarHidingProofGenerator(pgp, (VariableHidingStrategyDecl)strategy);
+      else if (strategy is StackVariableHidingStrategyDecl svhsd) {
+        pg = new StackVarHidingProofGenerator(pgp, svhsd);
       }
-      else if (strategy is StackVariableIntroStrategyDecl) {
-        pg = new StackVarIntroProofGenerator(pgp, (StackVariableIntroStrategyDecl)strategy);
+      else if (strategy is GlobalVariableIntroStrategyDecl gvisd) {
+        pg = new GlobalVarIntroProofGenerator(pgp, gvisd);
       }
-      else if (strategy is VariableIntroStrategyDecl) {
-        pg = new VarIntroProofGenerator(pgp, (VariableIntroStrategyDecl)strategy);
+      else if (strategy is StackVariableIntroStrategyDecl svisd) {
+        pg = new StackVarIntroProofGenerator(pgp, svisd);
       }
-      else if (strategy is AssumeIntroStrategyDecl) {
-        pg = new AssumeIntroProofGenerator(pgp, (AssumeIntroStrategyDecl)strategy);
+      else if (strategy is AssumeIntroStrategyDecl aisd) {
+        pg = new AssumeIntroProofGenerator(pgp, aisd);
       }
-      else if (strategy is TSOEliminationStrategyDecl) {
-        pg = new TSOEliminationProofGenerator(pgp, (TSOEliminationStrategyDecl)strategy);
+      else if (strategy is TSOEliminationStrategyDecl tesd) {
+        pg = new TSOEliminationProofGenerator(pgp, tesd);
       }
-      else if (strategy is ReductionStrategyDecl) {
-        pg = new ReductionProofGenerator(pgp, (ReductionStrategyDecl)strategy);
+      else if (strategy is ReductionStrategyDecl rsd) {
+        pg = new ReductionProofGenerator(pgp, rsd);
       }
-      else if (strategy is WeakeningStrategyDecl) {
-        pg = new WeakeningProofGenerator(pgp, (WeakeningStrategyDecl)strategy);
+      else if (strategy is WeakeningStrategyDecl wsd) {
+        pg = new WeakeningProofGenerator(pgp, wsd);
       }
-      else if (strategy is StarWeakeningStrategyDecl) {
-        pg = new StarWeakeningProofGenerator(pgp, (StarWeakeningStrategyDecl)strategy);
+      else if (strategy is StarWeakeningStrategyDecl swsd) {
+        pg = new StarWeakeningProofGenerator(pgp, swsd);
       }
-      else if (strategy is CombiningStrategyDecl) {
-        pg = new CombiningProofGenerator(pgp, (CombiningStrategyDecl)strategy);
+      else if (strategy is CombiningStrategyDecl csd) {
+        pg = new CombiningProofGenerator(pgp, csd);
       }
 
       if (pg != null) {

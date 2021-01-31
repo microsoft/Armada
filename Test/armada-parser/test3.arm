@@ -1,6 +1,6 @@
 include "../../Armada/ArmadaCommonDefinitions.dfy"
 
-structs test3structs
+structs SharedStructs3
 {
     struct C1 {
         var x:int32[4];
@@ -29,7 +29,7 @@ structs test3structs
     "
 }
 
-level test3 using test3structs
+level C using SharedStructs3
 {
     datatype DT1 = DT1(a:int, b:set<int>)
 

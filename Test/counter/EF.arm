@@ -1,0 +1,7 @@
+include "E.arm"
+include "F.arm"
+
+proof EF {
+    refinement E F
+    stack_var_hiding inc y
+}

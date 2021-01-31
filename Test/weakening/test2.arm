@@ -1,0 +1,86 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs2 {
+
+}
+
+level C using SharedStructs2 {
+  ghost var x:int32 := 0;
+
+  method t1()
+  {
+    atomic {
+      x ::= 1;
+      x ::= 2;
+    }
+  }
+
+  method t2()
+  {
+    if (x == 1) {
+      x ::= 3;
+    }
+  }
+
+  method {:atomic} recur()
+  {
+    atomic {
+      x ::= x;
+      if (*) {
+        recur();
+      }
+    }
+  }
+
+  method main()
+  {
+    create_thread t1();
+    create_thread t2();
+  }
+
+  invariant XNotOne
+  {
+    x != 1
+  }
+}
+
+level D using SharedStructs2 {
+  ghost var x:int32 := 0;
+
+  method t1()
+  {
+    atomic {
+      x ::= 1;
+      x ::= 2;
+    }
+  }
+
+  method t2()
+  {
+    if (false) {
+      x ::= 3;
+    }
+  }
+
+  method {:atomic} recur()
+  {
+    atomic {
+      x ::= x;
+      if (*) {
+        recur();
+      }
+    }
+  }
+
+  method main()
+  {
+    create_thread t1();
+    create_thread t2();
+  }
+}
+
+proof CD {
+  refinement C D
+  weakening
+  inductive_invariant XNotOne
+}

@@ -124,13 +124,14 @@ namespace Microsoft.Armada {
 
     public override ArmadaLValue GetLValue(IToken tok, ResolutionContext context)
     {
-      return new UnaddressableFieldArmadaLValue(tok, ty, new GhostsArmadaLValue(), new UndefinedBehaviorAvoidanceConstraint(), name, true);
+      return new UnaddressableFieldArmadaLValue(tok, ty, new GhostsArmadaLValue(), new UndefinedBehaviorAvoidanceConstraint(), name,
+                                                0, true);
     }
 
     public override ArmadaRValue GetRValue(IToken tok, ResolutionContext context)
     {
       var ghosts = context.GetRValueGhosts();
-      var val = AH.MakeExprDotName(ghosts, name, ty);
+      var val = $"({ghosts}).{name}";
       return new ArmadaRValue(val);
     }
   }
@@ -145,14 +146,14 @@ namespace Microsoft.Armada {
 
     public override ArmadaLValue GetLValue(IToken tok, ResolutionContext context)
     {
-      return new UnaddressableFieldArmadaLValue(tok, ty, new GlobalsArmadaLValue(), new UndefinedBehaviorAvoidanceConstraint(), name, false);
+      return new UnaddressableFieldArmadaLValue(tok, ty, new GlobalsArmadaLValue(), new UndefinedBehaviorAvoidanceConstraint(), name,
+                                                0, false);
     }
 
     public override ArmadaRValue GetRValue(IToken tok, ResolutionContext context)
     {
       var globals = context.GetRValueGlobals();
-      var val = AH.MakeExprDotName(globals, name, ty);
-      return new ArmadaRValue(val);
+      return new ArmadaRValue($"({globals}).{name}");
     }
   }
 
@@ -162,30 +163,24 @@ namespace Microsoft.Armada {
 
     public override ArmadaLValue GetLValue(IToken tok, ResolutionContext context)
     {
-      var s = context.GetLValueState();
-      var addrs = AH.MakeExprDotName(s, "addrs", "Armada_Addrs");
-      var addr = AH.MakeExprDotName(addrs, name, new PointerType(ty));
+      var addr = $"({context.GetLValueState()}).addrs.{name}";
       return new AddressableArmadaLValue(tok, ty, new ArmadaRValue(addr));
     }
 
     public override ArmadaRValue GetRValue(IToken tok, ResolutionContext context)
     {
-      var s = context.GetRValueState();
-      var addrs = AH.MakeExprDotName(s, "addrs", "Armada_Addrs");
-      var addr = AH.MakeExprDotName(addrs, name, new PointerType(ty));
-
+      var addr = $"({context.GetRValueState()}).addrs.{name}";
       var h = context.GetRValueHeap();
-
       var valid = AH.GetInvocationOfValidPointer(h, addr, ty);
       if (valid == null) {
-        context.Fail(tok, "Type {ty} is currently not supported in the heap");
+        context.Fail(tok, $"Type {ty} is currently not supported in the heap");
         return null;
       }
       var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint(valid);
 
       var val = AH.GetInvocationOfDereferencePointer(h, addr, ty);
       if (val == null) {
-        context.Fail(tok, "Type {ty} is currently not supported in the heap");
+        context.Fail(tok, $"Type {ty} is currently not supported in the heap");
       }
       return new ArmadaRValue(crashAvoidance, val);
     }
@@ -209,18 +204,15 @@ namespace Microsoft.Armada {
 
     public override ArmadaLValue GetLValue(IToken tok, ResolutionContext context)
     {
-      var top = context.GetLValueTopStackFrame();
-      var correct_frame_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{methodName}?", new BoolType());
-      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint(correct_frame_type);
-      return new UnaddressableFieldArmadaLValue(tok, ty, new TopStackFrameArmadaLValue(crashAvoidance), crashAvoidance, $"{methodName}'{name}", true);
+      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
+      var varsVal = new TopStackVarsArmadaLValue(crashAvoidance, methodName);
+      return new UnaddressableFieldArmadaLValue(tok, ty, varsVal, new UndefinedBehaviorAvoidanceConstraint(), name, 0, true);
     }
 
     public override ArmadaRValue GetRValue(IToken tok, ResolutionContext context)
     {
-      var top = context.GetRValueTopStackFrame();
-      var correct_frame_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{methodName}?", new BoolType());
-      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint(correct_frame_type);
-      var val = AH.MakeExprDotName(top, $"{methodName}'{name}", ty);
+      var val = $"({context.GetRValueTopStackFrame()}).{methodName}.{name}";
+      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
       return new ArmadaRValue(crashAvoidance, val);
     }
   }
@@ -241,33 +233,27 @@ namespace Microsoft.Armada {
 
     public override ArmadaLValue GetLValue(IToken tok, ResolutionContext context)
     {
-      var top = context.GetLValueTopStackFrame();
-      var correct_frame_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{methodName}?", new BoolType());
-      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint(correct_frame_type);
-      var addr = AH.MakeExprDotName(top, $"{methodName}'AddrOf'{name}", new PointerType(ty));
+      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
+      var addr = $"({context.GetLValueTopStackFrame()}).{methodName}.AddrOf'{name}";
       return new AddressableArmadaLValue(tok, ty, new ArmadaRValue(crashAvoidance, addr));
     }
 
     public override ArmadaRValue GetRValue(IToken tok, ResolutionContext context)
     {
-      var top = context.GetRValueTopStackFrame();
-      var correct_frame_type = AH.MakeExprDotName(top, $"Armada_StackFrame_{methodName}?", new BoolType());
-      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint(correct_frame_type);
-
-      var addr = AH.MakeExprDotName(top, $"{methodName}'AddrOf'{name}", new PointerType(ty));
-
+      var crashAvoidance = new UndefinedBehaviorAvoidanceConstraint();
+      var addr = $"({context.GetRValueTopStackFrame()}).{methodName}.AddrOf'{name}";
       var h = context.GetRValueHeap();
 
       var valid = AH.GetInvocationOfValidPointer(h, addr, ty);
       if (valid == null) {
-        context.Fail(tok, "Type {ty} is not supported on the heap, and thus not for addressable stack variables either");
+        context.Fail(tok, $"Type {ty} is not supported on the heap, and thus not for addressable stack variables either");
         return null;
       }
       crashAvoidance.Add(valid);
 
       var val = AH.GetInvocationOfDereferencePointer(h, addr, ty);
       if (val == null) {
-        context.Fail(tok, "Type {ty} is not supported on the heap, and thus not for addressable stack variables either");
+        context.Fail(tok, $"Type {ty} is not supported on the heap, and thus not for addressable stack variables either");
       }
       return new ArmadaRValue(crashAvoidance, val);
     }
@@ -282,7 +268,7 @@ namespace Microsoft.Armada {
     private ArmadaSymbolTable symbols;
     private int numPCs;
     private Dictionary<ArmadaPC, EnablingConstraintCollector> constraints;
-    private List<ArmadaPC> returnPCs;
+    private ArmadaPC returnPC;
     private HashSet<ArmadaPC> nonyieldingPCs;
     private ArmadaStatement parsedBody;
     private bool atomicCallsAndReturns;
@@ -296,7 +282,7 @@ namespace Microsoft.Armada {
       method = i_method;
       numPCs = 0;
       constraints = new Dictionary<ArmadaPC, EnablingConstraintCollector>();
-      returnPCs = new List<ArmadaPC>();
+      returnPC = null;
       nonyieldingPCs = new HashSet<ArmadaPC>();
       parsedBody = null;
       atomicCallsAndReturns = false;
@@ -321,62 +307,55 @@ namespace Microsoft.Armada {
       }
     }
 
+    public void AddEnablingConstraint(Program prog, ArmadaPC pc, Expression e)
+    {
+      if (!constraints.ContainsKey(pc)) {
+        constraints[pc] = new EnablingConstraintCollector(prog);
+      }
+      var constraintCollector = constraints[pc];
+      var context = new EnablingConstraintResolutionContext(constraintCollector, method.Name, symbols);
+      var rvalue = context.ResolveAsRValue(e);
+      constraintCollector.AddConjunct(rvalue.UndefinedBehaviorAvoidance);
+      constraintCollector.AddConjunct(rvalue.Val);
+    }
+
     public void AppendAllPCs(List<ArmadaPC> allPCs)
     {
       allPCs.AddRange(Enumerable.Range(0, numPCs).Select(i => new ArmadaPC(symbols, method.Name, i)));
     }
 
-    public void AddReturnPC(ArmadaPC pc)
+    public void SetReturnPC(ArmadaPC pc)
     {
-      returnPCs.Add(pc);
+      returnPC = pc;
     }
 
-    public List<ArmadaPC> ReturnPCs { get { return returnPCs; } }
+    public ArmadaPC ReturnPC { get { return returnPC; } }
     public HashSet<ArmadaPC> NonyieldingPCs { get { return nonyieldingPCs; } }
+    public bool IsNonyieldingPC(ArmadaPC pc) { return nonyieldingPCs.Contains(pc); }
 
     public void UseAtomicCallsAndReturns()
     {
       atomicCallsAndReturns = true;
       nonyieldingPCs.Add(new ArmadaPC(symbols, method.Name, 0));
-      foreach (var returnPC in ReturnPCs) {
-        nonyieldingPCs.Add(returnPC);
-      }
+      nonyieldingPCs.Add(returnPC);
     }
 
     public bool AtomicCallsAndReturns { get { return atomicCallsAndReturns; } }
 
     public void ParseMethodBody(ArmadaSymbolTable symbols)
     {
-      var context = new ParseContext(prog, symbols, this);
-      parsedBody = ArmadaStatement.ParseStatement(context, method.Body);
+      var parse = new ParseInfo(prog, symbols, this);
+      parsedBody = ArmadaStatement.ParseStatement(parse, method.Body);
       var startPC = GenerateOnePC();
-      var endPC = parsedBody.AssignPCs(prog, symbols, this, startPC);
+      returnPC = parsedBody.AssignPCs(startPC);
 
-      ArmadaStatement.CollectReturnPCs(parsedBody, returnPCs);
       ArmadaStatement.ComputeNonyieldingPCs(parsedBody, nonyieldingPCs);
 
-      foreach (var statement in parsedBody) {
-        if (statement is ArmadaAssumeStatement) {
-          var s = (ArmadaAssumeStatement)statement;
-          var assumePC = s.StartPC;
-          if (!constraints.ContainsKey(assumePC)) {
-            constraints[assumePC] = new EnablingConstraintCollector(prog);
-          }
-          s.AddEnablingConstraint(symbols, this, constraints[assumePC]);
-        }
-      }
-
       symbols.AssociateLabelWithPC("Start", startPC);
-      symbols.AssociateLabelWithPC("End", endPC);
+      symbols.AssociateLabelWithPC("End", returnPC);
       foreach (var statement in parsedBody) {
-        var stmt = statement.Stmt;
-        if (stmt != null) {
-          for (var lbl = stmt.Labels; lbl != null; lbl = lbl.Next) {
-            if (lbl.Data != null && lbl.Data.Name != null) {
-              symbols.AssociateLabelWithPC(lbl.Data.Name, statement.StartPC);
-            }
-          }
-        }
+        statement.AssociateLabelsWithPCs();
+        statement.GenerateEnablingConstraints();
       }
     }
 
@@ -543,7 +522,7 @@ namespace Microsoft.Armada {
     }
 
     public string GetVariableStackFrameFieldName(string localVariableName) {
-      return $"{methodName}'{LookupVariable(localVariableName).FieldName}";
+      return LookupVariable(localVariableName).FieldName;
     }
 
     public ArmadaVariable GetInputVariableByIndex(int idx) {
@@ -668,10 +647,8 @@ namespace Microsoft.Armada {
       if (meth.Ens == null) { return; }
       if (!meth.Ens.Any()) { return; }
 
-      var s = AH.MakeNameSegment("s", "Armada_TotalState");
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
       var failureCollector = new SimpleFailureReporter(prog);
-      var ensContext = new BodylessMethodSnapshotResolutionContext(s, tid, meth.Name, symbols, failureCollector);
+      var ensContext = new BodylessMethodSnapshotResolutionContext("s", "tid", meth.Name, symbols, failureCollector);
       foreach (var ens in meth.Ens)
       {
         var ensResolvedJustToGetOldValues = ensContext.ResolveAsRValue(ens.E);
@@ -687,7 +664,7 @@ namespace Microsoft.Armada {
 
     public void AddMethodInfo(Program prog, ClassDecl c, ArmadaSymbolTable symbols, Method meth, bool fromStructsModule)
     {
-      bool isExternal = (meth.Body is null && Attributes.Contains(meth.Attributes, "extern"));
+      bool isExternal = (meth.Body is null || Attributes.Contains(meth.Attributes, "extern"));
 
       var smst = new ArmadaSingleMethodSymbolTable(meth, isExternal, fromStructsModule);
 
@@ -816,6 +793,22 @@ namespace Microsoft.Armada {
     public string TranslatedName { get { return translatedName; } set { translatedName = value; } }
   }
 
+  public class UniversalStepConstraintInfo
+  {
+    private UniversalStepConstraintDecl decl;
+    private string translatedName;
+
+    public UniversalStepConstraintInfo(UniversalStepConstraintDecl i_decl)
+    {
+      decl = i_decl;
+      translatedName = null;
+    }
+
+    public UniversalStepConstraintDecl Decl { get { return decl; } }
+    public string Name { get { return decl.Name; } }
+    public string TranslatedName { get { return translatedName; } set { translatedName = value; } }
+  }
+
   public class ArmadaSymbolTable
   {
     private Program prog;
@@ -825,13 +818,15 @@ namespace Microsoft.Armada {
     private ArmadaStructs structs;
     private HashSet<string> threadRoutines;
     private List<string> functionNames;
+    private List<NextRoutineConstructor> nextRoutineConstructors;
     private List<NextRoutine> nextRoutines;
     private AllMethodsInfo allMethodsInfo;
-    private NextRoutine tauNextRoutine;
+    private NextRoutineConstructor tauNextRoutineConstructor;
     private Dictionary<string, ArmadaPC> methodAndLabelToPCMap;
     private Dictionary<ArmadaPC, string> pcToLabelMap;
     private Dictionary<string, GlobalInvariantInfo> globalInvariants;
     private Dictionary<string, YieldPredicateInfo> yieldPredicates;
+    private Dictionary<string, UniversalStepConstraintInfo> universalStepConstraints;
 
     public ArmadaSymbolTable(Program i_prog, ArmadaStructs i_structs)
     {
@@ -850,12 +845,14 @@ namespace Microsoft.Armada {
       threadRoutines = new HashSet<string> { "main" };
       functionNames = new List<string>{};
       nextRoutines = new List<NextRoutine>();
+      nextRoutineConstructors = new List<NextRoutineConstructor>();
       allMethodsInfo = new AllMethodsInfo(prog);
-      tauNextRoutine = null;
+      tauNextRoutineConstructor = null;
       methodAndLabelToPCMap = new Dictionary<string, ArmadaPC>();
       pcToLabelMap = new Dictionary<ArmadaPC, string>();
       globalInvariants = new Dictionary<string, GlobalInvariantInfo>();
       yieldPredicates = new Dictionary<string, YieldPredicateInfo>();
+      universalStepConstraints = new Dictionary<string, UniversalStepConstraintInfo>();
     }
 
     public void AddClass(ClassDecl c, bool fromStructsModule)
@@ -878,6 +875,9 @@ namespace Microsoft.Armada {
           }
           else if (member is YieldPredicateDecl) {
             AddYieldPredicate((YieldPredicateDecl)member);
+          }
+          else if (member is UniversalStepConstraintDecl) {
+            AddUniversalStepConstraint((UniversalStepConstraintDecl)member);
           }
         }
       }
@@ -940,12 +940,20 @@ namespace Microsoft.Armada {
 
     public void UseMethodAsThreadRoutine(string methodName)
     {
+      if (allMethodsInfo.LookupMethod(methodName).AtomicCallsAndReturns) {
+        AH.PrintError(prog, $"It's illegal to use create_thread on {methodName} since it uses atomic calls and returns.");
+      }
       threadRoutines.Add(methodName);
     }
 
     public HashSet<string> GetThreadRoutines()
     {
       return threadRoutines;
+    }
+
+    public bool IsThreadRoutine(string methodName)
+    {
+      return threadRoutines.Contains(methodName);
     }
 
     public ClassDecl DefaultClass { get { return defaultClass; } set { defaultClass = value; } }
@@ -955,12 +963,20 @@ namespace Microsoft.Armada {
     public ArmadaStruct GetStruct(string structName) { return structs.GetStruct(structName); }
     public ArmadaStruct LookupStruct(string structName) { return structs.LookupStruct(structName); }
     public Type GetStructFieldType(string structName, string fieldName) { return structs.GetStructFieldType(structName, fieldName); }
+    public int GetStructFieldPos(string structName, string fieldName) { return structs.GetStructFieldPos(structName, fieldName); }
     public Type FlattenType(Type t, string moduleName = null) { return structs.FlattenType(t, moduleName); }
     public string StructsModuleName { get { return structs == null ? null : structs.StructsModuleName; } }
 
+    public void AddNextRoutineConstructor(NextRoutineConstructor nrc) { nextRoutineConstructors.Add(nrc); }
+    public IEnumerable<NextRoutineConstructor> NextRoutineConstructors { get { return nextRoutineConstructors; } }
+    public void ClearNextRoutineConstructors() { nextRoutineConstructors = null; }
     public void AddNextRoutine(NextRoutine nextRoutine) { nextRoutines.Add(nextRoutine); }
     public IEnumerable<NextRoutine> NextRoutines { get { return nextRoutines; } }
-    public NextRoutine TauNextRoutine { get { return tauNextRoutine; } set { tauNextRoutine = value; } }
+    public NextRoutineConstructor TauNextRoutineConstructor {
+      get { return tauNextRoutineConstructor; }
+      set { tauNextRoutineConstructor = value; }
+    }
+    public NextRoutine TauNextRoutine { get { return tauNextRoutineConstructor.DefinedBehaviorNextRoutine; } }
 
     public AllMethodsInfo AllMethods { get { return allMethodsInfo; } }
 
@@ -1017,9 +1033,56 @@ namespace Microsoft.Armada {
       yieldPredicates[decl.Name] = new YieldPredicateInfo(decl);
     }
 
+    public void AddUniversalStepConstraint(UniversalStepConstraintDecl decl)
+    {
+      universalStepConstraints[decl.Name] = new UniversalStepConstraintInfo(decl);
+    }
+
     public Dictionary<string, GlobalInvariantInfo> GlobalInvariants { get { return globalInvariants; } }
     public Dictionary<string, YieldPredicateInfo> YieldPredicates { get { return yieldPredicates; } }
+    public Dictionary<string, UniversalStepConstraintInfo> UniversalStepConstraints { get { return universalStepConstraints; } }
 
     public string RefinementConstraint { get { return structs.RefinementConstraint; } }
+
+    public bool IsNonyieldingPC(ArmadaPC pc)
+    {
+      if (pc == null) { return false; }
+      var method = allMethodsInfo.LookupMethod(pc.methodName);
+      return method == null ? false : method.IsNonyieldingPC(pc);
+    }
+
+    public IEnumerable<ArmadaPC> EnumeratePotentialRecurrentPCs()
+    {
+      foreach (var methodName in allMethodsInfo.AllMethodNames) {
+        // Include the start of the method.
+        yield return new ArmadaPC(this, methodName, 0);
+
+        // Include the return site of the method.
+        var methodInfo = allMethodsInfo.LookupMethod(methodName);
+        yield return methodInfo.ReturnPC;
+
+        // Include each loop head in the method, and the PC of any non-forward goto.
+        if (methodInfo.method.Body == null) {
+          // For body-less methods, there's an implicit loop head at PC #1.
+          yield return new ArmadaPC(this, methodName, 1);
+        }
+        else {
+          foreach (var stmt in methodInfo.ParsedBody) {
+            if (stmt is ArmadaWhileStatement) {
+              yield return stmt.StartPC;
+            }
+            else if (stmt is ArmadaGotoStatement) {
+              var startPC = stmt.StartPC;
+              var s = (GotoStmt)(stmt.Stmt);
+              var targetPC = GetPCForMethodAndLabel(methodName + "_" + s.Target);
+              if (targetPC != null && targetPC.instructionCount <= startPC.instructionCount) {
+                // If it's not a forward goto, it's potentially recurrent.
+                yield return startPC;
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

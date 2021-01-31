@@ -11,14 +11,14 @@ using Token = Microsoft.Boogie.Token;
 
 namespace Microsoft.Armada
 {
-  public class ParseContext
+  public class ParseInfo
   {
     public Program prog;
     public ArmadaSymbolTable symbols;
     public MethodInfo methodInfo;
     public ArmadaWhileStatement innermostEnclosingWhile;
 
-    public ParseContext(Program i_prog, ArmadaSymbolTable i_symbols, MethodInfo i_methodInfo)
+    public ParseInfo(Program i_prog, ArmadaSymbolTable i_symbols, MethodInfo i_methodInfo)
     {
       prog = i_prog;
       symbols = i_symbols;
@@ -26,9 +26,9 @@ namespace Microsoft.Armada
       innermostEnclosingWhile = null;
     }
 
-    public ParseContext Clone()
+    public ParseInfo Clone()
     {
-      var other = new ParseContext(prog, symbols, methodInfo);
+      var other = new ParseInfo(prog, symbols, methodInfo);
       other.innermostEnclosingWhile = this.innermostEnclosingWhile;
       return other;
     }
@@ -36,23 +36,22 @@ namespace Microsoft.Armada
 
   public abstract class ArmadaStatement
   {
+    protected ParseInfo parse;
     protected ArmadaPC startPC;
     protected ArmadaPC endPC;
-    protected NextRoutine nextRoutine;
 
     public virtual Statement Stmt { get { return null; } }
     public ArmadaPC StartPC { get { return startPC; } }
     public ArmadaPC EndPC { get { return endPC; } }
-    public NextRoutine NxtRoutine { get { return nextRoutine; } }
 
-    public ArmadaStatement(ParseContext context)
+    public ArmadaStatement(ParseInfo i_parse)
     {
+      parse = i_parse;
       startPC = null;
       endPC = null;
-      nextRoutine = null;
     }
 
-    public static ArmadaStatement ParseStatementInternal(ParseContext context, Statement stmt)
+    public static ArmadaStatement ParseStatementInternal(ParseInfo parse, Statement stmt)
     {
       if (stmt == null)
       {
@@ -61,7 +60,7 @@ namespace Microsoft.Armada
       else if (stmt is BlockStmt)
       {
         var s = (BlockStmt)stmt;
-        return new ArmadaBlockStatement(context, s);
+        return new ArmadaBlockStatement(parse, s);
       }
       else if (stmt is UpdateStmt)
       {
@@ -75,111 +74,127 @@ namespace Microsoft.Armada
               var suffix = (ApplySuffix)ex.Expr;
               if (suffix.Lhs is NameSegment) {
                 var suffixName = (NameSegment)suffix.Lhs;
-                if (context.symbols.DoesMethodNameExist(suffixName.Name)) {
-                  return new ArmadaCallStatement(context, s, suffixName.Name);
+                if (parse.symbols.DoesMethodNameExist(suffixName.Name)) {
+                  return new ArmadaCallStatement(parse, s, suffixName.Name);
                 }
               }
             }
           }
           else if (rhs is CreateThreadRhs) {
-            return new ArmadaCreateThreadStatement(context, s);
+            return new ArmadaCreateThreadStatement(parse, s);
           }
           else if (rhs is MallocRhs) {
-            return new ArmadaMallocStatement(context, s);
+            return new ArmadaMallocStatement(parse, s);
           }
           else if (rhs is CallocRhs) {
-            return new ArmadaCallocStatement(context, s);
+            return new ArmadaCallocStatement(parse, s);
+          }
+          else if (rhs is CompareAndSwapRhs) {
+            return new ArmadaCompareAndSwapStatement(parse, s);
+          }
+          else if (rhs is AtomicExchangeRhs) {
+            return new ArmadaAtomicExchangeStatement(parse, s);
           }
         }
 
-        return new ArmadaUpdateStatement(context, s);
+        return new ArmadaUpdateStatement(parse, s);
       }
       else if (stmt is IfStmt)
       {
         var s = (IfStmt)stmt;
-        return new ArmadaIfStatement(context, s);
+        return new ArmadaIfStatement(parse, s);
       }
       else if (stmt is WhileStmt)
       {
         var s = (WhileStmt)stmt;
-        context = context.Clone();
-        return new ArmadaWhileStatement(context, s);
+        parse = parse.Clone();
+        return new ArmadaWhileStatement(parse, s);
       }
       else if (stmt is VarDeclStmt)
       {
         var s = (VarDeclStmt)stmt;
-        return new ArmadaVarDeclStatement(context, s);
+        return new ArmadaVarDeclStatement(parse, s);
       }
       else if (stmt is ReturnStmt)
       {
         var s = (ReturnStmt)stmt;
-        return new ArmadaReturnStatement(context, s);
+        return new ArmadaReturnStatement(parse, s);
       }
       else if (stmt is AssertStmt)
       {
         var s = (AssertStmt)stmt;
-        return new ArmadaAssertStatement(context, s);
+        return new ArmadaAssertStatement(parse, s);
       }
       else if (stmt is AssumeStmt)
       {
         var s = (AssumeStmt)stmt;
-        return new ArmadaAssumeStatement(context, s);
+        return new ArmadaAssumeStatement(parse, s);
       }
       else if (stmt is SomehowStmt)
       {
         var s = (SomehowStmt)stmt;
-        return new ArmadaSomehowStatement(context, s);
+        return new ArmadaSomehowStatement(parse, s);
+      }
+      else if (stmt is FenceStmt)
+      {
+        var s = (FenceStmt)stmt;
+        return new ArmadaFenceStatement(parse, s);
+      }
+      else if (stmt is GotoStmt)
+      {
+        var s = (GotoStmt)stmt;
+        return new ArmadaGotoStatement(parse, s);
       }
       else if (stmt is DeallocStmt)
       {
         var s = (DeallocStmt)stmt;
-        return new ArmadaDeallocStatement(context, s);
+        return new ArmadaDeallocStatement(parse, s);
       }
       else if (stmt is JoinStmt)
       {
         var s = (JoinStmt)stmt;
-        return new ArmadaJoinStatement(context, s);
+        return new ArmadaJoinStatement(parse, s);
       }
       else if (stmt is BreakStmt)
       {
         var s = (BreakStmt)stmt;
         if (s.TargetLabel != null) {
-          AH.PrintError(context.prog, stmt.Tok, "Armada doesn't support breaks with statement labels");
+          AH.PrintError(parse.prog, stmt.Tok, "Armada doesn't support breaks with statement labels");
         }
         if (s.BreakCount != 1) {
-          AH.PrintError(context.prog, stmt.Tok, "Armada doesn't support breaks with counts other than 1");
+          AH.PrintError(parse.prog, stmt.Tok, "Armada doesn't support breaks with counts other than 1");
         }
-        if (context.innermostEnclosingWhile == null) {
-          AH.PrintError(context.prog, stmt.Tok, "Can't have a break that isn't inside of a while loop");
+        if (parse.innermostEnclosingWhile == null) {
+          AH.PrintError(parse.prog, stmt.Tok, "Can't have a break that isn't inside of a while loop");
         }
-        return new ArmadaBreakStatement(context, s);
+        return new ArmadaBreakStatement(parse, s);
       }
       else if (stmt is ContinueStmt)
       {
         var s = (ContinueStmt)stmt;
-        if (context.innermostEnclosingWhile == null) {
-          AH.PrintError(context.prog, stmt.Tok, "Can't have a continue that isn't inside of a while loop");
+        if (parse.innermostEnclosingWhile == null) {
+          AH.PrintError(parse.prog, stmt.Tok, "Can't have a continue that isn't inside of a while loop");
         }
-        return new ArmadaContinueStatement(context, s);
+        return new ArmadaContinueStatement(parse, s);
       }
       else if (stmt is YieldStmt)
       {
         var s = (YieldStmt)stmt;
-        return new ArmadaYieldStatement(context, s);
+        return new ArmadaYieldStatement(parse, s);
       }
       else
       {
-        AH.PrintWarning(context.prog, stmt.Tok, "Armada doesn't yet support this statement type");
+        AH.PrintWarning(parse.prog, stmt.Tok, "Armada doesn't yet support this statement type");
         return null;
       }
     }
 
-    public static ArmadaStatement ParseStatement(ParseContext context, Statement stmt)
+    public static ArmadaStatement ParseStatement(ParseInfo parse, Statement stmt)
     {
       if (stmt == null) {
         return null;
       }
-      stmt.Parsed = ParseStatementInternal(context, stmt);
+      stmt.Parsed = ParseStatementInternal(parse, stmt);
       return stmt.Parsed;
     }
 
@@ -188,58 +203,35 @@ namespace Microsoft.Armada
       yield return this;
     }
 
-    public virtual ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public virtual ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       startPC = i_startPC;
-      endPC = methodInfo.GenerateOnePC();
+      endPC = parse.methodInfo.GenerateOnePC();
       return endPC;
     }
 
-    public static void CollectReturnPCs(ArmadaStatement stmt, List<ArmadaPC> returnPCs)
+    public string UpdatePC(string s, string tid, ArmadaPC newPC)
     {
-      foreach (var substmt in stmt) {
-        if (substmt is ArmadaReturnStatement) {
-          returnPCs.Add(substmt.StartPC);
-        }
-      }
-      returnPCs.Add(stmt.endPC);
+      return $"Armada_UpdatePC({s}, {tid}, {newPC})";
     }
 
-    public virtual PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                          HashSet<ArmadaPC> loopHeads)
-    {
-      if (nextRoutine != null) {
-        return new NormalPCNode(startPC, nextRoutine, endNode);
-      }
-      else {
-        return endNode;
-      }
-    }
-
-    public Expression UpdatePC(ArmadaSymbolTable symbols, MethodInfo methodInfo, Expression s, Expression tid, ArmadaPC newPC)
-    {
-      var newPCExpr = AH.MakeNameSegment(newPC.ToString(), "Armada_PC");
-      return AH.MakeApply3("Armada_UpdatePC", s, tid, newPCExpr, "Armada_TotalState");
-    }
-
-    public virtual void AssociateLabelWithStatement(ArmadaSymbolTable symbols, string lbl)
-    {
-      symbols.AssociateLabelWithPC(lbl, startPC);
-    }
-
-    public void AssociateLabelsWithPCs(ArmadaSymbolTable symbols)
+    public virtual void AssociateLabelsWithPCs()
     {
       Statement stmt = Stmt;
       if (stmt != null) {
         for (var lbl = stmt.Labels; lbl != null; lbl = lbl.Next) {
           if (lbl.Data != null && lbl.Data.Name != null) {
-            AssociateLabelWithStatement(symbols, lbl.Data.Name);
+            parse.symbols.AssociateLabelWithPC(lbl.Data.Name, startPC);
           }
         }
       }
     }
 
-    public virtual void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public virtual void GenerateEnablingConstraints()
+    {
+    }
+
+    public virtual void GenerateNextRoutines()
     {
     }
 
@@ -265,48 +257,39 @@ namespace Microsoft.Armada
       }
     }
 
-    protected void GetStackFrameForCallOrCreateThread(Program prog, ArmadaSymbolTable symbols, NextRoutine next, ResolutionContext context,
-                                                      string calleeName, IEnumerable<Expression> args, ref Expression s_current,
-                                                      out Expression new_frame, out Expression new_ptrs)
+    protected void GetStackFrameForCallOrCreateThread(NextRoutineConstructor next, ResolutionContext resolutionContext,
+                                                      string calleeName, IEnumerable<Expression> args, ref string s_current,
+                                                      out string new_frame, out string new_ptrs)
     {
       // First, allocate new pointers to represent the addressable stack variables:
       //
       // s_current := s.(mem := s.mem.(heap := s.mem.heap.(valid := s.mem.heap.valid + new_ptrs)))
 
-      next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", AH.MakePointerSetType()));
-      new_ptrs = AH.MakeNameSegment("new_ptrs", AH.MakePointerSetType());
+      new_ptrs = next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", "set<Armada_Pointer>"));
 
-      var mem = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid_plus_new = AH.MakeAddExpr(valid, new_ptrs);
-      var h_updated = AH.MakeDatatypeUpdateExpr(h, "valid", valid_plus_new);
-      var mem_updated = AH.MakeDatatypeUpdateExpr(mem, "heap", h_updated);
-      s_current = AH.MakeDatatypeUpdateExpr(s_current, "mem", mem_updated);
+      var mem = $"({s_current}).mem";
+      var h = $"{mem}.heap";
+      s_current = $"({s_current}).(mem := {mem}.(heap := {h}.(valid := {h}.valid + new_ptrs)))";
       s_current = next.AddVariableDeclaration("s", s_current);
 
-      // The new_ptrs don't overlap the previous valid pointers, i.e., new_ptrs !! s.mem.heap.valid
+      // The new_ptrs don't overlap the previous valid pointers
 
-      var valid_new_ptrs_disjoint = AH.MakeDisjointExpr(new_ptrs, valid);
-      next.AddConjunct(valid_new_ptrs_disjoint);
+      next.AddDefinedBehaviorConjunct($"new_ptrs !! {h}.valid");
 
-      // Nothing that was freed has become valid, i.e., new_ptrs !! s.mem.heap.freed
+      // Nothing that was freed has become valid
 
-      var freed = AH.MakeExprDotName(h, "freed", AH.MakePointerSetType());
-      var valid_freed_disjoint = AH.MakeDisjointExpr(new_ptrs, freed);
-      next.AddConjunct(valid_freed_disjoint);
+      next.AddDefinedBehaviorConjunct($"new_ptrs !! {h}.freed");
 
-      var mem_current = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-      var h_current = AH.MakeExprDotName(mem_current, "heap", "Armada_Heap");
+      var h_current = $"{s_current}.mem.heap";
 
       // Next, compute the parameters to the new-frame
       // constructor. For each input field, get its value from the
       // arguments; for each non-input field, model its initial
       // value as non-deterministic.
 
-      List<Expression> new_frame_elements = new List<Expression>();
-      var smst = symbols.GetMethodSymbolTable(calleeName);
-      string p_in_new_ptrs = "";
+      List<string> new_frame_elements = new List<string>();
+      var smst = parse.symbols.GetMethodSymbolTable(calleeName);
+      List<string> p_in_new_ptrs = new List<string>();
       List<string> addressesOfAddressables = new List<string>();
       var argumentEnumerator = args.GetEnumerator();
       foreach (var v in smst.AllVariablesInOrder)
@@ -317,7 +300,7 @@ namespace Microsoft.Armada
           }
           else {
             var arg = argumentEnumerator.Current;
-            var argVal = context.ResolveAsRValue(arg);
+            var argVal = resolutionContext.ResolveAsRValue(arg);
             next.AddUndefinedBehaviorAvoidanceConstraint(argVal.UndefinedBehaviorAvoidance);
             new_frame_elements.Add(argVal.Val);
           }
@@ -325,75 +308,61 @@ namespace Microsoft.Armada
         }
 
         var varName = v.name;
-        var ty = symbols.FlattenType(v.ty);
+        var ty = parse.symbols.FlattenType(v.ty);
         if (v is AddressableArmadaVariable) {
           // For addressable variables, we have to not only add a pointer to the new-frame constructor, we also
           // have to make sure the pointed-to values are allocated
 
-          next.AddFormal(new NextFormal($"newframe_{startPC}_{varName}", $"newframe_{varName}", "Armada_Pointer"));
-          var new_ptr = AH.MakeNameSegment($"newframe_{varName}", "Armada_Pointer");
+          var new_ptr = next.AddFormal(new NextFormal($"newframe_{startPC}_{varName}", $"newframe_{varName}", "Armada_Pointer"));
           new_frame_elements.Add(new_ptr);
 
           // new_ptr is among new_ptrs
 
-          var new_ptr_in_new_ptrs = AH.MakeInExpr(new_ptr, new_ptrs);
-          next.AddConjunct(new_ptr_in_new_ptrs);
+          next.AddDefinedBehaviorConjunct($"{new_ptr} in new_ptrs");
 
           // new_ptr is in s.mem.heap.tree
 
-          var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-          var new_ptr_in_tree = AH.MakeInExpr(new_ptr, tree);
-          next.AddConjunct(new_ptr_in_tree);
+          var tree = $"{h}.tree";
+          next.AddDefinedBehaviorConjunct($"{new_ptr} in {tree}");
 
           // new_ptr is a stack-based root in s.mem.heap, i.e.,
-          //    && s.mem.heap.tree[new_ptr].field_of_parent.Armada_FieldNone?
-          //    && s.mem.heap.tree[new_ptr].field_of_parent.rt.Armada_RootTypeStack?
+          //    && s.mem.heap.tree[new_ptr].child_type.Armada_ChildTypeRoot?
+          //    && s.mem.heap.tree[new_ptr].child_type.rt.Armada_RootTypeStack?
 
-          var node = AH.MakeSeqSelectExpr(tree, new_ptr, "Armada_Node");
-          var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-          var new_ptr_is_root = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-          var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-          var root_type_stack = AH.MakeExprDotName(root_type, "Armada_RootTypeStack?", new BoolType());
-          next.AddConjunct(new_ptr_is_root);
-          next.AddConjunct(root_type_stack);
+          next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.Armada_ChildTypeRoot?");
+          next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.rt.Armada_RootTypeStack?");
 
           /*
           if (v.ty is SizedArrayType) {
           }
           else {
-            p_in_new_ptrs += $"|| p in {AH.GetNameOfAllocator(v.ty)}(s2.mem.heap, newframe_{varName})";
+            p_in_new_ptrs += $"p in {AH.GetNameOfAllocator(v.ty)}(s2.mem.heap, newframe_{varName})";
           }
           */
-          var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-            AH.MakeNameSegment("s2.mem.heap", "Armada_Heap"),
-            AH.MakeNameSegment($"newframe_{varName}", "Armada_Pointer"),
-            v.ty
-          );
-          p_in_new_ptrs += $"|| p in ({Printer.ExprToString(allocatedByExpr)})";
-          addressesOfAddressables.Add($"newframe_{varName}");
+          var descendants = AH.GetInvocationOfDescendants(h_current, new_ptr, v.ty);
+          p_in_new_ptrs.Add($"p in ({descendants})");
+          addressesOfAddressables.Add(new_ptr);
           // new_ptr is a valid pointer in s_current.mem.heap
 
           var pointer_valid = AH.GetInvocationOfValidPointer(h_current, new_ptr, v.ty);
-          next.AddConjunct(pointer_valid);
+          next.AddDefinedBehaviorConjunct(pointer_valid);
         }
         else {
-          next.AddFormal(new NextFormal($"newframe_{startPC}_{varName}", $"newframe_{varName}", ty));
-          var elt = AH.MakeNameSegment($"newframe_{varName}", ty);
+          var elt = next.AddFormal(new NextFormal($"newframe_{startPC}_{varName}", $"newframe_{varName}", ty, parse.symbols));
           new_frame_elements.Add(elt);
         }
       }
-      string str;
-      if (p_in_new_ptrs.Length > 0) {
-        str = $"forall p :: p in new_ptrs <==> ({p_in_new_ptrs})";
+
+      if (p_in_new_ptrs.Count > 0) {
+        next.AddDefinedBehaviorConjunct($"forall p :: p in new_ptrs <==> ({AH.CombineStringsWithOr(p_in_new_ptrs)})");
       }
       else {
-        str = "new_ptrs == {}";
+        next.AddDefinedBehaviorConjunct("|new_ptrs| == 0");
       }
-      next.AddConjunct(AH.ParseExpression(prog, "", str));
+
       for (int i = 0; i < addressesOfAddressables.Count; i++) {
         for (int j = i + 1; j < addressesOfAddressables.Count; j++) {
-          str = addressesOfAddressables[i] + " != " + addressesOfAddressables[j];
-          next.AddConjunct(AH.ParseExpression(prog, "", str));
+          next.AddDefinedBehaviorConjunct($"({addressesOfAddressables[i]}) != ({addressesOfAddressables[j]})");
         }
       }
 
@@ -401,24 +370,24 @@ namespace Microsoft.Armada
       // Equivalently, forall x :: x in new_ptrs <==> x in Armada_Allocator_type1(local1)
 
       // Finally, create the frame.
-      // var new_frame := Armada_StackFrame_{calleeName}(input..., output..., normal..., reads...);
+      // var new_vars := Armada_StackVars_{calleeName}(input..., output..., normal..., reads...);
+      // var new_frame := Armada_StackFrame_{calleeName}(new_vars);
 
-      var frame_ctor = AH.MakeNameSegment($"Armada_StackFrame_{calleeName}", (Type)null);
-      var frame_type = AH.ReferToType("Armada_StackFrame");
-      new_frame = AH.SetExprType(new ApplySuffix(Token.NoToken, frame_ctor, new_frame_elements), frame_type);
+      var new_frame_elements_list = String.Join(", ", new_frame_elements);
+      new_frame = $"Armada_StackFrame_{calleeName}(Armada_StackVars_{calleeName}({new_frame_elements_list}))";
       new_frame = next.AddVariableDeclaration("new_frame", new_frame);
     }
 
-    protected void PerformStackFrameInitializations(ArmadaSymbolTable symbols, NextRoutine next, string calleeName,
-                                                    Expression tid, ref Expression s_current)
+    protected void PerformStackFrameInitializations(NextRoutineConstructor next, string calleeName,
+                                                    string tid, ref string s_current, ArmadaPC pc)
     {
-      var smst = symbols.GetMethodSymbolTable(calleeName);
+      var smst = parse.symbols.GetMethodSymbolTable(calleeName);
       foreach (var v in smst.AllVariablesInOrder.Where(v => v.InitialValue != null))
       {
-        var context = new ResolutionContext(s_current, s_current, tid, calleeName, symbols, next);
-        var ty = symbols.FlattenType(v.ty);
-        var lhs = v.GetLValue(v.InitialValue.tok, context);
-        var rhsRVal = context.ResolveAsRValue(v.InitialValue);
+        var resolutionContext = new ResolutionContext(s_current, s_current, tid, calleeName, parse.symbols, next);
+        var ty = parse.symbols.FlattenType(v.ty);
+        var lhs = v.GetLValue(v.InitialValue.tok, resolutionContext);
+        var rhsRVal = resolutionContext.ResolveAsRValue(v.InitialValue);
         next.AddUndefinedBehaviorAvoidanceConstraint(rhsRVal.UndefinedBehaviorAvoidance);
         var rhs = rhsRVal.Val;
 
@@ -426,10 +395,20 @@ namespace Microsoft.Armada
                                   ((MethodStackFrameAddressableLocalArmadaVariable)v).TSOBypassingInitialization;
 
         // var s_current := lhs.update_state(s_current, rhs);
-        s_current = bypassStoreBuffers ? lhs.UpdateTotalStateBypassingStoreBuffer(context, next, rhs)
-                                       : lhs.UpdateTotalStateWithStoreBufferEntry(context, next, rhs);
+        s_current = bypassStoreBuffers ? lhs.UpdateTotalStateBypassingStoreBuffer(resolutionContext, next, rhs)
+                                       : lhs.UpdateTotalStateWithStoreBufferEntry(resolutionContext, next, rhs, pc);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
+    }
+
+    public virtual bool RoughlyMatches(ArmadaStatement other)
+    {
+      return false;
+    }
+
+    public virtual IEnumerable<ArmadaStatement> GetStatementsInBody()
+    {
+      yield return this;
     }
   }
 
@@ -438,13 +417,22 @@ namespace Microsoft.Armada
     private BlockStmt stmt;
     private List<ArmadaStatement> statements;
 
-    public ArmadaBlockStatement(ParseContext context, BlockStmt i_stmt) : base(context)
+    public ArmadaBlockStatement(ParseInfo i_parse, BlockStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
-      statements = stmt.Body.Select(x => ParseStatement(context, x)).ToList();
+      statements = stmt.Body.Select(x => ParseStatement(parse, x)).ToList();
     }
 
     public override Statement Stmt { get { return stmt; } }
+
+    public override IEnumerable<ArmadaStatement> GetStatementsInBody()
+    {
+      foreach (var statement in statements) {
+        foreach (var substatement in statement.GetStatementsInBody()) {
+          yield return substatement;
+        }
+      }
+    }
 
     public override IEnumerator<ArmadaStatement> GetEnumerator()
     {
@@ -456,13 +444,13 @@ namespace Microsoft.Armada
       }
     }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       startPC = i_startPC;
       var currentPC = startPC;
       foreach (var statement in statements)
       {
-        currentPC = statement.AssignPCs(prog, symbols, methodInfo, currentPC);
+        currentPC = statement.AssignPCs(currentPC);
       }
       endPC = currentPC;
       return endPC;
@@ -482,21 +470,16 @@ namespace Microsoft.Armada
       }
     }
 
-    public override PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                           HashSet<ArmadaPC> loopHeads)
-    {
-      foreach (var substmt in Enumerable.Reverse(statements))
-      {
-        endNode = substmt.GeneratePCStructureForStatement(endNode, breakTarget, continueTarget, loopHeads);
-      }
-      return endNode;
-    }
-
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       foreach (var statement in statements) {
-        statement.GenerateNextRoutines(prog, symbols, methodInfo);
+        statement.GenerateNextRoutines();
       }
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaBlockStatement;
     }
   }
 
@@ -505,20 +488,18 @@ namespace Microsoft.Armada
     private IfStmt stmt;
     private ArmadaStatement thenClause;
     private ArmadaStatement elseClause;
-    private NextRoutine elseNextRoutine;
-    private NextRoutine jumpPastElseNextRoutine;
 
-    public ArmadaIfStatement(ParseContext context, IfStmt i_stmt)
-      : base(context)
+    public ArmadaIfStatement(ParseInfo i_parse, IfStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
-      thenClause = ParseStatement(context, stmt.Thn);
-      elseClause = ParseStatement(context, stmt.Els);
-      elseNextRoutine = null;
-      jumpPastElseNextRoutine = null;
+      thenClause = ParseStatement(parse, stmt.Thn);
+      elseClause = ParseStatement(parse, stmt.Els);
     }
 
     public override Statement Stmt { get { return stmt; } }
+
+    public ArmadaStatement ThenClause { get { return thenClause; } }
+    public ArmadaStatement ElseClause { get { return elseClause; } }
 
     public override IEnumerator<ArmadaStatement> GetEnumerator()
     {
@@ -533,19 +514,19 @@ namespace Microsoft.Armada
       }
     }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       startPC = i_startPC;
-      var thenPC = methodInfo.GenerateOnePC();
-      var thenEndPC = thenClause.AssignPCs(prog, symbols, methodInfo, thenPC);
+      var thenPC = parse.methodInfo.GenerateOnePC();
+      var thenEndPC = thenClause.AssignPCs(thenPC);
       Debug.Assert(thenEndPC == thenClause.EndPC);
 
       if (elseClause == null) {
         endPC = thenEndPC;
       }
       else {
-        var elsePC = methodInfo.GenerateOnePC();
-        endPC = elseClause.AssignPCs(prog, symbols, methodInfo, elsePC);
+        var elsePC = parse.methodInfo.GenerateOnePC();
+        endPC = elseClause.AssignPCs(elsePC);
       }
       return endPC;
     }
@@ -571,32 +552,15 @@ namespace Microsoft.Armada
       }
     }
 
-    public override PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                           HashSet<ArmadaPC> loopHeads)
+    public override void AssociateLabelsWithPCs()
     {
-      if (elseClause == null)
-      {
-        var thenStartNode = thenClause.GeneratePCStructureForStatement(endNode, breakTarget, continueTarget, loopHeads);
-        return new IfPCNode(startPC, nextRoutine, elseNextRoutine, thenStartNode, endNode);
-      }
-      else
-      {
-        var jumpPastElseNode = new NormalPCNode(thenClause.EndPC, jumpPastElseNextRoutine, endNode);
-        var thenStartNode = thenClause.GeneratePCStructureForStatement(jumpPastElseNode, breakTarget, continueTarget, loopHeads);
-        var elseStartNode = elseClause.GeneratePCStructureForStatement(endNode, breakTarget, continueTarget, loopHeads);
-        return new IfPCNode(startPC, nextRoutine, elseNextRoutine, thenStartNode, elseStartNode);
-      }
-    }
-
-    public override void AssociateLabelWithStatement(ArmadaSymbolTable symbols, string lbl)
-    {
-      base.AssociateLabelWithStatement(symbols, lbl);
+      base.AssociateLabelsWithPCs();
       if (elseClause != null) {
-        symbols.AssociateLabelWithPC($"JumpPastElse_{lbl}", thenClause.EndPC);
+        parse.symbols.AssociateLabelWithPC($"JumpPastElse_{thenClause.EndPC.Name}", thenClause.EndPC);
       }
     }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       //
       // First, we generate the next routine for evaluating the guard at
@@ -605,50 +569,41 @@ namespace Microsoft.Armada
       //
 
       var elsePC = stmt.Els != null ? elseClause.StartPC : thenClause.EndPC;
-      var nextThen = new NextRoutine(prog, symbols, NextType.IfTrue, methodInfo, this, stmt, startPC, thenClause.StartPC);
-      var nextElse = new NextRoutine(prog, symbols, NextType.IfFalse, methodInfo, this, stmt, startPC, elsePC);
-      this.nextRoutine = nextThen;
-      this.elseNextRoutine = nextElse;
+      var nextThen = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.IfTrue, parse.methodInfo,
+                                                this, stmt, startPC, thenClause.StartPC);
+      var nextElse = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.IfFalse, parse.methodInfo,
+                                                this, stmt, startPC, elsePC);
 
-      var contextThen = new NormalResolutionContext(nextThen, symbols);
-      var contextElse = new NormalResolutionContext(nextElse, symbols);
+      var contextThen = new NormalResolutionContext(nextThen, parse.symbols);
+      var contextElse = new NormalResolutionContext(nextElse, parse.symbols);
 
       if (stmt.Guard != null) { // A null guard means a non-deterministic choice, i.e., *
         var guardRValue = contextThen.ResolveAsRValue(stmt.Guard);
-        if (guardRValue.CanCauseUndefinedBehavior) {
-          nextThen.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
-          nextThen.AddConjunct(AH.MakeImpliesExpr(guardRValue.UndefinedBehaviorAvoidance.Expr, guardRValue.Val));
-        }
-        else {
-          nextThen.AddConjunct(guardRValue.Val);
-        }
+        nextThen.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
+        nextThen.AddDefinedBehaviorConjunct(guardRValue.Val);
 
         guardRValue = contextElse.ResolveAsRValue(stmt.Guard);
-        if (guardRValue.CanCauseUndefinedBehavior) {
-          nextElse.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
-          nextElse.AddConjunct(AH.MakeImpliesExpr(guardRValue.UndefinedBehaviorAvoidance.Expr, AH.MakeNotExpr(guardRValue.Val)));
-        }
-        else {
-          nextElse.AddConjunct(AH.MakeNotExpr(guardRValue.Val));
-        }
+        // There's need for an "undefined behavior" branch of the false case, since it matches the true case.
+        nextElse.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(guardRValue.UndefinedBehaviorAvoidance);
+        nextElse.AddDefinedBehaviorConjunct($"!({guardRValue.Val})");
       }
 
       // s' == Armada_UpdatePC(s, tid, {then/else PC})
 
-      var s_then = UpdatePC(symbols, methodInfo, nextThen.s, nextThen.tid, thenClause.StartPC);
+      var s_then = UpdatePC(nextThen.s, nextThen.tid, thenClause.StartPC);
       nextThen.SetNextState(s_then);
 
-      var s_else = UpdatePC(symbols, methodInfo, nextElse.s, nextElse.tid, elsePC);
+      var s_else = UpdatePC(nextElse.s, nextElse.tid, elsePC);
       nextElse.SetNextState(s_else);
 
-      symbols.AddNextRoutine(nextThen);
-      symbols.AddNextRoutine(nextElse);
+      parse.symbols.AddNextRoutineConstructor(nextThen);
+      parse.symbols.AddNextRoutineConstructor(nextElse);
 
       //
       // Second, we generate the next routines for the then clause.
       //
 
-      thenClause.GenerateNextRoutines(prog, symbols, methodInfo);
+      thenClause.GenerateNextRoutines();
 
       if (elseClause != null) {
 
@@ -658,18 +613,23 @@ namespace Microsoft.Armada
         // unconditionally to endPC.
         //
 
-        var next = new NextRoutine(prog, symbols, NextType.JumpPastElse, methodInfo, this, stmt, thenClause.EndPC, endPC);
-        this.jumpPastElseNextRoutine = next;
-        var s_prime = UpdatePC(symbols, methodInfo, next.s, next.tid, endPC);
+        var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.JumpPastElse, parse.methodInfo,
+                                              this, stmt, thenClause.EndPC, endPC);
+        var s_prime = UpdatePC(next.s, next.tid, endPC);
         next.SetNextState(s_prime);
-        symbols.AddNextRoutine(next);
+        parse.symbols.AddNextRoutineConstructor(next);
 
         //
         // Fourth, if there's an else clause, we generate the next routines for that clause
         //
 
-        elseClause.GenerateNextRoutines(prog, symbols, methodInfo);
+        elseClause.GenerateNextRoutines();
       }
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaIfStatement;
     }
   }
 
@@ -677,19 +637,18 @@ namespace Microsoft.Armada
   {
     private WhileStmt stmt;
     private ArmadaStatement body;
-    private NextRoutine guardFalseNextRoutine;
-    private NextRoutine jumpBackNextRoutine;
 
-    public ArmadaWhileStatement(ParseContext context, WhileStmt i_stmt) : base(context)
+    public ArmadaWhileStatement(ParseInfo i_parse, WhileStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
-      context = context.Clone();
-      context.innermostEnclosingWhile = this;
-      body = ParseStatement(context, stmt.Body);
-      jumpBackNextRoutine = null;
+      parse = parse.Clone();
+      parse.innermostEnclosingWhile = this;
+      body = ParseStatement(parse, stmt.Body);
     }
 
     public override Statement Stmt { get { return stmt; } }
+
+    public ArmadaStatement Body { get { return body; } }
 
     public override IEnumerator<ArmadaStatement> GetEnumerator()
     {
@@ -699,12 +658,12 @@ namespace Microsoft.Armada
       }
     }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       startPC = i_startPC;
-      var loopHeadPC = methodInfo.GenerateOnePC();
-      var loopEndPC = body.AssignPCs(prog, symbols, methodInfo, loopHeadPC);
-      endPC = methodInfo.GenerateOnePC();
+      var loopHeadPC = parse.methodInfo.GenerateOnePC();
+      var loopEndPC = body.AssignPCs(loopHeadPC);
+      endPC = parse.methodInfo.GenerateOnePC();
       return endPC;
     }
 
@@ -720,88 +679,69 @@ namespace Microsoft.Armada
       }
     }
 
-    public override PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                           HashSet<ArmadaPC> loopHeads)
+    public override void AssociateLabelsWithPCs()
     {
-      var loopRestartNode = new LoopRestartPCNode(startPC);
-      var jumpBackNode = new NormalPCNode(body.EndPC, jumpBackNextRoutine, loopRestartNode);
-
-      //
-      // Inside the body of the loop, reaching the end is followed by the jump-back statement, so
-      // we pass jumpBackNode as endNode.
-      //
-      // Inside the body of the loop, executing a break statement jumps to the successor of the
-      // while loop, so we pass our endNode as breakTarget.
-      //
-      // Inside the body of the loop, executing a continue statement restarts the loop, so we pass
-      // loopRestartNode as continueTarget.
-      //
-
-      var bodyStartNode = body.GeneratePCStructureForStatement(jumpBackNode, endNode, loopRestartNode, loopHeads);
-      var whileNode = new WhilePCNode(startPC, nextRoutine, guardFalseNextRoutine, bodyStartNode, endNode);
-      loopHeads.Add(startPC);
-      return whileNode;
+      base.AssociateLabelsWithPCs();
+      parse.symbols.AssociateLabelWithPC($"JumpBack_{body.EndPC.Name}", body.EndPC);
     }
 
-    public override void AssociateLabelWithStatement(ArmadaSymbolTable symbols, string lbl)
+    public override void GenerateEnablingConstraints()
     {
-      base.AssociateLabelWithStatement(symbols, lbl);
-      symbols.AssociateLabelWithPC($"JumpBack_{lbl}", body.EndPC);
+      foreach (var inv in stmt.Invariants)
+      {
+        parse.methodInfo.AddEnablingConstraint(parse.prog, startPC, inv.E);
+      }
     }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       // First, make a next routine for conditionally jumping from the statement beginning to either the loop head or the statement end.
 
-      var nextTrue = new NextRoutine(prog, symbols, NextType.WhileTrue, methodInfo, this, stmt, startPC, body.StartPC);
-      this.nextRoutine = nextTrue;
-      var nextFalse = new NextRoutine(prog, symbols, NextType.WhileFalse, methodInfo, this, stmt, startPC, endPC);
-      this.guardFalseNextRoutine = nextFalse;
+      var nextTrue = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.WhileTrue, parse.methodInfo,
+                                                this, stmt, startPC, body.StartPC);
+      var nextFalse = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.WhileFalse, parse.methodInfo,
+                                                 this, stmt, startPC, endPC);
 
-      var contextTrue = new NormalResolutionContext(nextTrue, symbols);
-      var contextFalse = new NormalResolutionContext(nextFalse, symbols);
+      var contextTrue = new NormalResolutionContext(nextTrue, parse.symbols);
+      var contextFalse = new NormalResolutionContext(nextFalse, parse.symbols);
 
       if (stmt.Guard != null) { // A null guard means a non-deterministic choice, i.e., *
         var guardRValue = contextTrue.ResolveAsRValue(stmt.Guard);
-        if (guardRValue.CanCauseUndefinedBehavior) {
-          nextTrue.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
-          nextTrue.AddConjunct(AH.MakeImpliesExpr(guardRValue.UndefinedBehaviorAvoidance.Expr, guardRValue.Val));
-        }
-        else {
-          nextTrue.AddConjunct(guardRValue.Val);
-        }
+        nextTrue.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
+        nextTrue.AddDefinedBehaviorConjunct(guardRValue.Val);
 
         guardRValue = contextFalse.ResolveAsRValue(stmt.Guard);
-        if (guardRValue.CanCauseUndefinedBehavior) {
-          nextFalse.AddUndefinedBehaviorAvoidanceConstraint(guardRValue.UndefinedBehaviorAvoidance);
-          nextFalse.AddConjunct(AH.MakeImpliesExpr(guardRValue.UndefinedBehaviorAvoidance.Expr, AH.MakeNotExpr(guardRValue.Val)));
-        }
-        else {
-          nextFalse.AddConjunct(AH.MakeNotExpr(guardRValue.Val));
-        }
+        // There's need for an "undefined behavior" branch of the false case, since it matches the true case.
+        nextFalse.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(guardRValue.UndefinedBehaviorAvoidance);
+        nextFalse.AddDefinedBehaviorConjunct($"!({guardRValue.Val})");
       }
 
       // s' == Armada_UpdatePC(s, tid, {head/end PC})
 
-      var s_true = UpdatePC(symbols, methodInfo, nextTrue.s, nextTrue.tid, body.StartPC);
+      var s_true = UpdatePC(nextTrue.s, nextTrue.tid, body.StartPC);
       nextTrue.SetNextState(s_true);
-      var s_false = UpdatePC(symbols, methodInfo, nextFalse.s, nextFalse.tid, endPC);
+      var s_false = UpdatePC(nextFalse.s, nextFalse.tid, endPC);
       nextFalse.SetNextState(s_false);
 
-      symbols.AddNextRoutine(nextTrue);
-      symbols.AddNextRoutine(nextFalse);
+      parse.symbols.AddNextRoutineConstructor(nextTrue);
+      parse.symbols.AddNextRoutineConstructor(nextFalse);
 
       // Second, make next routines for the body
 
-      body.GenerateNextRoutines(prog, symbols, methodInfo);
+      body.GenerateNextRoutines();
 
       // Third, make a next routine for unconditionally jumping from the loop end to the statement beginning.
 
-      var next = new NextRoutine(prog, symbols, NextType.WhileEnd, methodInfo, this, stmt, body.EndPC, startPC);
-      this.jumpBackNextRoutine = next;
-      var s_with_new_PC = UpdatePC(symbols, methodInfo, next.s, next.tid, startPC);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.WhileEnd, parse.methodInfo,
+                                            this, stmt, body.EndPC, startPC);
+      var s_with_new_PC = UpdatePC(next.s, next.tid, startPC);
       next.SetNextState(s_with_new_PC);
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaWhileStatement;
     }
   }
 
@@ -809,184 +749,153 @@ namespace Microsoft.Armada
   {
     private UpdateStmt stmt;
     private string calleeName;
-    private NextRoutine returnToNextRoutine;
 
-    public ArmadaCallStatement(ParseContext context, UpdateStmt i_stmt, string i_calleeName) : base(context)
+    public ArmadaCallStatement(ParseInfo i_parse, UpdateStmt i_stmt, string i_calleeName) : base(i_parse)
     {
       stmt = i_stmt;
       calleeName = i_calleeName;
-      returnToNextRoutine = null;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
     public string CalleeName { get {return calleeName; } }
 
-    private void GenerateCallNextRoutine(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    private void GenerateCallNextRoutine()
     {
       //
       // The first next routine for a call statement is the one for the call itself.
       //
 
-      var next = new NextRoutine(prog, symbols, NextType.Call, methodInfo, this, stmt, startPC, new ArmadaPC(symbols, calleeName, 0));
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Call, parse.methodInfo,
+                                            this, stmt, startPC, new ArmadaPC(parse.symbols, calleeName, 0));
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
       var ex = (ExprRhs)stmt.Rhss[0];
       var suffix = (ApplySuffix)ex.Expr;
 
-      int numArgsExpected = symbols.GetNumInputVariables(calleeName);
+      int numArgsExpected = parse.symbols.GetNumInputVariables(calleeName);
       if (numArgsExpected != suffix.Args.Count) {
         next.Fail(stmt.Tok, $"Incorrect number of arguments to {calleeName} ({suffix.Args.Count} instead of {numArgsExpected})");
         return;
       }
-      int numReturnValuesExpected = symbols.GetNumOutputVariables(calleeName);
+      int numReturnValuesExpected = parse.symbols.GetNumOutputVariables(calleeName);
       if (numReturnValuesExpected != stmt.Lhss.Count) {
-        next.Fail(stmt.Tok, $"Incorrect number of return values assigned from {calleeName} ({stmt.Lhss.Count} instead of {numReturnValuesExpected}");
+        next.Fail(stmt.Tok,
+                  $"Incorrect number of return values assigned from {calleeName} ({stmt.Lhss.Count} instead of {numReturnValuesExpected}");
         return;
       }
 
       // Set up the new stack frame
 
-      Expression s_current = next.s, new_frame, new_ptrs;
-      GetStackFrameForCallOrCreateThread(prog, symbols, next, context, calleeName, suffix.Args, ref s_current, out new_frame, out new_ptrs);
+      string s_current = next.s, new_frame, new_ptrs;
+      GetStackFrameForCallOrCreateThread(next, resolutionContext, calleeName, suffix.Args, ref s_current, out new_frame, out new_ptrs);
 
-      // s_current.(threads := s.threads[tid := Armada_Thread(Armada_PC_{callee}'0, new_frame, new_ptrs,
-      //                                                      [Armada_ExtendedFrame(returnPC, t.top)] + t.stack, t.storeBuffer)])
+      var newPC = new ArmadaPC(parse.symbols, calleeName, 0);
+      var t = $"({next.t})";
+      s_current = next.AddVariableDeclaration("s", $@"
+        ({s_current}).(threads := ({next.s}).threads[{next.tid} := Armada_Thread({newPC}, {new_frame}, {new_ptrs},
+          [Armada_ExtendedFrame({endPC}, {t}.top, {t}.new_ptrs)] + {t}.stack, {t}.storeBuffer)])
+      ");
 
-      var old_top = AH.MakeExprDotName(next.t, "top", "Armada_StackFrame");
-      var old_new_ptrs = AH.MakeExprDotName(next.t, "new_ptrs", AH.MakePointerSetType());
-      var return_pc = AH.MakeNameSegment(endPC.ToString(), "Armada_PC");
-      var new_extended_frame = AH.MakeApply3("Armada_ExtendedFrame", return_pc, old_top, old_new_ptrs, "Armada_ExtendedFrame");
-      var new_extended_frame_as_list = AH.MakeSeqDisplayExpr(new List<Expression>{ new_extended_frame });
-      var old_stack = AH.MakeExprDotName(next.t, "stack", AH.MakeStackType());
-      var new_stack = AH.MakeAddExpr(new_extended_frame_as_list, old_stack);
-      var old_store_buffer = AH.MakeExprDotName(next.t, "storeBuffer", AH.MakeStoreBufferType());
-      var callee_pc = AH.MakeNameSegment(new ArmadaPC(symbols, calleeName, 0).ToString(), "Armada_PC");
-      var new_thread = AH.MakeApply5("Armada_Thread", callee_pc, new_frame, new_ptrs, new_stack, old_store_buffer, "Armada_Thread");
-      var old_threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-      var new_threads = AH.MakeSeqUpdateExpr(old_threads, next.tid, new_thread);
-      s_current = AH.MakeDatatypeUpdateExpr(s_current, "threads", new_threads);
-      s_current = next.AddVariableDeclaration("s", s_current);
-
-      PerformStackFrameInitializations(symbols, next, calleeName, next.tid, ref s_current);
+      PerformStackFrameInitializations(next, calleeName, next.tid, ref s_current, startPC);
 
       next.SetNextState(s_current);
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
     }
 
-    private void GenerateReturnNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    private void GenerateReturnNextRoutines()
     {
       //
       // The second type of next routine for a call statement is the one for the return from the call,
-      // including assignment of returned values.  We have to make one of these for each return PC in
-      // the called method.
+      // including assignment of returned values.
       //
 
-      var method = methodInfo.method;
-      var calleeMethodInfo = symbols.AllMethods.LookupMethod(calleeName);
+      var method = parse.methodInfo.method;
+      var calleeMethodInfo = parse.symbols.AllMethods.LookupMethod(calleeName);
 
-      foreach (var returnPC in calleeMethodInfo.ReturnPCs) {
-        var next = new NextRoutine(prog, symbols, NextType.Return, calleeMethodInfo, this, stmt, returnPC, endPC);
-        this.returnToNextRoutine = next;
+      var returnPC = calleeMethodInfo.ReturnPC;
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Return, calleeMethodInfo,
+                                            this, stmt, returnPC, endPC);
 
-        // |t.stack| > 0
-        var old_stack = AH.MakeExprDotName(next.t, "stack", AH.MakeStackType());
-        var old_stack_size = AH.MakeCardinalityExpr(old_stack);
-        var old_stack_size_positive = AH.MakeGtExpr(old_stack_size, AH.MakeZero());
-        next.AddConjunct(old_stack_size_positive);
+      var t = $"({next.t})";
+      var s = $"({next.s})";
 
-        // t.stack[0].return_pc == {end PC}
-        var next_extended_frame = AH.MakeSeqSelectExpr(old_stack, AH.MakeZero(), "Armada_ExtendedFrame");
-        var return_pc = AH.MakeExprDotName(next_extended_frame, "return_pc", "Armada_PC");
-        var end_pc = AH.MakeNameSegment(endPC.ToString(), "Armada_PC");
-        var returning_here = AH.MakeEqExpr(return_pc, end_pc);
-        next.AddConjunct(returning_here);
+      next.AddConjunct($"|{t}.stack| > 0");
+      next.AddConjunct($"{t}.stack[0].return_pc == {endPC}");
+      next.AddConjunct($"{t}.stack[0].frame.Armada_StackFrame_{method.Name}?");
 
-        // t.stack[0].frame.Armada_StackFrame_{method.Name}?
-        var next_stack_frame = AH.MakeExprDotName(next_extended_frame, "frame", "Armada_StackFrame");
-        var next_stack_frame_correct = AH.MakeExprDotName(next_stack_frame, $"Armada_StackFrame_{method.Name}?", new BoolType());
-        next.AddConjunct(next_stack_frame_correct);
+      // First, we update the state by popping the thread's top stack frame.
 
-        // var s_current := s.(threads := s.threads[tid := Armada_Thread({return PC}, next_stack_frame, t.stack[0].new_ptrs,
-        //                                                               t.stack[1..], t.storeBuffer)])
+      var s_current = $@"
+        {s}.(threads := {s}.threads[{next.tid} := Armada_Thread({endPC}, {t}.stack[0].frame, {t}.stack[0].new_ptrs,
+                                                                {t}.stack[1..], {t}.storeBuffer)])
+      ";
+      s_current = next.AddVariableDeclaration("s", s_current);
 
-        var popped_stack = AH.MakeSeqSliceExpr(old_stack, AH.MakeOne(), null);
-        var popped_new_ptrs = AH.MakeExprDotName(next_extended_frame, "new_ptrs", AH.MakePointerSetType());
-        var store_buffer = AH.MakeExprDotName(next.t, "storeBuffer", AH.MakeStoreBufferType());
-        var updated_thread = AH.MakeApply5("Armada_Thread", end_pc, next_stack_frame, popped_new_ptrs, popped_stack,
-                                           store_buffer, "Armada_Thread");
-        var threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-        var updated_threads = AH.MakeSeqUpdateExpr(threads, next.tid, updated_thread);
-        var s_current = AH.MakeDatatypeUpdateExpr(next.s, "threads", updated_threads);
-        s_current = next.AddVariableDeclaration("s", s_current);
+      // Now, we need to free the new_ptrs.
 
-        // Now, we need to free the new_ptrs.  In Dafny, if we denote s_current by s, that's:
-        //
-        // s := s.(mem := s.mem.(heap := s.mem.heap.(valid := s.mem.heap.valid - t.new_ptrs,
-        //                                           freed := s.mem.heap.freed + t.new_ptrs))))
+      s = s_current;
+      s_current = $@"
+        {s}.(mem := {s}.mem.(heap := {s}.mem.heap.(valid := {s}.mem.heap.valid - {t}.new_ptrs, freed := {s}.mem.heap.freed + {t}.new_ptrs)))
+      ";
+      s_current = next.AddVariableDeclaration("s", s_current);
 
-        var mem = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-        var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-        var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-        var freed = AH.MakeExprDotName(h, "freed", AH.MakePointerSetType());
-        var new_ptrs = AH.MakeExprDotName(next.t, "new_ptrs", AH.MakePointerSetType());
-        var valid_new = AH.MakeSubExpr(valid, new_ptrs);
-        var freed_new = AH.MakeAddExpr(freed, new_ptrs);
-        var h_new = AH.MakeDatatypeUpdate2Expr(h, "valid", valid_new, "freed", freed_new);
-        var mem_new = AH.MakeDatatypeUpdateExpr(mem, "heap", h_new);
-        s_current = AH.MakeDatatypeUpdateExpr(s_current, "mem", mem_new);
-        s_current = next.AddVariableDeclaration("s", s_current);
+      // We need a context to compute the values of returned values, a callee_context.
 
-        // We need a context to compute the values of returned values, a callee_context.
+      var callee_context = new NormalResolutionContext(next, parse.symbols);
 
-        var callee_context = new NormalResolutionContext(next, symbols);
+      // When computing caller contexts (for use in computing lvalues to use for storing return values), we'll need to
+      // know the state of various objects as they appear right after popping the stack frame.  So, compute those now.
 
-        // When computing caller contexts (for use in computing lvalues to use for storing return values), we'll need to
-        // know the state of various objects as they appear right after popping the stack frame.  So, compute those now.
+      var state_after_pop = s_current;
+      var ghosts_after_pop = $"{s_current}.ghosts";
+      var top_after_pop = $"{s_current}.threads[{next.tid}].top";
 
-        var state_after_pop = s_current;
-        var ghosts_after_pop = AH.MakeExprDotName(s_current, "ghosts", AH.MakeGhostsType());
-        var threads_after_pop = AH.MakeExprDotName(s_current, "threads", AH.MakeThreadsType());
-        var thread_after_pop = AH.MakeSeqSelectExpr(threads_after_pop, next.tid, "Armada_Thread");
-        var top_after_pop = AH.MakeExprDotName(thread_after_pop, "top", "Armada_StackFrame");
+      int numReturnValuesExpected = parse.symbols.GetNumOutputVariables(calleeName);
+      for (int i = 0; i < numReturnValuesExpected; ++i) {
+        // We need a context for the caller to use when computing lvalues to use for storing return
+        // values into local variables.  The hard part of this is computing the local view of the
+        // state.  A shortcut to this is to observe that the local view of the state doesn't change
+        // due to a pop, so we can just use next.locv.
 
-        int numReturnValuesExpected = symbols.GetNumOutputVariables(calleeName);
-        for (int i = 0; i < numReturnValuesExpected; ++i) {
-          // We need a context for the caller to use when computing lvalues to use for storing return
-          // values into local variables.  The hard part of this is computing the local view of the
-          // state.  A shortcut to this is to observe that the local view of the state doesn't change
-          // due to a pop, so we can just use next.locv.
+        var caller_context = new CustomResolutionContext(s_current, state_after_pop, next.locv, top_after_pop,
+                                                         ghosts_after_pop, next.tid, method.Name, parse.symbols, next);
 
-          var caller_context = new CustomResolutionContext(s_current, state_after_pop, next.locv, top_after_pop,
-                                                           ghosts_after_pop, next.tid, method.Name, symbols, next);
-
-          var av = symbols.GetOutputVariableByIndex(calleeName, i);
-          var rhs = av.GetRValue(Token.NoToken, callee_context);
-          next.AddUndefinedBehaviorAvoidanceConstraint(rhs.UndefinedBehaviorAvoidance);
-          var lhs = stmt.Lhss.ElementAt(i);
-          var newLhs = caller_context.ResolveAsLValue(lhs);
-          if (!(newLhs is ArmadaLValue)) {
-            next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
-            return;
-          }
-          next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
-
-          s_current = stmt.BypassStoreBuffers ?
-            newLhs.UpdateTotalStateBypassingStoreBuffer(caller_context, next, rhs.Val) :
-            newLhs.UpdateTotalStateWithStoreBufferEntry(caller_context, next, rhs.Val);
-          s_current = next.AddVariableDeclaration("s", s_current);
+        var av = parse.symbols.GetOutputVariableByIndex(calleeName, i);
+        var rhs = av.GetRValue(Token.NoToken, callee_context);
+        next.AddUndefinedBehaviorAvoidanceConstraint(rhs.UndefinedBehaviorAvoidance);
+        var lhs = stmt.Lhss.ElementAt(i);
+        var newLhs = caller_context.ResolveAsLValue(lhs);
+        if (!(newLhs is ArmadaLValue)) {
+          next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
+          return;
         }
+        next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
-        next.SetNextState(s_current);
-        symbols.AddNextRoutine(next);
+        s_current = stmt.BypassStoreBuffers ?
+          newLhs.UpdateTotalStateBypassingStoreBuffer(caller_context, next, rhs.Val) :
+          newLhs.UpdateTotalStateWithStoreBufferEntry(caller_context, next, rhs.Val, returnPC);
+        s_current = next.AddVariableDeclaration("s", s_current);
       }
+
+      next.SetNextState(s_current);
+      parse.symbols.AddNextRoutineConstructor(next);
     }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
-      GenerateCallNextRoutine(prog, symbols, methodInfo);
-      GenerateReturnNextRoutines(prog, symbols, methodInfo);
+      GenerateCallNextRoutine();
+      GenerateReturnNextRoutines();
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      if (other is ArmadaCallStatement acs) {
+        return calleeName == acs.CalleeName;
+      }
+      else {
+        return false;
+      }
     }
   }
 
@@ -994,17 +903,17 @@ namespace Microsoft.Armada
   {
     private UpdateStmt stmt;
 
-    public ArmadaCreateThreadStatement(ParseContext context, UpdateStmt i_stmt) : base(context)
+    public ArmadaCreateThreadStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       if (stmt.Lhss.Count > 1) {
-        AH.PrintError(prog, stmt.Tok,
+        AH.PrintError(parse.prog, stmt.Tok,
                       $"Number of left-hand sides for create_thread must be 0 or 1, since the only thing returned is a thread handle");
         return;
       }
@@ -1012,71 +921,58 @@ namespace Microsoft.Armada
       var rhs = (CreateThreadRhs)stmt.Rhss[0];
       var calleeName = rhs.MethodName.val;
 
-      if (!symbols.DoesMethodNameExist(calleeName)) {
-        AH.PrintError(prog, stmt.Tok, $"Call to create_thread on non-existent method {calleeName}");
+      if (!parse.symbols.DoesMethodNameExist(calleeName)) {
+        AH.PrintError(parse.prog, stmt.Tok, $"Call to create_thread on non-existent method {calleeName}");
         return;
       }
 
       if (calleeName.Equals("main")) {
-        AH.PrintError(prog, stmt.Tok, $"It's illegal to create a thread using main as the routine");
+        AH.PrintError(parse.prog, stmt.Tok, $"It's illegal to create a thread using main as the routine");
         return;
       }
 
-      symbols.UseMethodAsThreadRoutine(calleeName);
+      parse.symbols.UseMethodAsThreadRoutine(calleeName);
 
-      int numInputs = symbols.GetNumInputVariables(calleeName);
+      int numInputs = parse.symbols.GetNumInputVariables(calleeName);
       if (numInputs != rhs.Args.Count) {
-        AH.PrintError(prog, stmt.Tok,
+        AH.PrintError(parse.prog, stmt.Tok,
                       $"Call to create_thread has {rhs.Args.Count} input variables but {calleeName} takes {numInputs} input parameters");
         return;
       }
 
-      var next = new NextRoutine(prog, symbols, NextType.CreateThread, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.CreateThread, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
 
-      next.AddFormal(new NextFormal($"newtid_{startPC}", "newtid", "Armada_ThreadHandle"));
-      var new_tid = AH.MakeNameSegment("newtid", "Armada_ThreadHandle");
+      var new_tid = next.AddFormal(new NextFormal($"newtid_{startPC}", "newtid", "Armada_ThreadHandle"));
+      var s = $"({next.s})";
 
-      // new_tid !in s.threads
-
-      var threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-      var new_tid_not_in_threads = AH.MakeNotInExpr(new_tid, threads);
-      next.AddConjunct(new_tid_not_in_threads);
-
-      // new_tid != 0
-
-      var new_tid_nonzero = AH.MakeNeqExpr(new_tid, AH.MakeZero());
-      next.AddConjunct(new_tid_nonzero);
+      next.AddConjunct($"{new_tid} !in {s}.threads");
+      next.AddConjunct($"{new_tid} !in {s}.joinable_tids");
+      next.AddConjunct($"{new_tid} != 0");
 
       // Set up the new stack frame
 
-      Expression s_current = next.s, new_frame, new_ptrs;
-      GetStackFrameForCallOrCreateThread(prog, symbols, next, context, calleeName, rhs.Args, ref s_current, out new_frame, out new_ptrs);
+      string s_current = next.s, new_frame, new_ptrs;
+      GetStackFrameForCallOrCreateThread(next, resolutionContext, calleeName, rhs.Args, ref s_current, out new_frame, out new_ptrs);
 
-      // s_current := s_current.(threads := s.threads[new_tid := Armada_Thread(Armada_PC_{calleeName}'0, new_frame,
-      //                                                                       new_ptrs, [], [])])
-
-      var new_stack = AH.MakeEmptySeqDisplayExpr("Armada_ExtendedStackFrame");
-      var callee_pc = AH.MakeNameSegment(new ArmadaPC(symbols, calleeName, 0).ToString(), "Armada_PC");
-      var new_store_buffer = AH.MakeEmptySeqDisplayExpr("Armada_StoreBufferEntry");
-      var new_thread = AH.MakeApply5("Armada_Thread", callee_pc, new_frame, new_ptrs, new_stack, new_store_buffer, "Armada_Thread");
-      var old_threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-      var new_threads = AH.MakeSeqUpdateExpr(old_threads, new_tid, new_thread);
-      s_current = AH.MakeDatatypeUpdateExpr(s_current, "threads", new_threads);
+      var calleePC = new ArmadaPC(parse.symbols, calleeName, 0);
+      s_current = $@"
+        ({s_current}).(threads := s.threads[{new_tid} := Armada_Thread({calleePC}, {new_frame}, {new_ptrs}, [], [])])
+      ";
       s_current = next.AddVariableDeclaration("s", s_current);
 
-      PerformStackFrameInitializations(symbols, next, calleeName, new_tid, ref s_current);
+      PerformStackFrameInitializations(next, calleeName, new_tid, ref s_current, startPC);
 
       // s_current := Armada_UpdatePC(s_current, next.tid, endPC);
 
-      s_current = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      s_current = UpdatePC(s_current, next.tid, endPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       // If there's a return value, set it to new_tid
 
       if (stmt.Lhss.Count > 0) {
-        var current_context = new NormalResolutionContext(s_current, next, symbols);
+        var current_context = new NormalResolutionContext(s_current, next, parse.symbols);
         var lhs = stmt.Lhss[0];
         var newLhs = current_context.ResolveAsLValue(lhs);
         if (!(newLhs is ArmadaLValue)) {
@@ -1087,7 +983,7 @@ namespace Microsoft.Armada
 
         // var s_current := lhs.update_state(s_current, new_tid);
         s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, new_tid)
-                                            : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, new_tid);
+                                            : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, new_tid, startPC);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
@@ -1095,7 +991,17 @@ namespace Microsoft.Armada
 
       // We're done creating the next routine, so add it to the list
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      if (other is ArmadaCreateThreadStatement) {
+        return ((CreateThreadRhs)stmt.Rhss[0]).MethodName.val == ((CreateThreadRhs)((UpdateStmt)other.Stmt).Rhss[0]).MethodName.val;
+      }
+      else {
+        return false;
+      }
     }
   }
 
@@ -1103,108 +1009,79 @@ namespace Microsoft.Armada
   {
     private UpdateStmt stmt;
 
-    public ArmadaMallocStatement(ParseContext context, UpdateStmt i_stmt) : base(context)
+    public ArmadaMallocStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       if (stmt.Lhss.Count != 1) {
-        AH.PrintError(prog, stmt.Tok, $"Number of left-hand sides for malloc must be 1");
+        AH.PrintError(parse.prog, stmt.Tok, $"Number of left-hand sides for malloc must be 1");
         return;
       }
 
       var lhs = stmt.Lhss[0];
       if (!(lhs.Type is PointerType)) {
-        AH.PrintError(prog, stmt.Tok, $"Result of malloc must be stored in a ptr");
+        AH.PrintError(parse.prog, stmt.Tok, $"Result of malloc must be stored in a ptr");
         return;
       }
 
       var rhs = (MallocRhs)stmt.Rhss[0];
       var lhsPointerType = (PointerType)lhs.Type;
       if (!lhsPointerType.Arg.Equals(rhs.AllocatedType)) {
-        AH.PrintError(prog, stmt.Tok, $"Result of malloc must be stored in a ptr<{rhs.AllocatedType}>");
+        AH.PrintError(parse.prog, stmt.Tok, $"Result of malloc must be stored in a ptr<{rhs.AllocatedType}>");
         return;
       }
 
-      var next = new NextRoutine(prog, symbols, NextType.Malloc, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      // First, create a next routine for the case where malloc succeeds.
 
-      var mem = AH.MakeExprDotName(next.s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.MallocSuccess, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
 
-      next.AddFormal(new NextFormal($"new_ptr_{startPC}", "new_ptr", "Armada_Pointer"));
-      var new_ptr = AH.MakeNameSegment("new_ptr", "Armada_Pointer");
+      var s = $"({next.s})";
+      var h = $"{s}.mem.heap";
+      var tree = $"{h}.tree";
 
-      next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", AH.MakePointerSetType()));
-      var new_ptrs = AH.MakeNameSegment("new_ptrs", AH.MakePointerSetType());
+      var new_ptr = next.AddFormal(new NextFormal($"new_ptr_{startPC}", "new_ptr", "Armada_Pointer"));
+      var new_ptrs = next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", "set<Armada_Pointer>"));
 
-      // if new_ptr == 0 (malloc fails) then
-      //    |new_ptrs| == 0
-      // else
-      //     new_ptr is among new_ptrs
-      //     new_ptrs == Armada_Allocator_{ty}(new_ptr)
-      //     new_ptr is in s.mem.heap.tree
-      //     new_ptr is a root in s.mem.heap, i.e., s.mem.heap.tree[new_ptr].field_of_parent.Armada_FieldNone?
-      //     new_ptr is a dynamic-heap root, i.e., s.mem.heap.tree[new_ptr].field_of_parent.rt.Armada_RootTypeDynamicHeap?
-      //     The new_ptrs don't overlap the previous valid pointers, i.e., new_ptrs !! s.mem.heap.valid
-      //     Nothing that was freed has become valid, i.e., new_ptrs !! s.mem.heap.freed
+      // new_ptr != 0
+      // new_ptr in new_ptrs
+      // new_ptrs == Armada_Allocator_{ty}(new_ptr)
+      // new_ptr is in s.mem.heap.tree
+      // new_ptr is a root in s.mem.heap, i.e., s.mem.heap.tree[new_ptr].child_type.Armada_ChildTypeRoot?
+      // new_ptr is a dynamic-heap root, i.e., s.mem.heap.tree[new_ptr].child_type.rt.Armada_RootTypeDynamicHeap?
+      // The new_ptrs don't overlap the previous valid pointers, i.e., new_ptrs !! s.mem.heap.valid
+      // Nothing that was freed has become valid, i.e., new_ptrs !! s.mem.heap.freed
 
-      var new_ptr_in_new_ptrs = AH.MakeInExpr(new_ptr, new_ptrs);
-      var new_ptr_is_valid_ptr = AH.GetInvocationOfValidPointer(h, new_ptr, rhs.AllocatedType);
-
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      var new_ptr_in_tree = AH.MakeInExpr(new_ptr, tree);
-
-      var node = AH.MakeSeqSelectExpr(tree, new_ptr, "Armada_Node");
-      var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-      var new_ptr_is_root = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-      var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-      var root_type_dynamic_heap = AH.MakeExprDotName(root_type, "Armada_RootTypeDynamicHeap?", new BoolType());
-
-      var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid_new_ptrs_disjoint = AH.MakeDisjointExpr(new_ptrs, valid);
-
-      var freed = AH.MakeExprDotName(h, "freed", AH.MakePointerSetType());
-      var valid_freed_disjoint = AH.MakeDisjointExpr(new_ptrs, freed);
-
-      var malloc_fails = AH.MakeEqExpr(new_ptr, AH.MakeZero());
-      var new_ptrs_empty = AH.MakeEqExpr(AH.MakeCardinalityExpr(new_ptrs), AH.MakeZero());
-      var implications_of_malloc_success =
-        new List<Expression>{ new_ptr_in_new_ptrs, new_ptr_in_tree, new_ptr_is_root, root_type_dynamic_heap,
-                              valid_new_ptrs_disjoint, valid_freed_disjoint };
-      next.AddConjunct(AH.MakeIfExpr(malloc_fails, new_ptrs_empty, AH.CombineExpressionsWithAnd(implications_of_malloc_success)));
+      next.AddDefinedBehaviorConjunct($"{new_ptr} != 0");
+      next.AddDefinedBehaviorConjunct($"{new_ptr} in {new_ptrs}");
+      next.AddDefinedBehaviorConjunct(AH.GetInvocationOfValidPointer(h, new_ptr, rhs.AllocatedType));
+      next.AddDefinedBehaviorConjunct($"{new_ptr} in {tree}");
+      next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.Armada_ChildTypeRoot?");
+      next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.rt.Armada_RootTypeDynamicHeap?");
+      next.AddDefinedBehaviorConjunct($"{new_ptrs} !! {h}.valid");
+      next.AddDefinedBehaviorConjunct($"{new_ptrs} !! {h}.freed");
 
       // s_current := s.(mem := s.mem.(heap := s.mem.heap.(valid := s.mem.heap.valid + new_ptrs)))
 
-      var valid_plus_new = AH.MakeAddExpr(valid, new_ptrs);
-      var h_updated = AH.MakeDatatypeUpdateExpr(h, "valid", valid_plus_new);
-      var mem_updated = AH.MakeDatatypeUpdateExpr(mem, "heap", h_updated);
-      var s_current = AH.MakeDatatypeUpdateExpr(next.s, "mem", mem_updated);
+      var s_current = $"{s}.(mem := {s}.mem.(heap := {s}.mem.heap.(valid := {s}.mem.heap.valid + {new_ptrs})))";
       s_current = next.AddVariableDeclaration("s", s_current);
 
-      // if new_ptr != 0, then new_ptr is a valid pointer in s_current.mem.heap
+      // new_ptr is a valid pointer in s_current.mem.heap
 
-      var mem_current = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-      var h_current = AH.MakeExprDotName(mem_current, "heap", "Armada_Heap");
-      var pointer_valid = AH.GetInvocationOfValidPointer(h_current, new_ptr, rhs.AllocatedType);
-      var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-        AH.MakeNameSegment("s2.mem.heap", "Armada_Heap"),
-        AH.MakeNameSegment("new_ptr", "Armada_Pointer"),
-        rhs.AllocatedType
-      );
-      var new_ptrs_equals_allocator_result = AH.ParseExpression(prog, "MallocNewPtrsEqualsAllocated", $"(forall x :: x in new_ptrs <==> x in {Printer.ExprToString(allocatedByExpr)})");
+      var h_current = $"{s_current}.mem.heap";
+      next.AddDefinedBehaviorConjunct(AH.GetInvocationOfValidPointer(h_current, new_ptr, rhs.AllocatedType));
 
-      var malloc_succeeds = AH.MakeNeqExpr(new_ptr, AH.MakeZero());
-      next.AddConjunct(AH.MakeImpliesExpr(malloc_succeeds, AH.MakeAndExpr(pointer_valid, new_ptrs_equals_allocator_result)));
+      var descendants = AH.GetInvocationOfDescendants(h_current, new_ptr, rhs.AllocatedType);
+      next.AddDefinedBehaviorConjunct($"(forall p :: p in {new_ptrs} <==> p in {descendants})");
 
       // s_current := lhs.update_state(s_current, new_ptr);
 
-      var current_context = new NormalResolutionContext(s_current, next, symbols);
+      var current_context = new NormalResolutionContext(s_current, next, parse.symbols);
       var newLhs = current_context.ResolveAsLValue(lhs);
       if (!(newLhs is ArmadaLValue)) {
         next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
@@ -1213,19 +1090,60 @@ namespace Microsoft.Armada
       next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
       s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, new_ptr)
-                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, new_ptr);
+                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, new_ptr, startPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       // s_current := Armada_UpdatePC(s, tid, {end PC})
 
-      s_current = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      s_current = UpdatePC(s_current, next.tid, endPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       next.SetNextState(s_current);
 
       // The next predicate is built, so add it to the list of next predicates.
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+
+      //////////////////////////////////////////////////////////////////////////////
+      // Now, create a next routine for the case where malloc fails.
+      //////////////////////////////////////////////////////////////////////////////
+
+      next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.MallocFailure, parse.methodInfo,
+                                        this, stmt, startPC, endPC);
+      current_context = new NormalResolutionContext(next.s, next, parse.symbols);
+
+      // s_current := lhs.update_state(s_current, new_ptr);
+
+      newLhs = current_context.ResolveAsLValue(lhs);
+      if (!(newLhs is ArmadaLValue)) {
+        next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
+        return;
+      }
+      next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
+      s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, "0")
+                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, "0", startPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // s_current := Armada_UpdatePC(s, tid, {end PC})
+
+      s_current = UpdatePC(s_current, next.tid, endPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      next.SetNextState(s_current);
+
+      // The next predicate is built, so add it to the list of next predicates.
+
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      if (other is ArmadaMallocStatement ams) {
+        return AH.TypesMatch(((MallocRhs)stmt.Rhss[0]).AllocatedType, ((MallocRhs)((UpdateStmt)ams.Stmt).Rhss[0]).AllocatedType);
+      }
+      else {
+        return false;
+      }
     }
   }
 
@@ -1233,132 +1151,93 @@ namespace Microsoft.Armada
   {
     private UpdateStmt stmt;
 
-    public ArmadaCallocStatement(ParseContext context, UpdateStmt i_stmt) : base(context)
+    public ArmadaCallocStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       if (stmt.Lhss.Count != 1) {
-        AH.PrintError(prog, stmt.Tok, $"Number of left-hand sides for calloc must be 1");
+        AH.PrintError(parse.prog, stmt.Tok, $"Number of left-hand sides for calloc must be 1");
         return;
       }
 
       var lhs = stmt.Lhss[0];
       if (!(lhs.Type is PointerType)) {
-        AH.PrintError(prog, stmt.Tok, $"Result of calloc must be stored in a ptr");
+        AH.PrintError(parse.prog, stmt.Tok, $"Result of calloc must be stored in a ptr");
         return;
       }
 
       var rhs = (CallocRhs)stmt.Rhss[0];
       var lhsPointerType = (PointerType)lhs.Type;
       if (!lhsPointerType.Arg.Equals(rhs.AllocatedType)) {
-        AH.PrintError(prog, stmt.Tok, $"Result of calloc must be stored in a ptr<{rhs.AllocatedType}>");
+        AH.PrintError(parse.prog, stmt.Tok, $"Result of calloc must be stored in a ptr<{rhs.AllocatedType}>");
         return;
       }
 
-      var next = new NextRoutine(prog, symbols, NextType.Calloc, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      // First, create a next routine for the case where calloc succeeds.
 
-      var countRValue = context.ResolveAsRValue(rhs.Count);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.CallocSuccess, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
+
+      var countRValue = resolutionContext.ResolveAsRValue(rhs.Count);
       next.AddUndefinedBehaviorAvoidanceConstraint(countRValue.UndefinedBehaviorAvoidance);
-      var count = AH.MakeConversionExpr(countRValue.Val, new IntType());
+      var count = $"({countRValue.Val}) as int";
 
-      var mem = AH.MakeExprDotName(next.s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
+      var s = $"({next.s})";
+      var h = $"{s}.mem.heap";
+      var tree = $"{h}.tree";
 
-      next.AddFormal(new NextFormal($"new_ptr_{startPC}", "new_ptr", "Armada_Pointer"));
-      var new_ptr = AH.MakeNameSegment("new_ptr", "Armada_Pointer");
+      var new_ptr = next.AddFormal(new NextFormal($"new_ptr_{startPC}", "new_ptr", "Armada_Pointer"));
+      var new_ptrs = next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", "set<Armada_Pointer>"));
 
-      next.AddFormal(new NextFormal($"new_ptrs_{startPC}", "new_ptrs", AH.MakePointerSetType()));
-      var new_ptrs = AH.MakeNameSegment("new_ptrs", AH.MakePointerSetType());
+      // new_ptr != 0
+      // new_ptr in new_ptrs
+      // new_ptr is in s.mem.heap.tree
+      // new_ptr is a root in s.mem.heap, i.e., s.mem.heap.tree[new_ptr].child_type.Armada_ChildTypeRoot?
+      // new_ptr is a dynamic-heap root, i.e., s.mem.heap.tree[new_ptr].child_type.rt.Armada_RootTypeDynamicHeap?
+      // The new_ptrs don't overlap the previous valid pointers, i.e., new_ptrs !! s.mem.heap.valid
+      // Nothing that was freed has become valid, i.e., new_ptrs !! s.mem.heap.freed
 
-      // if new_ptr == 0 (calloc fails) then
-      //     |new_ptrs| == 0
-      // else
-      //     new_ptr is among new_ptrs
-      //     new_ptr is in s.mem.heap.tree
-      //     new_ptr is a root in s.mem.heap, i.e., s.mem.heap.tree[new_ptr].field_of_parent.Armada_FieldNone?
-      //     new_ptr is a dynamic-heap root, i.e., s.mem.heap.tree[new_ptr].field_of_parent.rt.Armada_RootTypeDynamicHeap?
-      //     The new_ptrs don't overlap the previous valid pointers, i.e., new_ptrs !! s.mem.heap.valid
-      //     Nothing that was freed has become valid, i.e., new_ptrs !! s.mem.heap.freed
-
-      var new_ptr_in_new_ptrs = AH.MakeInExpr(new_ptr, new_ptrs);
-
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
-      var new_ptr_in_tree = AH.MakeInExpr(new_ptr, tree);
-
-      var node = AH.MakeSeqSelectExpr(tree, new_ptr, "Armada_Node");
-      var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-      var new_ptr_is_root = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-      var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-      var root_type_dynamic_heap = AH.MakeExprDotName(root_type, "Armada_RootTypeDynamicHeap?", new BoolType());
-
-      var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid_new_ptrs_disjoint = AH.MakeDisjointExpr(new_ptrs, valid);
-
-      var freed = AH.MakeExprDotName(h, "freed", AH.MakePointerSetType());
-      var valid_freed_disjoint = AH.MakeDisjointExpr(new_ptrs, freed);
-
-      var calloc_fails = AH.MakeEqExpr(new_ptr, AH.MakeZero());
-      var new_ptrs_empty = AH.MakeEqExpr(AH.MakeCardinalityExpr(new_ptrs), AH.MakeZero());
-      var implications_of_calloc_success =
-        new List<Expression>{ new_ptr_in_new_ptrs, new_ptr_in_tree, new_ptr_is_root, root_type_dynamic_heap,
-                              valid_new_ptrs_disjoint, valid_freed_disjoint };
-      next.AddConjunct(AH.MakeIfExpr(calloc_fails, new_ptrs_empty, AH.CombineExpressionsWithAnd(implications_of_calloc_success)));
+      next.AddDefinedBehaviorConjunct($"{new_ptr} != 0");
+      next.AddDefinedBehaviorConjunct($"{new_ptr} in {new_ptrs}");
+      next.AddDefinedBehaviorConjunct($"{new_ptr} in {tree}");
+      next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.Armada_ChildTypeRoot?");
+      next.AddDefinedBehaviorConjunct($"{tree}[{new_ptr}].child_type.rt.Armada_RootTypeDynamicHeap?");
+      next.AddDefinedBehaviorConjunct($"{new_ptrs} !! {h}.valid");
+      next.AddDefinedBehaviorConjunct($"{new_ptrs} !! {h}.freed");
 
       // We model it as undefined behavior if a non-positive number was passed as the count.
       // The reason we don't allow allocation of a 0-size array is as follows.  What we return
       // is a pointer to the 0th element, and there is no 0th element to return if we allocate
       // an array of size 0.
 
-      var count_positive = AH.MakeGtExpr(count, AH.MakeZero());
-      next.AddUndefinedBehaviorAvoidanceConstraint(count_positive);
+      next.AddUndefinedBehaviorAvoidanceConstraint($"({count}) > 0");
 
-      // s_current := s.(mem := s.mem.(heap := s.mem.heap.(valid := s.mem.heap.valid + new_ptrs)))
-
-      var valid_plus_new = AH.MakeAddExpr(valid, new_ptrs);
-      var h_updated = AH.MakeDatatypeUpdateExpr(h, "valid", valid_plus_new);
-      var mem_updated = AH.MakeDatatypeUpdateExpr(mem, "heap", h_updated);
-      var s_current = AH.MakeDatatypeUpdateExpr(next.s, "mem", mem_updated);
+      var s_current = $"{s}.(mem := {s}.mem.(heap := {s}.mem.heap.(valid := {s}.mem.heap.valid + {new_ptrs})))";
       s_current = next.AddVariableDeclaration("s", s_current);
 
-      // If new_ptr != 0, then new_ptr is a valid pointer in s_current.mem.heap to a SizedArrayType.
-      // This is somewhat tricky because this is part of the validity step, which comes before the
-      // crash-evaluation step, but it only makes sense if the evaluation of 'count' doesn't crash.
+      // new_ptr is a valid pointer in s_current.mem.heap to a SizedArrayType.
 
-      var mem_current = AH.MakeExprDotName(s_current, "mem", "Armada_SharedMemory");
-      var h_current = AH.MakeExprDotName(mem_current, "heap", "Armada_Heap");
-      var pointer_valid = AH.GetInvocationOfValidPointer(h_current, new_ptr, new SizedArrayType(rhs.AllocatedType, count));
-      var calloc_succeeds = AH.MakeNeqExpr(new_ptr, AH.MakeZero());
-      var calloc_succeeds_and_count_doesnt_crash =
-        countRValue.CanCauseUndefinedBehavior ? AH.MakeAndExpr(calloc_succeeds, countRValue.UndefinedBehaviorAvoidance.Expr) : calloc_succeeds;
+      var h_current = $"{s_current}.mem.heap";
+      next.AddDefinedBehaviorConjunct(AH.GetInvocationOfValidPointerToDynamicArray(h_current, new_ptr, rhs.AllocatedType, count));
 
-      var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-        AH.MakeNameSegment("s2.mem.heap", "Armada_Heap"),
-        AH.MakeNameSegment("new_ptr", "Armada_Pointer"),
-        new SizedArrayType(rhs.AllocatedType, count)
-      );
-      var new_ptrs_equals_allocator_result = AH.ParseExpression(prog, "CallocNewPtrsEqualsAllocated", $"(forall x :: x in new_ptrs <==> x in {Printer.ExprToString(allocatedByExpr)})");
-      var pointer_valid_and_new_ptrs_if_nonzero_and_count_doesnt_crash = AH.MakeImpliesExpr(calloc_succeeds_and_count_doesnt_crash, AH.MakeAndExpr(pointer_valid, new_ptrs_equals_allocator_result));
-      next.AddConjunct(pointer_valid_and_new_ptrs_if_nonzero_and_count_doesnt_crash);
+      var descendants = AH.GetInvocationOfDescendantsOfDynamicArray(h_current, new_ptr, rhs.AllocatedType, count);
+      next.AddDefinedBehaviorConjunct($"(forall p :: p in new_ptrs <==> p in ({descendants}))");
 
       // There's a difference in Armada between a pointer to an array and the pointer to its 0th element.
       // (The former is just a proof construct in the case of a calloc.)  So we need to get a pointer to
       // the 0th element to store in the left-hand side.
 
-      var children = AH.MakeExprDotName(node, "children", AH.MakeChildrenType());
-      var zero_index = AH.MakeApply1("Armada_FieldArrayIndex", AH.MakeZero(), "Armada_Field");
-      var child = AH.MakeSeqSelectExpr(children, zero_index, "Armada_Pointer");
-      var result = AH.MakeIfExpr(calloc_succeeds, child, AH.MakeZero());  // if new_ptr != 0 then child else 0
+      var child = $"{tree}[{new_ptr}].children[0]";
 
-      // s_current := lhs.update_state(s_current, result);
+      // s_current := lhs.update_state(s_current, child);
 
-      var current_context = new NormalResolutionContext(s_current, next, symbols);
+      var current_context = new NormalResolutionContext(s_current, next, parse.symbols);
       var newLhs = current_context.ResolveAsLValue(lhs);
       if (!(newLhs is ArmadaLValue)) {
         next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
@@ -1366,20 +1245,253 @@ namespace Microsoft.Armada
       }
       next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
-      s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, result)
-                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, result);
+      s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, child)
+                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, child, startPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       // s_current := Armada_UpdatePC(s, tid, {end PC})
 
-      s_current = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      s_current = UpdatePC(s_current, next.tid, endPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       next.SetNextState(s_current);
 
       // The next predicate is built, so add it to the list of next predicates.
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+
+      //////////////////////////////////////////////////////////////////////////////
+      // Now, create a next routine for the case where calloc fails.
+      //////////////////////////////////////////////////////////////////////////////
+
+      next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.CallocFailure, parse.methodInfo,
+                                        this, stmt, startPC, endPC);
+      current_context = new NormalResolutionContext(next.s, next, parse.symbols);
+
+      // s_current := lhs.update_state(s_current, new_ptr);
+
+      newLhs = current_context.ResolveAsLValue(lhs);
+      if (!(newLhs is ArmadaLValue)) {
+        next.Fail(lhs.tok, "Left-hand side is not a valid lvalue");
+        return;
+      }
+      next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
+      s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, "0")
+                                          : newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, "0", startPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // s_current := Armada_UpdatePC(s, tid, {end PC})
+
+      s_current = UpdatePC(s_current, next.tid, endPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      next.SetNextState(s_current);
+
+      // The next predicate is built, so add it to the list of next predicates.
+
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      if (other is ArmadaCallocStatement ams) {
+        return AH.TypesMatch(((CallocRhs)stmt.Rhss[0]).AllocatedType, ((CallocRhs)((UpdateStmt)ams.Stmt).Rhss[0]).AllocatedType);
+      }
+      else {
+        return false;
+      }
+    }
+  }
+
+  public class ArmadaCompareAndSwapStatement : ArmadaStatement
+  {
+    private UpdateStmt stmt;
+
+    public ArmadaCompareAndSwapStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
+    {
+      stmt = i_stmt;
+    }
+
+    public override Statement Stmt { get { return stmt; } }
+
+    public override void GenerateNextRoutines()
+    {
+      if (stmt.Lhss.Count > 1) {
+        AH.PrintError(parse.prog, stmt.Tok, $"Number of left-hand sides for compare-and-swap must be 1");
+        return;
+      }
+
+      var rhs = (CompareAndSwapRhs)stmt.Rhss[0];
+      var target = rhs.Target;
+      var oldval = rhs.OldVal;
+      var newval = rhs.NewVal;
+
+      if (!AH.TypesMatch(target.Type, oldval.Type)) {
+        AH.PrintError(parse.prog, stmt.Tok, $"The target has type {target.Type} but the comparison value is of type {oldval.Type}");
+        return;
+      }
+      if (!AH.TypesMatch(target.Type, newval.Type)) {
+        AH.PrintError(parse.prog, stmt.Tok, $"The target has type {target.Type} but the new value is of type {newval.Type}");
+        return;
+      }
+
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.CompareAndSwap, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+
+      // Compare-and-swap is a locked routine, so it implies a fence.
+      // So, add the constraint |s.threads[tid].storeBuffer| == 0.
+
+      next.AddConjunct($"|({next.t}).storeBuffer| == 0");
+
+      // Add undefined-behavior constraints for evaluating the parameters to compare_and_swap.
+      // Use a TSO-bypassing context for all the rvalues since they use the global view of memory.
+      // (It is a LOCK'd instruction, after all, so the store buffer is empty.)
+
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
+      var tsoBypassingContext = new TSOBypassingResolutionContext(next, parse.symbols);
+      var targetLValue = resolutionContext.ResolveAsLValue(target);
+      next.AddUndefinedBehaviorAvoidanceConstraint(targetLValue.GetUndefinedBehaviorAvoidanceConstraint());
+      var targetRValue = tsoBypassingContext.ResolveAsRValue(target);
+      next.AddUndefinedBehaviorAvoidanceConstraint(targetRValue.UndefinedBehaviorAvoidance);
+      var oldRValue = tsoBypassingContext.ResolveAsRValue(oldval);
+      next.AddUndefinedBehaviorAvoidanceConstraint(oldRValue.UndefinedBehaviorAvoidance);
+      var newRValue = tsoBypassingContext.ResolveAsRValue(newval);
+      next.AddUndefinedBehaviorAvoidanceConstraint(newRValue.UndefinedBehaviorAvoidance);
+
+      // s_current := if target == oldval then <update state setting target to newval> else next.s;
+
+      var targetMatchesOld = next.AddVariableDeclaration("m", $"({targetRValue.Val}) == ({oldRValue.Val})");
+      var s_after_value_update = targetLValue.UpdateTotalStateBypassingStoreBuffer(resolutionContext, next, newRValue.Val);
+      var s_current = $"if {targetMatchesOld} then {s_after_value_update} else {next.s}";
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // If there's an LHS, then:
+      // s_current := oldval
+
+      if (stmt.Lhss.Count > 0) {
+        var lhs = stmt.Lhss[0];
+        if (!AH.TypesMatch(target.Type, lhs.Type)) {
+          AH.PrintError(parse.prog, stmt.Tok, $"The target has type {target.Type} but the left hand side is of type {lhs.Type}");
+          return;
+        }
+        ResolutionContext updated_context = new NormalResolutionContext(s_current, next, parse.symbols);
+        var lhsLValue = updated_context.ResolveAsLValue(lhs);
+        if (lhsLValue.IsHeap()) {
+          AH.PrintError(parse.prog, stmt.Tok, $"The result of an atomic-exchange instruction may not be stored in a shared heap variable; it must be stored in a local variable.");
+          return;
+        }
+        next.AddUndefinedBehaviorAvoidanceConstraint(lhsLValue.GetUndefinedBehaviorAvoidanceConstraint());
+        s_current = lhsLValue.UpdateTotalStateBypassingStoreBuffer(updated_context, next, targetRValue.Val);
+        s_current = next.AddVariableDeclaration("s", s_current);
+      }
+
+      // s_current := Armada_UpdatePC(s_current, tid, {end PC})
+
+      s_current = UpdatePC(s_current, next.tid, endPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      next.SetNextState(s_current);
+
+      // The next predicate is built, so add it to the list of next predicates.
+
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaCompareAndSwapStatement;
+    }
+  }
+
+  public class ArmadaAtomicExchangeStatement : ArmadaStatement
+  {
+    private UpdateStmt stmt;
+
+    public ArmadaAtomicExchangeStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
+    {
+      stmt = i_stmt;
+    }
+
+    public override Statement Stmt { get { return stmt; } }
+
+    public override void GenerateNextRoutines()
+    {
+      if (stmt.Lhss.Count > 1) {
+        AH.PrintError(parse.prog, stmt.Tok, $"Number of left-hand sides for atomic-exchange must be 1");
+        return;
+      }
+
+      var rhs = (AtomicExchangeRhs)stmt.Rhss[0];
+      var target = rhs.Target;
+      var newval = rhs.NewVal;
+
+      if (!AH.TypesMatch(target.Type, newval.Type)) {
+        AH.PrintError(parse.prog, stmt.Tok, $"The target has type {target.Type} but the new value is of type {newval.Type}");
+        return;
+      }
+
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.AtomicExchange, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+
+      // atomic exchange is a locked routine, so it implies a fence.
+      // So, add the constraint |s.threads[tid].storeBuffer| == 0.
+
+      next.AddConjunct($"|({next.t}).storeBuffer| == 0");
+
+      // Add undefined-behavior constraints for evaluating the parameters to atomic_exchange.
+      // Use a TSO-bypassing context for all the rvalues since they use the global view of memory.
+      // (It is a LOCK'd instruction, after all, so the store buffer is empty.)
+
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
+      var tsoBypassingContext = new TSOBypassingResolutionContext(next, parse.symbols);
+      var targetLValue = resolutionContext.ResolveAsLValue(target);
+      next.AddUndefinedBehaviorAvoidanceConstraint(targetLValue.GetUndefinedBehaviorAvoidanceConstraint());
+      var targetRValue = tsoBypassingContext.ResolveAsRValue(target);
+      next.AddUndefinedBehaviorAvoidanceConstraint(targetRValue.UndefinedBehaviorAvoidance);
+      var newRValue = tsoBypassingContext.ResolveAsRValue(newval);
+      next.AddUndefinedBehaviorAvoidanceConstraint(newRValue.UndefinedBehaviorAvoidance);
+
+      // s_current := update state setting target to newval;
+
+      var s_current = targetLValue.UpdateTotalStateBypassingStoreBuffer(resolutionContext, next, newRValue.Val);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      // If there's an LHS, then:
+      // s_current := <update state setting lhs to old value of target>
+
+      if (stmt.Lhss.Count > 0) {
+        var lhs = stmt.Lhss[0];
+        if (!AH.TypesMatch(target.Type, lhs.Type)) {
+          AH.PrintError(parse.prog, stmt.Tok, $"The target has type {target.Type} but the left hand side is of type {lhs.Type}");
+          return;
+        }
+        ResolutionContext updated_context = new NormalResolutionContext(s_current, next, parse.symbols);
+        var lhsLValue = updated_context.ResolveAsLValue(lhs);
+        if (lhsLValue.IsHeap()) {
+          AH.PrintError(parse.prog, stmt.Tok,
+                        $"The result of an atomic-exchange instruction may not be stored in a shared heap variable; it must be stored in a local variable.");
+          return;
+        }
+        next.AddUndefinedBehaviorAvoidanceConstraint(lhsLValue.GetUndefinedBehaviorAvoidanceConstraint());
+        s_current = lhsLValue.UpdateTotalStateBypassingStoreBuffer(updated_context, next, targetRValue.Val);
+        s_current = next.AddVariableDeclaration("s", s_current);
+      }
+
+      // s_current := Armada_UpdatePC(s_current, tid, {end PC})
+
+      s_current = UpdatePC(s_current, next.tid, endPC);
+      s_current = next.AddVariableDeclaration("s", s_current);
+
+      next.SetNextState(s_current);
+
+      // The next predicate is built, so add it to the list of next predicates.
+
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaAtomicExchangeStatement;
     }
   }
 
@@ -1388,7 +1500,7 @@ namespace Microsoft.Armada
     private UpdateStmt stmt;
     private bool genuineTSO;
 
-    public ArmadaUpdateStatement(ParseContext context, UpdateStmt i_stmt) : base(context)
+    public ArmadaUpdateStatement(ParseInfo i_parse, UpdateStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
       genuineTSO = ! i_stmt.BypassStoreBuffers;
@@ -1398,22 +1510,22 @@ namespace Microsoft.Armada
 
     public bool GenuineTSO { get { return genuineTSO; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
       if (stmt.Lhss.Count != stmt.Rhss.Count) {
-        AH.PrintError(prog, stmt.Tok, $"Number of left-hand sides for assignment ({stmt.Lhss.Count}) statement doesn't match number of right-hand sides ({stmt.Rhss.Count}).");
+        AH.PrintError(parse.prog, stmt.Tok, $"Number of left-hand sides for assignment ({stmt.Lhss.Count}) statement doesn't match number of right-hand sides ({stmt.Rhss.Count}).");
         return;
       }
 
-      var next = new NextRoutine(prog, symbols, NextType.Update, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Update, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
 
       var s_current = next.s;
       for (int i = 0; i < stmt.Lhss.Count; ++i) {
-        var context = new NormalResolutionContext(s_current, next, symbols);
+        var resolutionContext = new NormalResolutionContext(s_current, next, parse.symbols);
 
         var lhs = stmt.Lhss.ElementAt(i);
-        var newLhs = context.ResolveAsLValue(lhs);
+        var newLhs = resolutionContext.ResolveAsLValue(lhs);
 
         if (newLhs.NoTSO()) {
           genuineTSO = false;
@@ -1426,14 +1538,13 @@ namespace Microsoft.Armada
         next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
         var rhs = stmt.Rhss.ElementAt(i);
-        Expression newRhs;
+        string newRhs;
         if (rhs is HavocRhs) {
-          next.AddFormal(new NextFormal($"nondet{i}_{startPC}", $"nondet{i}", symbols.FlattenType(lhs.Type)));
-          newRhs = AH.MakeNameSegment($"nondet{i}", lhs.Type);
+          newRhs = next.AddFormal(new NextFormal($"nondet{i}_{startPC}", $"nondet{i}", lhs.Type, parse.symbols));
         }
         else if (rhs is ExprRhs) {
           var erhs = (ExprRhs)rhs;
-          var newRhsRValue = context.ResolveAsRValue(erhs.Expr);
+          var newRhsRValue = resolutionContext.ResolveAsRValue(erhs.Expr);
           next.AddUndefinedBehaviorAvoidanceConstraint(newRhsRValue.UndefinedBehaviorAvoidance);
           newRhs = newRhsRValue.Val;
         }
@@ -1445,20 +1556,76 @@ namespace Microsoft.Armada
           next.Fail(rhs.Tok, "Allocation can't be done in parallel with other assignments");
           return;
         }
+        else if (rhs is CompareAndSwapRhs) {
+          next.Fail(rhs.Tok, "Compare-and-swap can't be done in parallel with other assignments");
+          return;
+        }
+        else if (rhs is AtomicExchangeRhs) {
+          next.Fail(rhs.Tok, "atomic-exchange can't be done in parallel with other assignments");
+          return;
+        }
         else {
           next.Fail(rhs.Tok, "Right-hand side is not a valid rvalue");
           return;
         }
 
         // var s_current := lhs.update_state(s_current, rhs);
-        s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(context, next, newRhs)
-                                            : newLhs.UpdateTotalStateWithStoreBufferEntry(context, next, newRhs);
+        s_current = stmt.BypassStoreBuffers ? newLhs.UpdateTotalStateBypassingStoreBuffer(resolutionContext, next, newRhs)
+                                            : newLhs.UpdateTotalStateWithStoreBufferEntry(resolutionContext, next, newRhs, startPC);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
-      var nextState = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      var nextState = UpdatePC(s_current, next.tid, endPC);
       next.SetNextState(nextState);
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      if (other is ArmadaUpdateStatement) {
+        var us = (UpdateStmt)other.Stmt;
+        if (stmt.Lhss.Count != us.Lhss.Count) {
+          return true; // Maybe it's a variable introduction or variable hiding
+        }
+        for (int i = 0; i < stmt.Rhss.Count; ++i) {
+          var rhs = stmt.Rhss.ElementAt(i);
+          var otherRhs = us.Rhss.ElementAt(i);
+          if (rhs is CreateThreadRhs && !(otherRhs is CreateThreadRhs)) {
+            return false;
+          }
+          if (otherRhs is CreateThreadRhs && !(rhs is CreateThreadRhs)) {
+            return false;
+          }
+          if (rhs is MallocRhs && !(otherRhs is MallocRhs)) {
+            return false;
+          }
+          if (otherRhs is MallocRhs && !(rhs is MallocRhs)) {
+            return false;
+          }
+          if (rhs is CallocRhs && !(otherRhs is CallocRhs)) {
+            return false;
+          }
+          if (otherRhs is CallocRhs && !(rhs is CallocRhs)) {
+            return false;
+          }
+          if (rhs is CompareAndSwapRhs && !(otherRhs is CompareAndSwapRhs)) {
+            return false;
+          }
+          if (otherRhs is CompareAndSwapRhs && !(rhs is CompareAndSwapRhs)) {
+            return false;
+          }
+          if (rhs is AtomicExchangeRhs && !(otherRhs is AtomicExchangeRhs)) {
+            return false;
+          }
+          if (otherRhs is AtomicExchangeRhs && !(rhs is AtomicExchangeRhs)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      else {
+        return false;
+      }
     }
   }
 
@@ -1466,21 +1633,21 @@ namespace Microsoft.Armada
   {
     private VarDeclStmt stmt;
 
-    public ArmadaVarDeclStatement(ParseContext context, VarDeclStmt i_stmt) : base(context)
+    public ArmadaVarDeclStatement(ParseInfo i_parse, VarDeclStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       if (i_startPC.instructionCount > 0) {
         if (stmt.Update != null) {
-          AH.PrintError(prog, stmt.Tok, "In Armada, all stack variables for a method are created and initialized atomically with the stack frame getting pushed onto the stack.  So, it's a bad idea to have a variable declaration with an initialization value, like this one, somewhere other than the beginning of the method.  After all, in this case the semantics will not be what seems intuitive from reading the code.");
+          AH.PrintError(parse.prog, stmt.Tok, "In Armada, all stack variables for a method are created and initialized atomically with the stack frame getting pushed onto the stack.  So, it's a bad idea to have a variable declaration with an initialization value, like this one, somewhere other than the beginning of the method.  After all, in this case the semantics will not be what seems intuitive from reading the code.");
         }
         else {
-          AH.PrintWarning(prog, stmt.Tok, "Note that, in Armada, all stack variables for a method are created and initialized atomically with the stack frame getting pushed onto the stack.  So, it's generally a good idea to have all variable declarations at the beginnings of methods.  Otherwise, the semantics may not be what seems intuitive from reading the code.");
+          AH.PrintWarning(parse.prog, stmt.Tok, "Note that, in Armada, all stack variables for a method are created and initialized atomically with the stack frame getting pushed onto the stack.  So, it's generally a good idea to have all variable declarations at the beginnings of methods.  Otherwise, the semantics may not be what seems intuitive from reading the code.");
         }
       }
       return endPC = startPC = i_startPC;
@@ -1493,22 +1660,42 @@ namespace Microsoft.Armada
         potentiallyNonyieldingPCs.Add(startPC);
       }
     }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaVarDeclStatement;
+    }
   }
 
   public class ArmadaReturnStatement : ArmadaStatement
   {
     private ReturnStmt stmt;
 
-    public ArmadaReturnStatement(ParseContext context, ReturnStmt i_stmt) : base(context)
+    public ArmadaReturnStatement(ParseInfo i_parse, ReturnStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void ComputeNonyieldAndYieldPCs(bool inExplicitYieldBlock, HashSet<ArmadaPC> potentiallyNonyieldingPCs,
-                                                    HashSet<ArmadaPC> yieldPCs)
+    public override void GenerateNextRoutines()
     {
+      // We model a return statement as a goto with the target being the method's end PC.
+
+      var targetPC = parse.methodInfo.ReturnPC;
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Goto, parse.methodInfo,
+                                            this, stmt, startPC, targetPC);
+
+      // s' == Armada_UpdatePC(s, tid, targetPC)
+
+      var s_with_new_PC = UpdatePC(next.s, next.tid, targetPC);
+      next.SetNextState(s_with_new_PC);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaReturnStatement;
     }
   }
 
@@ -1516,32 +1703,51 @@ namespace Microsoft.Armada
   {
     private AssertStmt stmt;
 
-    public ArmadaAssertStatement(ParseContext context, AssertStmt i_stmt) : base(context)
+    public ArmadaAssertStatement(ParseInfo i_parse, AssertStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
-      var next = new NextRoutine(prog, symbols, NextType.Assert, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      // First, create the NextRoutine for the case where the assertion succeeds.
+      
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.AssertTrue, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
 
-      // s' == if <expression> then Armada_UpdatePC(s, tid, endPC) else s.(stop_reason := Armada_StopReasonAssertionFailure)
+      // s' == Armada_UpdatePC(s, tid, endPC)
 
-      var rvalue = context.ResolveAsRValue(stmt.Expr);
+      var rvalue = resolutionContext.ResolveAsRValue(stmt.Expr);
       next.AddUndefinedBehaviorAvoidanceConstraint(rvalue.UndefinedBehaviorAvoidance);
+      next.AddDefinedBehaviorConjunct(rvalue.Val);
 
-      var s = next.s;
-      var s_with_assertion_failure =
-        AH.MakeDatatypeUpdateExpr(s, "stop_reason", AH.MakeNameSegment("Armada_StopReasonAssertionFailure", "Armada_StopReason"));
-      var s_with_new_PC = UpdatePC(symbols, methodInfo, next.s, next.tid, endPC);
-      var s_updated = AH.MakeIfExpr(rvalue.Val, s_with_new_PC, s_with_assertion_failure);
+      var s_prime = UpdatePC(next.s, next.tid, endPC);
+      next.SetNextState(s_prime);
+      parse.symbols.AddNextRoutineConstructor(next);
 
-      next.SetNextState(s_updated);
-      symbols.AddNextRoutine(next);
+      // Second, create the NextRoutine for the case where the assertion fails.
+
+      next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.AssertFalse, parse.methodInfo,
+                                        this, stmt, startPC, endPC);
+      resolutionContext = new NormalResolutionContext(next, parse.symbols);
+
+      rvalue = resolutionContext.ResolveAsRValue(stmt.Expr);
+      next.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(rvalue.UndefinedBehaviorAvoidance);
+      next.AddDefinedBehaviorConjunct($"!({rvalue.Val})");
+
+      // s' == s.(stop_reason := Armada_StopReasonAssertionFailure)
+
+      s_prime = $"({next.s}).(stop_reason := Armada_StopReasonAssertionFailure)";
+      next.SetNextState(s_prime);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaAssertStatement;
     }
   }
 
@@ -1549,14 +1755,14 @@ namespace Microsoft.Armada
   {
     private AssumeStmt stmt;
 
-    public ArmadaAssumeStatement(ParseContext context, AssumeStmt i_stmt) : base(context)
+    public ArmadaAssumeStatement(ParseInfo i_parse, AssumeStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       return endPC = startPC = i_startPC;
     }
@@ -1566,14 +1772,14 @@ namespace Microsoft.Armada
     {
     }
 
-    public void AddEnablingConstraint(ArmadaSymbolTable symbols, MethodInfo methodInfo, EnablingConstraintCollector constraintCollector)
+    public override void GenerateEnablingConstraints()
     {
-      var context = new CustomResolutionContext(constraintCollector.s, constraintCollector.s, constraintCollector.locv,
-                                                constraintCollector.top, constraintCollector.ghosts,
-                                                constraintCollector.tid, methodInfo.method.Name, symbols, constraintCollector);
-      var rvalue = context.ResolveAsRValue(stmt.Expr);
-      constraintCollector.AddConjunct(rvalue.UndefinedBehaviorAvoidance);
-      constraintCollector.AddConjunct(rvalue.Val);
+      parse.methodInfo.AddEnablingConstraint(parse.prog, startPC, stmt.Expr);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaAssumeStatement;
     }
   }
 
@@ -1581,43 +1787,31 @@ namespace Microsoft.Armada
   {
     private SomehowStmt stmt;
 
-    public ArmadaSomehowStatement(ParseContext context, SomehowStmt i_stmt) : base(context)
+    public ArmadaSomehowStatement(ParseInfo i_parse, SomehowStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
-      var next = new NextRoutine(prog, symbols, NextType.Somehow, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var method = methodInfo.method;
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Somehow, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var method = parse.methodInfo.method;
 
-      var top = AH.MakeExprDotName(next.t, "top", "Armada_StackFrame");
-      var ghosts = AH.MakeExprDotName(next.s, "ghosts", "Armada_Ghosts");
+      var top = $"({next.t}).top";
+      var ghosts = $"({next.s}).ghosts";
       var start_read_context = new CustomResolutionContext(next.s, next.s, next.locv, top,
-                                                           ghosts, next.tid, method.Name, symbols, next);
+                                                           ghosts, next.tid, method.Name, parse.symbols, next);
 
-      // Add each requires clause as an undefined-behavior-avoidance constraint, to model that the
-      // instruction may have arbitrary behavior if its requirements aren't met at the outset.
+      // Add each undefined_unless clause as an undefined-behavior-avoidance constraint, to model that the
+      // instruction may have arbitrary behavior if those constraints aren't met at the outset.
 
-      foreach (var requires_clause in stmt.Req) {
-        var r = start_read_context.ResolveAsRValue(requires_clause);
-        next.AddUndefinedBehaviorAvoidanceConstraint(r.UndefinedBehaviorAvoidance);
-        next.AddUndefinedBehaviorAvoidanceConstraint(r.Val);
-      }
-
-      // Add each awaits clause as a predicate.
-
-      foreach (var await_clause in stmt.Awaits) {
-        if (!(await_clause.Type is BoolType)) {
-          next.Fail(await_clause.tok, "Awaits clauses have to be boolean expressions");
-          return;
-        }
-        var await_clause_resolved = start_read_context.ResolveAsRValue(await_clause);
-        next.AddConjunct(await_clause_resolved.UndefinedBehaviorAvoidance);
-        next.AddConjunct(await_clause_resolved.Val);
+      foreach (var undefined_unless_clause in stmt.UndefinedUnless) {
+        var uuc = start_read_context.ResolveAsRValue(undefined_unless_clause);
+        next.AddUndefinedBehaviorAvoidanceConstraint(uuc.UndefinedBehaviorAvoidance);
+        next.AddUndefinedBehaviorAvoidanceConstraint(uuc.Val);
       }
 
       // Compute each s{i+1} by updating a single modifies element in s{i}.
@@ -1626,9 +1820,8 @@ namespace Microsoft.Armada
       for (int i = 0; i < stmt.Mod.Expressions.Count; ++i) {
         var lhs = stmt.Mod.Expressions.ElementAt(i);
 
-        var nextFormal = new NextFormal($"newval{i}_{startPC}", $"newval{i}", lhs.Type);
-        next.AddFormal(nextFormal);
-        var newRhs = AH.MakeNameSegment($"newval{i}", lhs.Type);
+        var nextFormal = new NextFormal($"newval{i}_{startPC}", $"newval{i}", lhs.Type, parse.symbols);
+        var newRhs = next.AddFormal(nextFormal);
 
         //
         // It's important that we model the external method as
@@ -1641,7 +1834,7 @@ namespace Microsoft.Armada
         //
 
         // s_current := lhs.update_state(s_current, newRhs);
-        var current_context = new NormalResolutionContext(s_current, next, symbols);
+        var current_context = new NormalResolutionContext(s_current, next, parse.symbols);
         var newLhs = current_context.ResolveAsLValue(lhs);
         if (!(newLhs is ArmadaLValue)) {
           next.Fail(lhs.tok, "Modifies element is not a valid lvalue");
@@ -1650,14 +1843,14 @@ namespace Microsoft.Armada
         next.AddUndefinedBehaviorAvoidanceConstraint(newLhs.GetUndefinedBehaviorAvoidanceConstraint());
 
         s_current = Attributes.Contains(stmt.Mod.Attributes, "tso") ?
-          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs) :
+          newLhs.UpdateTotalStateWithStoreBufferEntry(current_context, next, newRhs, startPC) :
           newLhs.UpdateTotalStateBypassingStoreBuffer(current_context, next, newRhs);
         s_current = next.AddVariableDeclaration("s", s_current);
       }
 
       // s_current := Armada_UpdatePC(s_current, tid, endPC);
 
-      s_current = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      s_current = UpdatePC(s_current, next.tid, endPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       // s' must be equal to the updated s we just computed
@@ -1667,29 +1860,89 @@ namespace Microsoft.Armada
       // For each ensures clause, add another condition that the clause holds in s' (as viewed by the local thread).
 
       if (stmt.Ens.Count > 0) {
-        var locv_prime = AH.MakeApply2("Armada_GetThreadLocalView", s_current, next.tid, "Armada_SharedMemory");
-        locv_prime = next.AddVariableDeclaration("locv_prime", locv_prime);
-
-        var threads_prime = AH.MakeExprDotName(s_current, "threads", AH.MakeThreadsType());
-        var thread_prime = AH.MakeSeqSelectExpr(threads_prime, next.tid, "Armada_Thread");
-        var top_prime = AH.MakeExprDotName(thread_prime, "top", "Armada_StackFrame");
-        var ghosts_prime = AH.MakeExprDotName(s_current, "ghosts", "Armada_Ghosts");
-
-        // In an ensures clause of a somehow statement, "old" refers to the state before the somehow.
-        var old_mem = AH.MakeExprDotName(next.s, "mem", "Armada_SharedMemory");
-        var old_ghosts = AH.MakeExprDotName(next.s, "ghosts", "Armada_Ghosts");
-        var end_read_context = new EnsuresResolutionContext(next.s, s_current, next.tid, method.Name, symbols, next, null);
+        var end_read_context = new EnsuresResolutionContext(next.s, s_current, next.tid, method.Name, parse.symbols, next, null);
 
         foreach (var ens in stmt.Ens) {
           var ens_resolved = end_read_context.ResolveAsRValue(ens);
-          next.AddConjunct(ens_resolved.UndefinedBehaviorAvoidance);
-          next.AddConjunct(ens_resolved.Val);
+          next.AddUBAvoidanceConstraintAsDefinedBehaviorConjunct(ens_resolved.UndefinedBehaviorAvoidance);
+          next.AddDefinedBehaviorConjunct(ens_resolved.Val);
         }
       }
 
       // We're done building the next routine, so add it to the list of nexts.
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaSomehowStatement;
+    }
+  }
+
+  public class ArmadaFenceStatement : ArmadaStatement
+  {
+    private FenceStmt stmt;
+
+    public ArmadaFenceStatement(ParseInfo i_parse, FenceStmt i_stmt) : base(i_parse)
+    {
+      stmt = i_stmt;
+    }
+
+    public override Statement Stmt { get { return stmt; } }
+
+    public override void GenerateNextRoutines()
+    {
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Fence, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+
+      // |s.threads[tid].storeBuffer| == 0
+
+      next.AddConjunct($"|({next.t}).storeBuffer| == 0");
+
+      // s' == Armada_UpdatePC(s, tid, endPC)
+
+      var s_with_new_PC = UpdatePC(next.s, next.tid, endPC);
+      next.SetNextState(s_with_new_PC);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaFenceStatement;
+    }
+  }
+
+  public class ArmadaGotoStatement : ArmadaStatement
+  {
+    private GotoStmt stmt;
+
+    public ArmadaGotoStatement(ParseInfo i_parse, GotoStmt i_stmt) : base(i_parse)
+    {
+      stmt = i_stmt;
+    }
+
+    public override Statement Stmt { get { return stmt; } }
+
+    public override void GenerateNextRoutines()
+    {
+      var targetPC = parse.symbols.GetPCForMethodAndLabel(parse.methodInfo.method.Name + "_" + stmt.Target);
+      if (targetPC == null) {
+        AH.PrintError(parse.prog, $"ERROR:  No label found in method {parse.methodInfo.method.Name} with name {stmt.Target}");
+      }
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Goto, parse.methodInfo,
+                                            this, stmt, startPC, targetPC);
+
+      // s' == Armada_UpdatePC(s, tid, targetPC)
+
+      var s_with_new_PC = UpdatePC(next.s, next.tid, targetPC);
+      next.SetNextState(s_with_new_PC);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaGotoStatement;
     }
   }
 
@@ -1697,51 +1950,46 @@ namespace Microsoft.Armada
   {
     private DeallocStmt stmt;
 
-    public ArmadaDeallocStatement(ParseContext context, DeallocStmt i_stmt) : base(context)
+    public ArmadaDeallocStatement(ParseInfo i_parse, DeallocStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
-      var addr = stmt.Addr;
-      var next = new NextRoutine(prog, symbols, NextType.Dealloc, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Dealloc, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
 
-      if (addr.Type == null)
+      if (stmt.Addr.Type == null)
       {
         next.Fail(stmt.Tok, "Attempt to dealloc an address whose type isn't known");
         return;
       }
       Type subtype;
       string err;
-      if (!AH.GetDereferenceType(addr.Type, out subtype, out err))
+      if (!AH.GetDereferenceType(stmt.Addr.Type, out subtype, out err))
       {
         next.Fail(stmt.Tok, err);
         return;
       }
 
-      var addrRValue = context.ResolveAsRValue(addr);
+      var addrRValue = resolutionContext.ResolveAsRValue(stmt.Addr);
       next.AddUndefinedBehaviorAvoidanceConstraint(addrRValue.UndefinedBehaviorAvoidance);
 
-      addr = addrRValue.Val;
-      AH.SetExprType(addr, "Armada_Pointer");
-      addr = next.AddVariableDeclaration("addr", addr);
+      var addr = next.AddVariableDeclaration("addr", addrRValue.Val);
 
-      var mem = AH.MakeExprDotName(next.s, "mem", "Armada_SharedMemory");
-      var h = AH.MakeExprDotName(mem, "heap", "Armada_Heap");
-      var tree = AH.MakeExprDotName(h, "tree", "Armada_Tree");
+      var s = $"({next.s})";
+      var h = $"{s}.mem.heap";
+      var tree = $"{h}.tree";
 
       // Experience undefined behavior if tree-forest properties don't hold
-      var tree_forest_properties = AH.MakeApply1("Armada_TreeForestProperties", tree, new BoolType());
-      next.AddUndefinedBehaviorAvoidanceConstraint(tree_forest_properties);
+      next.AddUndefinedBehaviorAvoidanceConstraint($"Armada_TreeForestProperties({tree})");
 
       // Experience undefined behavior if addr isn't valid
-      var addr_valid = AH.GetInvocationOfValidPointer(h, addr, subtype);
-      next.AddUndefinedBehaviorAvoidanceConstraint(addr_valid);
+      next.AddUndefinedBehaviorAvoidanceConstraint(AH.GetInvocationOfValidPointer(h, addr, subtype));
 
       //
       // If 'addr' is a pointer to the 0th element of an array, then
@@ -1752,65 +2000,46 @@ namespace Microsoft.Armada
       // and there's no way to go "up" to the pointer to the array.
       //
 
-      // var addr_to_free := if tree[addr].field_of_parent.Armada_FieldArrayIndex? && tree[addr].field_of_parent.i == 0 then
+      // var addr_to_free := if tree[addr].child_type.Armada_ChildTypeIndex? && tree[addr].child_type.i == 0 then
       //                         tree[addr].parent else addr
-      var node = AH.MakeSeqSelectExpr(tree, addr, "Armada_Node");
-      var field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-      var is_array_index = AH.MakeExprDotName(field_of_parent, "Armada_FieldArrayIndex?", new BoolType());
-      var index_within_parent = AH.MakeExprDotName(field_of_parent, "i", new IntType());
-      var index_is_zero = AH.MakeEqExpr(index_within_parent, AH.MakeZero());
-      var is_array_index_zero = AH.MakeAndExpr(is_array_index, index_is_zero);
-      var use_parent = next.AddVariableDeclaration("use_parent", is_array_index_zero);
-      var parent = AH.MakeExprDotName(node, "parent", "Armada_Pointer");
-      var addr_to_free = AH.MakeIfExpr(use_parent, parent, addr);
-      addr_to_free = next.AddVariableDeclaration("addr_to_free", addr_to_free);
-
       // Experience undefined behavior if we're using the parent and the parent isn't in the tree
-      var parent_in_tree = AH.MakeInExpr(parent, tree);
-      next.AddUndefinedBehaviorAvoidanceConstraint(AH.MakeImpliesExpr(use_parent, parent_in_tree));
+
+      var use_parent = next.AddVariableDeclaration(
+        "use_parent",
+        $"{tree}[{addr}].child_type.Armada_ChildTypeIndex? && {tree}[{addr}].child_type.i == 0"
+      );
+      var parent = $"{tree}[{addr}].parent";
+      next.AddUndefinedBehaviorAvoidanceConstraint($"{use_parent} ==> {parent} in {tree}");
+      var addr_to_free = next.AddVariableDeclaration("addr_to_free", $"if {use_parent} then {parent} else {addr}");
 
       // Experience undefined behavior if we're freeing something that isn't a root
-      node = AH.MakeSeqSelectExpr(tree, addr_to_free, "Armada_Node");
-      field_of_parent = AH.MakeExprDotName(node, "field_of_parent", "Armada_Field");
-      var addr_is_root = AH.MakeExprDotName(field_of_parent, "Armada_FieldNone?", new BoolType());
-      next.AddUndefinedBehaviorAvoidanceConstraint(addr_is_root);
-      var root_type = AH.MakeExprDotName(field_of_parent, "rt", "Armada_RootType");
-      var root_type_dynamic_heap = AH.MakeExprDotName(root_type, "Armada_RootTypeDynamicHeap?", new BoolType());
-      next.AddUndefinedBehaviorAvoidanceConstraint(root_type_dynamic_heap);
+      next.AddUndefinedBehaviorAvoidanceConstraint($"{tree}[{addr_to_free}].child_type.Armada_ChildTypeRoot?");
+      next.AddUndefinedBehaviorAvoidanceConstraint($"{tree}[{addr_to_free}].child_type.rt.Armada_RootTypeDynamicHeap?");
 
       // var descendants := set d | d in tree && Armada_PointerIsAncestorOfPointer(tree, addr_to_free, d) :: d;
-      var d = AH.MakeNameSegment("d", "Armada_Pointer");
-      var d_in_tree = AH.MakeInExpr(d, tree);
-      var is_descendant = AH.MakeApply3("Armada_PointerIsAncestorOfPointer", tree, addr_to_free, d, new BoolType());
-      var d_in_tree_and_is_descendant = AH.MakeAndExpr(d_in_tree, is_descendant);
-      var descendants = AH.MakeSetComprehension(new List<BoundVar>{ AH.MakeBoundVar("d", "Armada_Pointer") },
-                                                d_in_tree_and_is_descendant, d);
-      AH.SetExprType(descendants, AH.MakePointerSetType());
+      var descendants = $"Armada_DescendantsOfPointer({tree}, {addr_to_free})";
       descendants = next.AddVariableDeclaration("descendants", descendants);
 
-      // s_current := s.(mem := s.mem.(heap := s.mem.heap.(
-      //              valid := s.mem.heap.valid - descendants,
-      //              freed := s.mem.heap..freed + descendants)))
+      // Update valid and freed pointer sets
 
-      var valid = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var valid_minus_descendants = AH.MakeSubExpr(valid, descendants);
-      var freed = AH.MakeExprDotName(h, "valid", AH.MakePointerSetType());
-      var freed_plus_decendants = AH.MakeAddExpr(freed, descendants);
-      var h_updated = AH.MakeDatatypeUpdate2Expr(h, "valid", valid_minus_descendants, "freed", freed_plus_decendants);
-      var mem_updated = AH.MakeDatatypeUpdateExpr(mem, "heap", h_updated);
-      var s_current = AH.MakeDatatypeUpdateExpr(next.s, "mem", mem_updated);
+      var s_current = $"{s}.(mem := {s}.mem.(heap := {h}.(valid := {h}.valid - {descendants}, freed := {h}.freed + {descendants})))";
       s_current = next.AddVariableDeclaration("s", s_current);
 
       // s_current := Armada_UpdatePC(s, tid, {end PC})
 
-      s_current = UpdatePC(symbols, methodInfo, s_current, next.tid, endPC);
+      s_current = UpdatePC(s_current, next.tid, endPC);
       s_current = next.AddVariableDeclaration("s", s_current);
 
       next.SetNextState(s_current);
 
       // The next predicate is built, so add it to the list of next predicates.
 
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaDeallocStatement;
     }
   }
 
@@ -1818,39 +2047,50 @@ namespace Microsoft.Armada
   {
     private JoinStmt stmt;
 
-    public ArmadaJoinStatement(ParseContext context, JoinStmt i_stmt) : base(context)
+    public ArmadaJoinStatement(ParseInfo i_parse, JoinStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override void GenerateNextRoutines()
     {
-      var next = new NextRoutine(prog, symbols, NextType.Join, methodInfo, this, stmt, startPC, endPC);
-      this.nextRoutine = next;
-      var context = new NormalResolutionContext(next, symbols);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.Join, parse.methodInfo,
+                                            this, stmt, startPC, endPC);
+      var resolutionContext = new NormalResolutionContext(next, parse.symbols);
 
-      var join_tid = context.ResolveAsRValue(stmt.WhichThread);
+      var s = $"({next.s})";
+      var join_tid = resolutionContext.ResolveAsRValue(stmt.WhichThread);
       var join_tid_undefined_behavior_avoidance = join_tid.UndefinedBehaviorAvoidance;
       next.AddUndefinedBehaviorAvoidanceConstraint(join_tid_undefined_behavior_avoidance);
 
-      // join_tid !in s.threads
+      // It's undefined behavior to join a thread that isn't either running or joinable.
+      // For instance, once you join a thread you can't join it again.
 
-      var threads = AH.MakeExprDotName(next.s, "threads", AH.MakeThreadsType());
-      var join_tid_not_in_threads = AH.MakeNotInExpr(join_tid.Val, threads);
-      if (join_tid_undefined_behavior_avoidance.CanCauseUndefinedBehavior) {
-        next.AddConjunct(AH.MakeImpliesExpr(join_tid_undefined_behavior_avoidance.Expr, join_tid_not_in_threads));
-      }
-      else {
-        next.AddConjunct(join_tid_not_in_threads);
-      }
+      next.AddUndefinedBehaviorAvoidanceConstraint($"({join_tid.Val}) in {s}.threads || ({join_tid.Val}) in {s}.joinable_tids");
 
-      // s' == Armada_UpdatePC(s, tid, endPC)
+      // The step is enabled only when join_tid is in s.joinable_tids.
 
-      var s_with_new_PC = UpdatePC(symbols, methodInfo, next.s, next.tid, endPC);
+      next.AddDefinedBehaviorConjunct($"({join_tid.Val}) in {s}.joinable_tids");
+
+      // Remove the joined thread from the set of joinable threads, to model the fact that a join
+      // releases the thread's resources and thus makes it illegal to join it again.
+      //
+      // s_current := s.(joinable_tids := joinable_tids - {join_tid});
+
+      var s_current = next.AddVariableDeclaration("s", $"{s}.(joinable_tids := {s}.joinable_tids - {{ {join_tid.Val} }})");
+
+      // s' == Armada_UpdatePC(s_current, tid, endPC)
+
+      var s_with_new_PC = UpdatePC(s_current, next.tid, endPC);
       next.SetNextState(s_with_new_PC);
-      symbols.AddNextRoutine(next);
+      parse.symbols.AddNextRoutineConstructor(next);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaJoinStatement;
     }
   }
 
@@ -1859,27 +2099,26 @@ namespace Microsoft.Armada
     private BreakStmt stmt;
     private ArmadaWhileStatement innermostEnclosingWhile;
 
-    public ArmadaBreakStatement(ParseContext context, BreakStmt i_stmt) : base(context)
+    public ArmadaBreakStatement(ParseInfo i_parse, BreakStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
-      innermostEnclosingWhile = context.innermostEnclosingWhile;
+      innermostEnclosingWhile = parse.innermostEnclosingWhile;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                           HashSet<ArmadaPC> loopHeads)
+    public override void GenerateNextRoutines()
     {
-      return new NormalPCNode(startPC, nextRoutine, breakTarget);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.WhileBreak, parse.methodInfo,
+                                            this, stmt, startPC, innermostEnclosingWhile.EndPC);
+      var s_with_new_PC = UpdatePC(next.s, next.tid, innermostEnclosingWhile.EndPC);
+      next.SetNextState(s_with_new_PC);
+      parse.symbols.AddNextRoutineConstructor(next);
     }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override bool RoughlyMatches(ArmadaStatement other)
     {
-      var next = new NextRoutine(prog, symbols, NextType.WhileBreak, methodInfo, this, stmt, startPC, innermostEnclosingWhile.EndPC);
-      this.nextRoutine = next;
-      var s_with_new_PC = UpdatePC(symbols, methodInfo, next.s, next.tid, innermostEnclosingWhile.EndPC);
-      next.SetNextState(s_with_new_PC);
-      symbols.AddNextRoutine(next);
+      return other is ArmadaBreakStatement;
     }
   }
 
@@ -1888,27 +2127,26 @@ namespace Microsoft.Armada
     private ContinueStmt stmt;
     private ArmadaWhileStatement innermostEnclosingWhile;
 
-    public ArmadaContinueStatement(ParseContext context, ContinueStmt i_stmt) : base(context)
+    public ArmadaContinueStatement(ParseInfo i_parse, ContinueStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
-      innermostEnclosingWhile = context.innermostEnclosingWhile;
+      innermostEnclosingWhile = parse.innermostEnclosingWhile;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override PCNode GeneratePCStructureForStatement(PCNode endNode, PCNode breakTarget, PCNode continueTarget,
-                                                           HashSet<ArmadaPC> loopHeads)
+    public override void GenerateNextRoutines()
     {
-      return new NormalPCNode(startPC, nextRoutine, continueTarget);
+      var next = new NextRoutineConstructor(parse.prog, parse.symbols, NextType.WhileContinue, parse.methodInfo,
+                                            this, stmt, startPC, innermostEnclosingWhile.StartPC);
+      var s_with_new_PC = UpdatePC(next.s, next.tid, innermostEnclosingWhile.StartPC);
+      next.SetNextState(s_with_new_PC);
+      parse.symbols.AddNextRoutineConstructor(next);
     }
 
-    public override void GenerateNextRoutines(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo)
+    public override bool RoughlyMatches(ArmadaStatement other)
     {
-      var next = new NextRoutine(prog, symbols, NextType.WhileContinue, methodInfo, this, stmt, startPC, innermostEnclosingWhile.StartPC);
-      this.nextRoutine = next;
-      var s_with_new_PC = UpdatePC(symbols, methodInfo, next.s, next.tid, innermostEnclosingWhile.StartPC);
-      next.SetNextState(s_with_new_PC);
-      symbols.AddNextRoutine(next);
+      return other is ArmadaContinueStatement;
     }
   }
 
@@ -1916,14 +2154,14 @@ namespace Microsoft.Armada
   {
     private YieldStmt stmt;
 
-    public ArmadaYieldStatement(ParseContext context, YieldStmt i_stmt) : base(context)
+    public ArmadaYieldStatement(ParseInfo i_parse, YieldStmt i_stmt) : base(i_parse)
     {
       stmt = i_stmt;
     }
 
     public override Statement Stmt { get { return stmt; } }
 
-    public override ArmadaPC AssignPCs(Program prog, ArmadaSymbolTable symbols, MethodInfo methodInfo, ArmadaPC i_startPC)
+    public override ArmadaPC AssignPCs(ArmadaPC i_startPC)
     {
       endPC = startPC = i_startPC;
       return endPC;
@@ -1933,6 +2171,11 @@ namespace Microsoft.Armada
                                                     HashSet<ArmadaPC> yieldPCs)
     {
       yieldPCs.Add(startPC);
+    }
+
+    public override bool RoughlyMatches(ArmadaStatement other)
+    {
+      return other is ArmadaYieldStatement;
     }
   }
 }

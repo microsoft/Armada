@@ -1394,6 +1394,12 @@ namespace Microsoft.Armada
       }
     }
 
+    private void AddDependencyOnModuleDecl(ModuleDecl decl, ModuleDecl d, ModuleBindings bindings, Graph<ModuleDecl> dependencies) {
+      dependencies.AddEdge(decl, d);
+      var subbindings = bindings.SubBindings(d.Name);
+      ProcessDependencies(d, subbindings ?? bindings, dependencies);
+    }
+
     private void ProcessDependenciesDefinition(ModuleDecl decl, ModuleDefinition m, ModuleBindings bindings, Graph<ModuleDecl> dependencies) {
       if (m.RefinementBaseName != null) {
         ModuleDecl other;
@@ -1422,9 +1428,17 @@ namespace Microsoft.Armada
       foreach (var toplevel in m.TopLevelDecls) {
         if (toplevel is ModuleDecl) {
           var d = (ModuleDecl)toplevel;
-          dependencies.AddEdge(decl, d);
-          var subbindings = bindings.SubBindings(d.Name);
-          ProcessDependencies(d, subbindings ?? bindings, dependencies);
+          AddDependencyOnModuleDecl(decl, d, bindings, dependencies);
+        }
+        else if (toplevel is RefinementParametersDecl) {
+          var rpd = (RefinementParametersDecl)toplevel;
+          ModuleDecl d;
+          if (bindings.TryLookup(rpd.LowLevel, out d)) {
+            AddDependencyOnModuleDecl(decl, d, bindings, dependencies);
+          }
+          if (bindings.TryLookup(rpd.HighLevel, out d)) {
+            AddDependencyOnModuleDecl(decl, d, bindings, dependencies);
+          }
         }
       }
     }
@@ -1755,6 +1769,7 @@ namespace Microsoft.Armada
             new List<MaybeFreeExpression>(),
             new Specification<Expression>(new List<Expression>(), null),
             new Specification<Expression>(new List<Expression>(), null),
+            new List<Expression>(),
             new List<Expression>(),
             null, null, null);
           // add these implicit members to the class
@@ -3081,9 +3096,11 @@ namespace Microsoft.Armada
           if (member is Method) {
             var m = (Method)member;
             if (m.Body != null) {
-              ComputeGhostInterest(m.Body, m.IsGhost, m);
-              CheckExpression(m.Body, this, m);
-              DetermineTailRecursion(m);
+              if (Attributes.Contains(cl.Module.Attributes, "concrete") || cl.Module.ModuleType == ArmadaModuleType.ArmadaStructs) {
+                ComputeGhostInterest(m.Body, m.IsGhost, m);
+                CheckExpression(m.Body, this, m);
+                DetermineTailRecursion(m);
+              }
             }
           } else if (member is Function) {
             var f = (Function)member;
@@ -4092,7 +4109,7 @@ namespace Microsoft.Armada
             satisfied = t.IsBoolType || t.IsBitVectorType;
             break;
           case "Sizeable":
-            satisfied = (t is SetType && ((SetType)t).Finite) || t is MultiSetType || t is SeqType || (t is MapType && ((MapType)t).Finite);
+            satisfied = (t is SetType && ((SetType)t).Finite) || t is MultiSetType || t is SeqType || (t is MapType && ((MapType)t).Finite) || (t is SizedArrayType);
             break;
           case "Disjointable":
             satisfied = t is SetType || t is MultiSetType || t is MapType;
@@ -5979,6 +5996,8 @@ namespace Microsoft.Armada
         var s = (RevealStmt)stmt;
         return CheckTailRecursive(s.ResolvedStatements, enclosingMethod, ref tailCall, reportErrors);
       } else if (stmt is SomehowStmt) {
+      } else if (stmt is FenceStmt) {
+      } else if (stmt is GotoStmt) {
       } else if (stmt is DeallocStmt) {
       } else if (stmt is JoinStmt) {
       } else if (stmt is BreakStmt) {
@@ -6877,6 +6896,16 @@ namespace Microsoft.Armada
           if (mustBeErasable) {
             Error(stmt, "somehow statement is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
           }
+        } else if (stmt is FenceStmt) {
+          var s = (FenceStmt)stmt;
+          if (mustBeErasable) {
+            Error(stmt, "fence statement is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
+          }
+        } else if (stmt is GotoStmt) {
+          var s = (GotoStmt)stmt;
+          if (mustBeErasable) {
+            Error(stmt, "goto statement is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
+          }
         } else if (stmt is DeallocStmt) {
           var s = (DeallocStmt)stmt;
           if (mustBeErasable) {
@@ -6931,6 +6960,16 @@ namespace Microsoft.Armada
           s.ResolvedStatements.Iter(ss => Visit(ss, mustBeErasable));
           s.IsGhost = s.ResolvedStatements.All(ss => ss.IsGhost);
 
+          if (s.Rhss.Count == 1 && (s.Rhss[0] is CreateThreadRhs || s.Rhss[0] is CompareAndSwapRhs || s.Rhss[0] is AtomicExchangeRhs)) {
+            s.IsGhost = false;
+            if (mustBeErasable) {
+              Error(stmt, "Effectful statement is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
+            }
+            foreach (var e in s.Rhss[0].SubExpressions) {
+              resolver.CheckIsCompilable(e);
+            }
+          }
+
         } else if (stmt is AssignOrReturnStmt) {
           stmt.IsGhost = false; // TODO when do we want to allow this feature in ghost code? Note that return changes control flow
 
@@ -6975,14 +7014,6 @@ namespace Microsoft.Armada
             resolver.CheckIsCompilable(rhs.Expr);
           } else if (s.Rhs is HavocRhs) {
             // cool
-          } else if (s.Rhs is CreateThreadRhs) {
-            var cs = (CreateThreadRhs)s.Rhs;
-            if (mustBeErasable) {
-              Error(stmt, "create_thread is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
-            }
-            foreach (var e in cs.Args) {
-              resolver.CheckIsCompilable(e);
-            }
           } else if (s.Rhs is MallocRhs) {
             if (mustBeErasable) {
               Error(stmt, "malloc is not allowed in this context (because this is a ghost method or because the statement is guarded by a specification-only expression)");
@@ -7003,6 +7034,8 @@ namespace Microsoft.Armada
               resolver.CheckIsCompilable(rhs.Expr);
             } else if (s.Rhs is HavocRhs) {
               // cool
+            } else if (s.Rhs is CreateThreadRhs || s.Rhs is CompareAndSwapRhs || s.Rhs is AtomicExchangeRhs) {
+              // already checked when Update was checked
             } else {
               var rhs = (TypeRhs)s.Rhs;
               if (rhs.ArrayDimensions != null) {
@@ -7336,6 +7369,7 @@ namespace Microsoft.Armada
         } else if (expr is ThisExpr) {
         } else if (expr is MeExpr) {
         } else if (expr is StoreBufferEmptyExpr) {
+        } else if (expr is TotalStateExpr) {
         } else if (expr is MemberSelectExpr && IsThisDotField((MemberSelectExpr)expr)) {
         } else if (expr is SetDisplayExpr) {
         } else if (expr is MultiSetDisplayExpr) {
@@ -7446,6 +7480,7 @@ namespace Microsoft.Armada
     readonly Scope<IVariable>/*!*/ scope = new Scope<IVariable>();
     Scope<Statement>/*!*/ enclosingStatementLabels = new Scope<Statement>();
     Scope<Label>/*!*/ dominatingStatementLabels = new Scope<Label>();
+    Scope<Label>/*!*/ methodStatementLabels = new Scope<Label>();
     List<Statement> loopStack = new List<Statement>();  // the enclosing loops (from which it is possible to break out)
 
     /// <summary>
@@ -7561,10 +7596,13 @@ namespace Microsoft.Armada
             allTypeParameters.PopMarker();
           }
         } else if (member is GlobalInvariantDecl) {
-            // nothing to do
+          // nothing to do
         } else if (member is YieldPredicateDecl) {
-            // nothing to do
-        } else {
+          // nothing to do
+        } else if (member is UniversalStepConstraintDecl) {
+          // nothing to do
+        }
+        else {
           Contract.Assert(false); throw new cce.UnreachableException();  // unexpected member type
         }
       }
@@ -7718,8 +7756,14 @@ namespace Microsoft.Armada
           ResolveExpression(gid.Body, new ResolveOpts(new NoContext(currentClass.Module), false));
           SolveAllTypeConstraints();
         } else if (member is YieldPredicateDecl) {
-          var ypd = (YieldPredicateDecl)member;
-          ResolveExpression(ypd.Body, new ResolveOpts(new NoContext(currentClass.Module), true));
+          var ydecl = (YieldPredicateDecl)member;
+          ResolveExpression(ydecl.Body, new ResolveOpts(new NoContext(currentClass.Module), true));
+          SolveAllTypeConstraints();
+        } else if (member is UniversalStepConstraintDecl) {
+          var udecl = (UniversalStepConstraintDecl)member;
+          if (udecl.Body != null) {
+            ResolveExpression(udecl.Body, new ResolveOpts(new NoContext(currentClass.Module), false));
+          }
           SolveAllTypeConstraints();
         } else {
           Contract.Assert(false); throw new cce.UnreachableException();  // unexpected member type
@@ -8342,6 +8386,11 @@ namespace Microsoft.Armada
           // any type is fine
         }
 
+        foreach (Expression e in m.UndefinedUnless) {
+          ResolveExpression(e, new ResolveOpts(m, m is TwoStateLemma));
+          // any type is fine
+        }
+
         if (m is Constructor) {
           scope.PopMarker();
           // start the scope again, but this time allowing instance
@@ -8392,8 +8441,11 @@ namespace Microsoft.Armada
               }
             }
           }
+          methodStatementLabels.PushMarker();
+          AddMethodStatementLabels(m.Body);
           ResolveBlockStatement(m.Body, m);
           dominatingStatementLabels.PopMarker();
+          methodStatementLabels.PopMarker();
           SolveAllTypeConstraints();
         }
 
@@ -8405,6 +8457,16 @@ namespace Microsoft.Armada
         scope.PopMarker();  // for the in-parameters
       } finally {
         currentMethod = null;
+      }
+    }
+
+    private void AddMethodStatementLabels(Statement s)
+    {
+      for (var lbl = s.Labels; lbl != null; lbl = lbl.Next) {
+        methodStatementLabels.Push(lbl.Data.Name, lbl.Data);
+      }
+      foreach (var substmt in s.SubStatements) {
+        AddMethodStatementLabels(substmt);
       }
     }
 
@@ -8478,7 +8540,7 @@ namespace Microsoft.Armada
         ResolveExpression(e, new ResolveOpts(iter, false));
         // any type is fine, but associate this type with the corresponding _decreases<n> field
         var d = iter.DecreasesFields[i];
-        // If the following type constraint does not hold, then: Bummer, there was a use--and a bad use--of the field before, so this won't be the best of error messages
+        // If the following type constraint does not hold, then: unfortunately, there was a use--and a bad use--of the field before, so this won't be the best of error messages
         ConstrainSubtypeRelation(d.Type, e.Type, e, "type of field {0} is {1}, but has been constrained elsewhere to be of type {2}", d.Name, e.Type, d.Type);
       }
       foreach (FrameExpression fe in iter.Reads.Expressions) {
@@ -9083,10 +9145,7 @@ namespace Microsoft.Armada
         }
       } else if (stmt is SomehowStmt) {
         var s = (SomehowStmt)stmt;
-        foreach (var e in s.Awaits) {
-          ResolveExpression(e, new ResolveOpts(codeContext, false));
-        }
-        foreach (var e in s.Req) {
+        foreach (var e in s.UndefinedUnless) {
           ResolveExpression(e, new ResolveOpts(codeContext, false));
         }
         ResolveAttributes(s.Mod.Attributes, null, new ResolveOpts(codeContext, false));
@@ -9095,6 +9154,13 @@ namespace Microsoft.Armada
         }
         foreach (var e in s.Ens) {
           ResolveExpression(e, new ResolveOpts(codeContext, true));
+        }
+      } else if (stmt is FenceStmt) {
+      } else if (stmt is GotoStmt) {
+        var s = (GotoStmt)stmt;
+        s.TargetLabel = methodStatementLabels.Find(s.Target);
+        if (s.TargetLabel == null) {
+          reporter.Error(MessageSource.Resolver, s, "no label '{0}' in scope at this time", s.Target);
         }
       } else if (stmt is DeallocStmt) {
         var s = (DeallocStmt)stmt;
@@ -9364,6 +9430,8 @@ namespace Microsoft.Armada
           ResolveExpression(rr.Count, new ResolveOpts(codeContext, false));
           AddAssignableConstraint(stmt.Tok, lhsType, new PointerType(rr.AllocatedType),
                                   "Calloc result (of type {1}) not assignable to LHS (of type {0})");
+        } else if (s.Rhs is CompareAndSwapRhs || s.Rhs is AtomicExchangeRhs) {
+          // already taken care of during Update resolution
         } else {
           Contract.Assert(false); throw new cce.UnreachableException();  // unexpected RHS
         }
@@ -9418,7 +9486,7 @@ namespace Microsoft.Armada
           ConstrainTypeExprBool(s.Guard, "condition is expected to be of type bool, but is {0}");
         }
 
-        ResolveLoopSpecificationComponents(s.Invariants, s.Decreases, s.Mod, codeContext, fvs);
+        ResolveLoopSpecificationComponents(s.Invariants, s.Ens, s.Decreases, s.Mod, codeContext, fvs);
 
         if (s.Body != null) {
           loopStack.Add(s);  // push
@@ -9435,7 +9503,7 @@ namespace Microsoft.Armada
       } else if (stmt is AlternativeLoopStmt) {
         var s = (AlternativeLoopStmt)stmt;
         ResolveAlternatives(s.Alternatives, s, codeContext);
-        ResolveLoopSpecificationComponents(s.Invariants, s.Decreases, s.Mod, codeContext, null);
+        ResolveLoopSpecificationComponents(s.Invariants, new List<Expression>(), s.Decreases, s.Mod, codeContext, null);
 
       } else if (stmt is ForallStmt) {
         var s = (ForallStmt)stmt;
@@ -9629,20 +9697,26 @@ namespace Microsoft.Armada
       }
     }
 
-    private void ResolveLoopSpecificationComponents(List<MaybeFreeExpression> invariants, Specification<Expression> decreases, Specification<FrameExpression> modifies, ICodeContext codeContext, HashSet<IVariable> fvs) {
+    private void ResolveLoopSpecificationComponents(List<MaybeFreeExpression> invariants, List<Expression> ens, Specification<Expression> decreases, Specification<FrameExpression> modifies, ICodeContext codeContext, HashSet<IVariable> fvs) {
       Contract.Requires(invariants != null);
       Contract.Requires(decreases != null);
       Contract.Requires(modifies != null);
       Contract.Requires(codeContext != null);
 
       foreach (MaybeFreeExpression inv in invariants) {
-        ResolveAttributes(inv.Attributes, null, new ResolveOpts(codeContext, true));
+        ResolveAttributes(inv.Attributes, null, new ResolveOpts(codeContext, false));
         ResolveExpression(inv.E, new ResolveOpts(codeContext, true));
         Contract.Assert(inv.E.Type != null);  // follows from postcondition of ResolveExpression
         if (fvs != null) {
           Translator.ComputeFreeVariables(inv.E, fvs);
         }
         ConstrainTypeExprBool(inv.E, "invariant is expected to be of type bool, but is {0}");
+      }
+
+      foreach (Expression clause in ens) {
+        ResolveExpression(clause, new ResolveOpts(codeContext, true));
+        Contract.Assert(clause.Type != null);  // follows from postcondition of ResolveExpression
+        ConstrainTypeExprBool(clause, "ensures is expected to be of type bool, but is {0}");
       }
 
       ResolveAttributes(decreases.Attributes, null, new ResolveOpts(codeContext, true));
@@ -10212,7 +10286,22 @@ namespace Microsoft.Armada
           isEffectful = true;
         } else if (rhs is CallocRhs) {
           isEffectful = true;
-        } else {
+        } else if (rhs is CompareAndSwapRhs) {
+          var r = (CompareAndSwapRhs)rhs;
+          isEffectful = true;
+          ResolveExpression(r.Target, new ResolveOpts(codeContext, false));
+          ResolveExpression(r.OldVal, new ResolveOpts(codeContext, false));
+          ResolveExpression(r.NewVal, new ResolveOpts(codeContext, false));
+          AddAssignableConstraint(update.Tok, r.Target.Type, r.OldVal.Type, "Compare-and-swap must use same type for target and comparison value");
+          AddAssignableConstraint(update.Tok, r.Target.Type, r.NewVal.Type, "Compare-and-swap must use same type for target and new value");
+        } else if (rhs is AtomicExchangeRhs) {
+          var r = (AtomicExchangeRhs)rhs;
+          isEffectful = true;
+          ResolveExpression(r.Target, new ResolveOpts(codeContext, false));
+          ResolveExpression(r.NewVal, new ResolveOpts(codeContext, false));
+          AddAssignableConstraint(update.Tok, r.Target.Type, r.NewVal.Type, "atomic-exchange must use same type for target and new value");
+        }
+        else {
           var er = (ExprRhs)rhs;
           if (er.Expr is ApplySuffix) {
             var a = (ApplySuffix)er.Expr;
@@ -10277,7 +10366,7 @@ namespace Microsoft.Armada
           reporter.Error(MessageSource.Resolver, firstEffectfulRhs, "an update statement is allowed an effectful RHS only if there is just one RHS");
         } else if (methodCallInfo == null) {
           // must be a single TypeRhs
-          if (update.Lhss.Count == 0 && update.Rhss.Count == 1 && (update.Rhss[0] is CreateThreadRhs || update.Rhss[0] is MallocRhs || update.Rhss[0] is CallocRhs)) {
+          if (update.Lhss.Count == 0 && update.Rhss.Count == 1 && (update.Rhss[0] is CreateThreadRhs || update.Rhss[0] is CompareAndSwapRhs || update.Rhss[0] is AtomicExchangeRhs)) {
           }
           else if (update.Lhss.Count != 1) {
             Contract.Assert(2 <= update.Lhss.Count);  // the parser allows 0 Lhss only if the whole statement looks like an expression (not a TypeRhs)
@@ -10627,6 +10716,10 @@ namespace Microsoft.Armada
         }
       } else if (stmt is SomehowStmt) {
         reporter.Error(MessageSource.Resolver, stmt, "somehow statement is not allowed inside a forall statement");
+      } else if (stmt is FenceStmt) {
+        reporter.Error(MessageSource.Resolver, stmt, "fence statement is not allowed inside a forall statement");
+      } else if (stmt is GotoStmt) {
+        reporter.Error(MessageSource.Resolver, stmt, "goto statement is not allowed inside a forall statement");
       } else if (stmt is DeallocStmt) {
         reporter.Error(MessageSource.Resolver, stmt, "dealloc statement is not allowed inside a forall statement");
       } else if (stmt is JoinStmt) {
@@ -10790,6 +10883,10 @@ namespace Microsoft.Armada
         }
       } else if (stmt is SomehowStmt) {
         reporter.Error(MessageSource.Resolver, stmt, "somehow statement is not allowed inside a hint");
+      } else if (stmt is FenceStmt) {
+        reporter.Error(MessageSource.Resolver, stmt, "fence statement is not allowed inside a hint");
+      } else if (stmt is GotoStmt) {
+        reporter.Error(MessageSource.Resolver, stmt, "goto statement is not allowed inside a hint");
       } else if (stmt is DeallocStmt) {
         reporter.Error(MessageSource.Resolver, stmt, "dealloc statement is not allowed inside a hint");
       } else if (stmt is JoinStmt) {
@@ -11894,6 +11991,24 @@ namespace Microsoft.Armada
         e.Type = new BoolType();
         this.ResolveType(e.tok, e.Type, opts.codeContext, ResolveTypeOptionEnum.InferTypeProxies, null);
 
+      } else if (expr is TotalStateExpr) {
+        var e = (TotalStateExpr)expr;
+        e.Type = AH.ReferToType("ArmadaPlaceholder_TotalState");
+        this.ResolveType(e.tok, e.Type, opts.codeContext, ResolveTypeOptionEnum.InferTypeProxies, null);
+
+      } else if (expr is IfUndefinedExpr) {
+        var e = (IfUndefinedExpr)expr;
+        Type safeType = new InferredTypeProxy();
+        expr.Type = safeType;
+        ResolveExpression(e.PotentiallyUnsafe, opts);
+        ConstrainSubtypeRelation(safeType, e.PotentiallyUnsafe.Type, e.PotentiallyUnsafe.tok,
+                                 "The potentially-unsafe expression in this if_undefined expression has type {0}, but must have a common supertype with the safe-substitution expression which has type {1}",
+                                 e.PotentiallyUnsafe.Type, e.SafeSubstitution.Type);
+        ResolveExpression(e.SafeSubstitution, opts);
+        ConstrainSubtypeRelation(safeType, e.SafeSubstitution.Type, e.SafeSubstitution.tok,
+                                 "The safe-substitution expression in this if_undefined expression has type {0}, but must have a common supertype with the potentially-unsafe expression which has type {1}",
+                                 e.SafeSubstitution.Type, e.PotentiallyUnsafe.Type);
+
       } else if (expr is IdentifierExpr) {
         var e = (IdentifierExpr)expr;
         e.Var = scope.Find(e.Name);
@@ -12183,13 +12298,16 @@ namespace Microsoft.Armada
             break;
           case UnaryOpExpr.Opcode.Allocated:
           case UnaryOpExpr.Opcode.AllocatedArray:
-            // the argument is allowed to have any type at all
             expr.Type = Type.Bool;
             if (2 <= ArmadaOptions.O.Allocated &&
               ((opts.codeContext is Function && !opts.InsideOld) || opts.codeContext is ConstantField || opts.codeContext is RedirectingTypeDecl)) {
               var declKind = opts.codeContext is RedirectingTypeDecl ? ((RedirectingTypeDecl)opts.codeContext).WhatKind : ((MemberDecl)opts.codeContext).WhatKind;
               reporter.Error(MessageSource.Resolver, expr, "a {0} definition is not allowed to depend on the set of allocated references", declKind);
             }
+            AddXConstraint(e.E.tok, "Dereferenceable", e.E.Type, "allocated operator expects a pointer type (instead got {0})");
+            break;
+          case UnaryOpExpr.Opcode.GlobalView:
+            expr.Type = e.E.Type;
             break;
           case UnaryOpExpr.Opcode.Dereference:
             AddXConstraint(e.E.tok, "Dereferenceable", e.E.Type, "dereference operator expects a pointer type (instead got {0})");
@@ -14242,7 +14360,7 @@ namespace Microsoft.Armada
 
       } else if (expr is MemberSelectExpr) {
         var e = (MemberSelectExpr)expr;
-        if (e.Member != null && e.Member.IsGhost && moduleInfo.ModuleType != ArmadaModuleType.ArmadaLevel && moduleInfo.ModuleType != ArmadaModuleType.ArmadaStructs) {
+        if (e.Member != null && e.Member.IsGhost) {
           reporter.Error(MessageSource.Resolver, expr, "ghost fields are allowed only in specification contexts");
           return;
         }
@@ -15365,6 +15483,8 @@ namespace Microsoft.Armada
       } else if (expr is MeExpr) {
         return false;
       } else if (expr is StoreBufferEmptyExpr) {
+        return false;
+      } else if (expr is TotalStateExpr) {
         return false;
       } else if (expr is IdentifierExpr) {
         IdentifierExpr e = (IdentifierExpr)expr;

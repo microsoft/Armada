@@ -6162,7 +6162,7 @@ namespace Microsoft.Armada {
       Contract.Requires(predef != null);
       Contract.Ensures(Contract.Result<Bpl.Expr>() != null);
 
-      if (expr is LiteralExpr || expr is ThisExpr || expr is MeExpr || expr is StoreBufferEmptyExpr || expr is IdentifierExpr || expr is WildcardExpr || expr is BoogieWrapper) {
+      if (expr is LiteralExpr || expr is ThisExpr || expr is MeExpr || expr is StoreBufferEmptyExpr || expr is TotalStateExpr || expr is IdentifierExpr || expr is WildcardExpr || expr is BoogieWrapper) {
         return Bpl.Expr.True;
       } else if (expr is DisplayExpression) {
         DisplayExpression e = (DisplayExpression)expr;
@@ -6862,7 +6862,7 @@ namespace Microsoft.Armada {
     }
 
     /// <summary>
-    /// Check the well-formedness of "expr" (but don't leave hanging around any assumptions that affect control flow)
+    /// Check the well-formedness of "expr" (but don't leave around any assumptions that affect control flow)
     /// </summary>
     void CheckWellformed(Expression expr, WFOptions options, List<Variable> locals, BoogieStmtListBuilder builder, ExpressionTranslator etran) {
       Contract.Requires(expr != null);
@@ -6901,7 +6901,7 @@ namespace Microsoft.Armada {
         // yeah, it's okay
       } else if (expr is LiteralExpr) {
         CheckResultToBeInType(expr.tok, expr, expr.Type, locals, builder, etran);
-      } else if (expr is ThisExpr || expr is MeExpr || expr is StoreBufferEmptyExpr || expr is WildcardExpr || expr is BoogieWrapper) {
+      } else if (expr is ThisExpr || expr is MeExpr || expr is StoreBufferEmptyExpr || expr is TotalStateExpr || expr is IfUndefinedExpr || expr is WildcardExpr || expr is BoogieWrapper) {
         // always allowed
       } else if (expr is IdentifierExpr) {
         var e = (IdentifierExpr)expr;
@@ -9885,6 +9885,16 @@ namespace Microsoft.Armada {
         AddComment(builder, stmt, "somehow statement");
         SomehowStmt s = (SomehowStmt)stmt;
         reporter.Error(MessageSource.Translator, s.Tok, "A somehow statement can't be translated");
+
+      } else if (stmt is FenceStmt) {
+        AddComment(builder, stmt, "fence statement");
+        FenceStmt s = (FenceStmt)stmt;
+        reporter.Error(MessageSource.Translator, s.Tok, "A fence statement can't be translated");
+
+      } else if (stmt is GotoStmt) {
+        AddComment(builder, stmt, "goto statement");
+        GotoStmt s = (GotoStmt)stmt;
+        reporter.Error(MessageSource.Translator, s.Tok, "A goto statement can't be translated");
 
       } else if (stmt is DeallocStmt) {
         AddComment(builder, stmt, "dealloc statement");
@@ -17350,6 +17360,8 @@ namespace Microsoft.Armada {
         usesHeap = true;
       } else if (expr is UnaryOpExpr && ((UnaryOpExpr)expr).Op == UnaryOpExpr.Opcode.AllocatedArray) {
         usesHeap = true;
+      } else if (expr is UnaryOpExpr && ((UnaryOpExpr)expr).Op == UnaryOpExpr.Opcode.GlobalView) {
+        usesHeap = true;
       }
 
       // visit subexpressions
@@ -17619,8 +17631,13 @@ namespace Microsoft.Armada {
 
         Expression newExpr = null;  // set to non-null value only if substitution has any effect; if non-null, the .Type of newExpr will be filled in at end
 
-        if (expr is LiteralExpr || expr is WildcardExpr || expr is BoogieWrapper || expr is MeExpr || expr is StoreBufferEmptyExpr) {
+        if (expr is LiteralExpr || expr is WildcardExpr || expr is BoogieWrapper || expr is MeExpr || expr is StoreBufferEmptyExpr || expr is TotalStateExpr) {
           // nothing to substitute
+        } else if (expr is IfUndefinedExpr) {
+          IfUndefinedExpr e = (IfUndefinedExpr)expr;
+          var newPotentiallyUnsafe = Substitute(e.PotentiallyUnsafe);
+          var newSafeSubstitution = Substitute(e.SafeSubstitution);
+          newExpr = new IfUndefinedExpr(e.tok, newPotentiallyUnsafe, newSafeSubstitution);
         } else if (expr is ThisExpr) {
           return receiverReplacement == null ? expr : receiverReplacement;
         } else if (expr is IdentifierExpr) {
@@ -18209,7 +18226,7 @@ namespace Microsoft.Armada {
           r = new AlternativeStmt(s.Tok, s.EndTok, s.Alternatives.ConvertAll(SubstGuardedAlternative), s.UsesOptionalBraces);
         } else if (stmt is WhileStmt) {
           var s = (WhileStmt)stmt;
-          r = new WhileStmt(s.Tok, s.EndTok, Substitute(s.Guard), s.Invariants.ConvertAll(SubstMayBeFreeExpr), SubstSpecExpr(s.Decreases), SubstSpecFrameExpr(s.Mod), SubstBlockStmt(s.Body));
+          r = new WhileStmt(s.Tok, s.EndTok, Substitute(s.Guard), s.Invariants.ConvertAll(SubstMayBeFreeExpr), s.Ens.ConvertAll(Substitute), SubstSpecExpr(s.Decreases), SubstSpecFrameExpr(s.Mod), SubstBlockStmt(s.Body));
         } else if (stmt is AlternativeLoopStmt) {
           var s = (AlternativeLoopStmt)stmt;
           r = new AlternativeLoopStmt(s.Tok, s.EndTok, s.Invariants.ConvertAll(SubstMayBeFreeExpr), SubstSpecExpr(s.Decreases), SubstSpecFrameExpr(s.Mod), s.Alternatives.ConvertAll(SubstGuardedAlternative), s.UsesOptionalBraces);
@@ -18266,8 +18283,14 @@ namespace Microsoft.Armada {
           r = rr;
         } else if (stmt is SomehowStmt) {
           var s = (SomehowStmt) stmt;
-          r = new SomehowStmt(s.Tok, s.EndTok, s.Awaits.ConvertAll(Substitute), s.Req.ConvertAll(Substitute), SubstSpecExpr(s.Mod),
+          r = new SomehowStmt(s.Tok, s.EndTok, s.UndefinedUnless.ConvertAll(Substitute), SubstSpecExpr(s.Mod),
                               s.Ens.ConvertAll(Substitute));
+        } else if (stmt is FenceStmt) {
+          var s = (FenceStmt) stmt;
+          r = new FenceStmt(s.Tok, s.EndTok);
+        } else if (stmt is GotoStmt) {
+          var s = (GotoStmt) stmt;
+          r = new GotoStmt(s.Tok, s.EndTok, s.Target);
         } else if (stmt is DeallocStmt) {
           var s = (DeallocStmt) stmt;
           r = new DeallocStmt(s.Tok, s.EndTok, Substitute(s.Addr));

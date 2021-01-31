@@ -87,7 +87,7 @@ namespace Microsoft.Armada {
       BlockTargetWriter/*?*/ CreateFunction(string name, List<TypeParameter>/*?*/ typeArgs, List<Formal> formals, Type resultType, Bpl.IToken tok, bool isStatic, bool createBody, MemberDecl member);
       BlockTargetWriter/*?*/ CreateGetter(string name, Type resultType, Bpl.IToken tok, bool isStatic, bool createBody, MemberDecl/*?*/ member);  // returns null iff !createBody
       BlockTargetWriter/*?*/ CreateGetterSetter(string name, Type resultType, Bpl.IToken tok, bool isStatic, bool createBody, MemberDecl/*?*/ member, out TargetWriter setterWriter);  // if createBody, then result and setterWriter are non-null, else both are null
-      
+
       void DeclareField(string name, List<TypeParameter> targs, bool isStatic, bool isConst, Type type, Bpl.IToken tok, string rhs);
       //void DeclareField(string name, bool isStatic, bool isConst, Type type, Bpl.IToken tok, string rhs);
       TextWriter/*?*/ ErrorWriter();
@@ -356,8 +356,10 @@ namespace Microsoft.Armada {
     protected virtual void EmitSetterParameter(TargetWriter wr) {
       wr.Write("value");
     }
+    protected virtual void EmitGotoStmt(TargetWriter wr, string target) {}
 
     protected virtual void EmitJoinStmt(TargetWriter wr, Expression thread_id) {}
+    protected virtual void EmitFenceStmt(TargetWriter wr) {}
     protected virtual void EmitDeallocStmt(TargetWriter wr, Expression addr) {}
     protected abstract void EmitPrintStmt(TargetWriter wr, Expression arg);
     protected abstract void EmitReturn(List<Formal> outParams, TargetWriter wr);
@@ -611,7 +613,7 @@ namespace Microsoft.Armada {
     protected virtual void OrganizeModules(Program program, out List<ModuleDefinition> modules){
       modules = program.CompileModules;
     }
-    
+
     protected virtual void DeclareExternType(OpaqueTypeDecl d, Expression compileTypeHint, TargetWriter wr) { }
 
     public virtual void CompileArmadaStructs(ArmadaStructs structs, TargetWriter wr)
@@ -619,6 +621,8 @@ namespace Microsoft.Armada {
     public virtual void CompileArmadaLayer(ModuleDefinition layer, TargetWriter wr)
     { }
     public virtual void CompileArmadaCreateThread(ArmadaCreateThreadStatement stmt, TargetWriter wr) {}
+    public virtual void CompileArmadaCompareAndSwap(ArmadaCompareAndSwapStatement stmt, TargetWriter wr) {}
+    public virtual void CompileArmadaAtomicExchange(ArmadaAtomicExchangeStatement stmt, TargetWriter wr) {}
     public void Compile(Program program, TargetWriter wrx) {
       Contract.Requires(program != null);
 
@@ -631,7 +635,7 @@ namespace Microsoft.Armada {
       Console.Write("Number of compile modules: {0}\n",program.CompileModules.Count);
       foreach (ModuleDefinition m in program.CompileModules) {
         // Skip the non-armada modules
-        
+
         if (!(m.ModuleType == ArmadaModuleType.ArmadaLevel || m.ModuleType == ArmadaModuleType.ArmadaStructs))
         {
           Console.Write("Skipping Non-Armada Module = {0}, type = {1}\n",
@@ -641,7 +645,7 @@ namespace Microsoft.Armada {
 
         Console.Write("Handling Module = {0}, type = {1}, structs is null = {2}, symbols is null = {3}\n",
           m.Name,m.ModuleType.ToString(),m.ArmadaStructs == null,m.ArmadaSymbols == null);
-        
+
         if (m.IsAbstract) {
           // the purpose of an abstract module is to skip compilation
           continue;
@@ -659,14 +663,14 @@ namespace Microsoft.Armada {
         }
 
         var wr = CreateModule(m.CompileName, m.IsDefaultModule, moduleIsExtern, libraryName, wrx);
-        
+
         // Handle the AramdaStructs layer
         if (m.ModuleType == ArmadaModuleType.ArmadaStructs)
         {
           CompileArmadaStructs(m.ArmadaStructs, wr);
           continue;
         }
-        
+
         // Handle the Aramda implemetation layer.
         if (m.ModuleType == ArmadaModuleType.ArmadaLevel)
         {
@@ -682,7 +686,7 @@ namespace Microsoft.Armada {
           }
           wr.WriteLine();
           if (d is OpaqueTypeDecl) {
-            
+
             var at = (OpaqueTypeDecl)d;
             bool externP = Attributes.Contains(at.Attributes, "extern");
             if (externP) {
@@ -733,7 +737,7 @@ namespace Microsoft.Armada {
             var w = CreateTrait(trait.CompileName, trait.IsExtern(out _, out _), null, null, wr);
             CompileClassMembers(trait, w);
           } else if (d is ClassDecl) {
-            
+
             var cl = (ClassDecl)d;
             var include = true;
             if (cl.IsDefaultClass) {
@@ -762,7 +766,7 @@ namespace Microsoft.Armada {
           } else if (d is ModuleDecl) {
             // nop
           } else { Contract.Assert(false); }
-        
+
         }
         */
         FinishModule();
@@ -798,7 +802,7 @@ namespace Microsoft.Armada {
       }
 
       public void DeclareField(string name, List<TypeParameter> targs, bool isStatic, bool isConst, Type type, Bpl.IToken tok, string rhs) {}
-       
+
       public TextWriter/*?*/ ErrorWriter() {
         return null; // match the old behavior of Compile() where this is used
       }
@@ -1833,7 +1837,17 @@ namespace Microsoft.Armada {
         CompileArmadaCreateThread((ArmadaCreateThreadStatement)stmt.Parsed, wr);
         return;
       }
-      
+      if (stmt.Parsed is ArmadaCompareAndSwapStatement)
+      {
+        CompileArmadaCompareAndSwap((ArmadaCompareAndSwapStatement)stmt.Parsed, wr);
+        return;
+      }
+      if (stmt.Parsed is ArmadaAtomicExchangeStatement)
+      {
+        CompileArmadaAtomicExchange((ArmadaAtomicExchangeStatement)stmt.Parsed, wr);
+        return;
+      }
+
       // TODO(xueyuan): Check out why while (*) {} stmts are marked as ghost.
       // Currently we are compiling the ghost stmts anyway.
       if (stmt.IsGhost) {
@@ -1853,6 +1867,14 @@ namespace Microsoft.Armada {
       {
         var s = (JoinStmt) stmt;
         EmitJoinStmt(wr, s.WhichThread);
+      } else if (stmt is FenceStmt)
+      {
+        var s = (FenceStmt) stmt;
+        EmitFenceStmt(wr);
+      } else if (stmt is GotoStmt)
+      {
+        var s = (GotoStmt) stmt;
+        EmitGotoStmt(wr, s.TargetLabel.AssignUniqueId(idGenerator));
       } else if (stmt is DeallocStmt)
       {
         var s = (DeallocStmt) stmt;
@@ -2642,27 +2664,27 @@ namespace Microsoft.Armada {
         var ll = (IdentifierExpr)lhs;
         return IdName(ll.Var);
       } else if (lhs is MemberSelectExpr) {
-        
+
         var ll = (MemberSelectExpr)lhs;
         Contract.Assert(!ll.Member.IsInstanceIndependentConstant);  // instance-independent const's don't have assignment statements
         //var obj = StabilizeExpr(ll.Obj, "_obj", wr);
-        
+
         // generate Obj Name
         var ow = new TargetWriter();
         TrParenExpr(ll.Obj, ow, false);
         var obj = ow.ToString();
-        
+
         // Omit the object when it is from default module.
-        if (obj == "(_default)") 
+        if (obj == "(_default)")
           return ll.MemberName;
-        
-        // generate 
+
+        // generate
         var sw = new TargetWriter();
         var MemberSelectObjIsTrait = ll.Obj.Type.IsTraitType && !(ll.Obj is ThisExpr);
         var w = EmitMemberSelect(ll.Member, true, lhs.Type, sw, MemberSelectObjIsTrait);
         // write the object name
         w.Write(obj);
-       
+
         return sw.ToString();
       } else if (lhs is UnaryOpExpr) {
         var ll = (UnaryOpExpr) lhs;
@@ -2671,15 +2693,15 @@ namespace Microsoft.Armada {
       }
       else if (lhs is SeqSelectExpr) {
         var ll = (SeqSelectExpr)lhs;
-        
+
         var arr_wr = new TargetWriter();
         TrExpr(ll.Seq, arr_wr, false);
         var arr = arr_wr.ToString();
-        
+
         var index_wr = new TargetWriter();
         TrExpr(ll.E0, index_wr, false);
         var index = index_wr.ToString();
-        
+
         var sw = new TargetWriter();
         EmitArraySelectAsLvalue(arr, new List<string>() { index }, ll.Type, sw);
         return sw.ToString();
@@ -2777,7 +2799,7 @@ namespace Microsoft.Armada {
 
       var tRhs = rhs as TypeRhs;
 
-      if (tRhs == null) { 
+      if (tRhs == null) {
         if (rhs is MallocRhs) {
           var mrhs = (MallocRhs) rhs;
           var type_name = TypeName(mrhs.AllocatedType, wr, null);
@@ -2795,7 +2817,7 @@ namespace Microsoft.Armada {
           var eRhs = (ExprRhs)rhs;  // it's not HavocRhs (by the precondition) or TypeRhs (by the "if" test), so it's gotta be ExprRhs
           TrExpr(eRhs.Expr, wr, false);
         }
-       
+
       } else {
         var nw = idGenerator.FreshId("_nw");
         var wRhs = DeclareLocalVar(nw, null, null, wStmts, tRhs.Type);
@@ -2993,20 +3015,20 @@ namespace Microsoft.Armada {
         }
         if (receiverReplacement != null) {
           wr.Write(IdProtect(receiverReplacement));
-// ******************************************************************   
-// TODO: Add an overrideable function for this      
-// ******************************************************************   
+// ******************************************************************
+// TODO: Add an overrideable function for this
+// ******************************************************************
           wr.Write(".{0}", IdName(s.Method));
         } else if (customReceiver) {
           wr.Write(TypeName_Companion(s.Receiver.Type, wr, s.Tok, s.Method));
-// ******************************************************************   
-// TODO: Add an overrideable function for this      
-// ******************************************************************  
+// ******************************************************************
+// TODO: Add an overrideable function for this
+// ******************************************************************
           wr.Write(".{0}", IdName(s.Method));
         } else if (!s.Method.IsStatic) {
-// ******************************************************************   
-// TODO: Add an overrideable function for this      
-// ******************************************************************  
+// ******************************************************************
+// TODO: Add an overrideable function for this
+// ******************************************************************
           TrParenExpr(s.Receiver, wr, false);
           wr.Write(".{0}", IdName(s.Method));
         } else {
@@ -3292,8 +3314,8 @@ namespace Microsoft.Armada {
           var ow = new TargetWriter();
           TrParenExpr(e.Obj, ow, inLetExprBody);
           var obj = ow.ToString();
-          
-          if (obj ==  "(_default)") 
+
+          if (obj ==  "(_default)")
             wr.Write(e.MemberName);
           else
           {
@@ -3859,9 +3881,9 @@ namespace Microsoft.Armada {
       string compileName = "";
       if (f.IsExtern(out qual, out compileName) && qual != null)
       {
-        // ******************************************************************   
-        // TODO: Add an overrideable function for the double colon used here      
-        // ******************************************************************  
+        // ******************************************************************
+        // TODO: Add an overrideable function for the double colon used here
+        // ******************************************************************
         wr.Write("{0}::", qual);
       } else if (f.IsStatic || customReceiver) {
         wr.Write(TypeName_Companion(e.Receiver.Type, wr, e.tok, f));

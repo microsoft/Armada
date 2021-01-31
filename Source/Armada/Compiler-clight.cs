@@ -29,11 +29,11 @@ namespace Microsoft.Armada {
     private List<DatatypeDecl> datatypeDecls;
 
     private Dictionary<string, List<string>> armadaMethodParams;
-    
+
     // Shadowing variables in Compiler.cs
     //new string DafnySetClass = "DafnySet";
     //new string DafnyMultiSetClass = "DafnyMultiset";
-    //new string DafnySeqClass = "DafnySequence"; 
+    //new string DafnySeqClass = "DafnySequence";
     //new string DafnyMapClass = "DafnyMap";
 
     public override string TargetLanguage => "ClightTSO";
@@ -50,14 +50,14 @@ namespace Microsoft.Armada {
 
     protected override void EmitFooter(Program program, TargetWriter wr) {
       /*foreach (var dt in this.datatypeDecls) {
-        var wd = wr.NewBlock(String.Format("{0} {1}::{2}{3} get_default({1}::{2}{3}* ignored)", 
+        var wd = wr.NewBlock(String.Format("{0} {1}::{2}{3} get_default({1}::{2}{3}* ignored)",
           DeclareTemplate(dt.TypeArgs),
           dt.Module.CompileName,
           dt.CompileName,
           TemplateMethod(dt.TypeArgs)));
           wd.WriteLine("return {0}::{1}{2}();", dt.Module.CompileName, dt.CompileName, TemplateMethod(dt.TypeArgs));
       }*/
-    } 
+    }
 
     public override void EmitCallToMain(Method mainMethod, TargetWriter wr) {
       var w = wr.NewBlock("int main()");
@@ -77,8 +77,8 @@ namespace Microsoft.Armada {
       return wr;
     }
 
-    
-    
+
+
     private string TypeParameters(List<TypeParameter> targs) {
       Contract.Requires(cce.NonNullElements(targs));
       Contract.Ensures(Contract.Result<string>() != null);
@@ -101,7 +101,7 @@ namespace Microsoft.Armada {
       }
       return targs;
     }
-    
+
     private string TemplateMethod(List<TypeParameter> typeArgs) {
       var targs = "";
       if (typeArgs.Count > 0) {
@@ -109,7 +109,7 @@ namespace Microsoft.Armada {
       }
       return targs;
     }
-    
+
     private string TemplateMethod(List<Type> typeArgs) {
       var targs = "";
       if (typeArgs.Count > 0) {
@@ -236,14 +236,14 @@ namespace Microsoft.Armada {
     }
 
     protected override IClassWriter DeclareDatatype(DatatypeDecl dt, TargetWriter wr) {
-      
+
       throw NotSupported("DeclareDatatype");
       // Given:
       // datatype Example1 = Example1(u:uint32, b:bool)
       // datatype Example2 = Ex2a(u:uint32) | Ex2b(b:bool)
       //
       // Produce:
-      // struct Example1 { 
+      // struct Example1 {
       //   uint32 u;
       //   bool b;
       //   Example1(uint32 u, bool b) : u (u), b (b) {}
@@ -280,7 +280,7 @@ namespace Microsoft.Armada {
         // Tuple types are declared once and for all in DafnyRuntime.h
         return;
       }
-      
+
       this.datatypeDecls.Add(dt);
 
       string DtT = dt.CompileName;
@@ -290,7 +290,7 @@ namespace Microsoft.Armada {
       if (dt.Ctors.Count == 1) {
         var ctor = dt.Ctors[0];
         var ws = wr.NewBlock(String.Format("{0}\nstruct {1}", DeclareTemplate(dt.TypeArgs), DtT_protected), ";");
-        
+
         // Declare the struct members
         var i = 0;
         var argNames = new List<string>();
@@ -321,7 +321,7 @@ namespace Microsoft.Armada {
         foreach (var arg in ctor.Formals) {
           wc.WriteLine("{0} = {1};", arg.CompileName, DefaultValue(arg.Type, wc, arg.tok));
         }
-        
+
         // Overload the comparison operator
         ws.WriteLine("friend bool operator==(const {0} &left, const {0} &right) {{ ", DtT_protected);
         ws.Write("\treturn true ");
@@ -329,11 +329,11 @@ namespace Microsoft.Armada {
             ws.WriteLine("\t\t&& left.{0} == right.{0}", arg);
         }
         ws.WriteLine(";\n}");
-        
+
         // Overload the not-comparison operator
         ws.WriteLine("friend bool operator!=(const {0} &left, const {0} &right) {{ return !(left == right); }} ", DtT_protected);
 
-        wr.WriteLine("{0}\nbool is_{1}(const struct {2}{3} d) {{ return true; }}", DeclareTemplate(dt.TypeArgs), ctor.CompileName, DtT_protected, TemplateMethod(dt.TypeArgs));        
+        wr.WriteLine("{0}\nbool is_{1}(const struct {2}{3} d) {{ return true; }}", DeclareTemplate(dt.TypeArgs), ctor.CompileName, DtT_protected, TemplateMethod(dt.TypeArgs));
       } else {
 
         // Create one struct for each constructor
@@ -350,7 +350,7 @@ namespace Microsoft.Armada {
               i++;
             }
           }
-          
+
           // Overload the comparison operator
           wstruct.WriteLine("friend bool operator==(const {0} &left, const {0} &right) {{ ", structName);
           wstruct.Write("\treturn true ");
@@ -358,7 +358,7 @@ namespace Microsoft.Armada {
             wstruct.WriteLine("\t\t&& left.{0} == right.{0}", arg);
           }
           wstruct.WriteLine(";\n}");
-          
+
           // Overload the not-comparison operator
           wstruct.WriteLine("friend bool operator!=(const {0} &left, const {0} &right) {{ return !(left == right); }} ", structName);
         }
@@ -372,7 +372,7 @@ namespace Microsoft.Armada {
         foreach (var ctor in dt.Ctors) {
           wu.WriteLine("struct {2}_{0}{1} v_{0};", ctor.CompileName, TemplateMethod(dt.TypeArgs), DtT_protected);
         }
-        
+
         // Declare static "constructors" for each Dafny constructor
         foreach (var ctor in dt.Ctors)
         {
@@ -398,7 +398,7 @@ namespace Microsoft.Armada {
           }
         }
 
-        // Declare a default constructor 
+        // Declare a default constructor
         using (var wd = ws.NewNamedBlock(String.Format("{0}()", DtT_protected))) {
           var default_ctor = dt.Ctors[0];   // Arbitrarily choose the first one
           wd.WriteLine("tag = {0}::TAG_{1};", DtT_protected, default_ctor.CompileName);
@@ -407,10 +407,10 @@ namespace Microsoft.Armada {
             wd.WriteLine("v_{0}.{1} = {2};", default_ctor.CompileName, arg.CompileName, DefaultValue(arg.Type, wd, arg.tok));
           }
         }
-        
+
         // Declare a default destructor
         ws.WriteLine("~{0}() {{}}", DtT_protected);
-        
+
         // Declare a default copy constructor (just in case any of our components are non-trivial, i.e., contain smart_ptr)
         using (var wcc = ws.NewNamedBlock(String.Format("{0}(const {0} &other)", DtT_protected))) {
           wcc.WriteLine("tag = other.tag;");
@@ -418,7 +418,7 @@ namespace Microsoft.Armada {
             wcc.WriteLine("if (tag == {0}::TAG_{1}) {{ v_{1} = other.v_{1}; }}", DtT_protected, ctor.CompileName);
           }
         }
-        
+
         // Declare a default copy assignment operator (just in case any of our components are non-trivial, i.e., contain smart_ptr)
         using (var wcc = ws.NewNamedBlock(String.Format("{0}& operator=(const {0} other)", DtT_protected))) {
           wcc.WriteLine("tag = other.tag;");
@@ -427,13 +427,13 @@ namespace Microsoft.Armada {
           }
           wcc.WriteLine("return *this;");
         }
-        
+
         // Declare type queries, both as members and general-purpose functions
         foreach (var ctor in dt.Ctors) {
           ws.WriteLine("bool is_{0}() const {{ return tag == {1}{2}::TAG_{0}; }}", ctor.CompileName, DtT_protected, TemplateMethod(dt.TypeArgs));
-          wr.WriteLine("{0}\nbool is_{1}(const struct {2}{3} d) {{ return d.tag == {2}{3}::TAG_{1}; }}", DeclareTemplate(dt.TypeArgs), ctor.CompileName, DtT_protected, TemplateMethod(dt.TypeArgs));  
+          wr.WriteLine("{0}\nbool is_{1}(const struct {2}{3} d) {{ return d.tag == {2}{3}::TAG_{1}; }}", DeclareTemplate(dt.TypeArgs), ctor.CompileName, DtT_protected, TemplateMethod(dt.TypeArgs));
         }
-        
+
         // Overload the comparison operator
         ws.WriteLine("friend bool operator==(const {0} &left, const {0} &right) {{ ", DtT_protected);
         ws.Write("\treturn false");
@@ -441,7 +441,7 @@ namespace Microsoft.Armada {
           ws.WriteLine("\t\t|| (left.is_{0}() && right.is_{0}() && left.v_{0} == right.v_{0})", ctor.CompileName);
         }
         ws.WriteLine(";\n}");
-        
+
         // Overload the not-comparison operator
         ws.WriteLine("friend bool operator!=(const {0} &left, const {0} &right) {{ return !(left == right); }} ", DtT_protected);
 
@@ -479,7 +479,7 @@ namespace Microsoft.Armada {
 //          TrParenExpr(nt.Witness, witness, false);
 //          witness.Write(".toNumber()");
 //        }
-//        
+//
 //        DeclareField(className, nt.TypeArgs, "Witness", true, true, nt.BaseType, nt.tok, witness.ToString(), w, wr);
 //      }
 //
@@ -509,7 +509,7 @@ namespace Microsoft.Armada {
         templateDecl = DeclareTemplate(sst.Var.Type.TypeArgs);
       }
       wr.WriteLine("{2} using {1} = {0};", TypeName(sst.Var.Type, wr, sst.tok), IdName(sst), templateDecl);
-      
+
       var className = "class_" + IdName(sst);
       var cw = CreateClass(className, sst.TypeArgs, wr) as ClightTsoCompiler.ClassWriter;
       var w = cw.MethodWriter;
@@ -518,7 +518,7 @@ namespace Microsoft.Armada {
         TrExpr(sst.Witness, witness, false);
         DeclareField(className, sst.TypeArgs, "Witness", true, true, sst.Rhs, sst.tok, witness.ToString(), w, wr);
       }
-      
+
       using (var wDefault = w.NewBlock(String.Format("static {0}{1} get_Default()", IdName(sst), TemplateMethod(sst.TypeArgs)))) {
         var udt = new UserDefinedType(sst.tok, sst.Name, sst, sst.TypeArgs.ConvertAll(tp => (Type)new UserDefinedType(tp)));
         var d = TypeInitializationValue(udt, wr, sst.tok, false);
@@ -617,12 +617,12 @@ namespace Microsoft.Armada {
         return null;
       }
 
-      if (m.TypeArgs.Count != 0) {        
+      if (m.TypeArgs.Count != 0) {
         wr.WriteLine(DeclareTemplate(m.TypeArgs));
       }
 
       wr.Write("{0}{1} {2}",
-      m.IsStatic ? "static " : "",        
+      m.IsStatic ? "static " : "",
       targetReturnTypeReplacement ?? "void",
       IdName(m));
 
@@ -711,7 +711,7 @@ namespace Microsoft.Armada {
       } else {
         throw NotSupported("WriteRuntimeTypeDescriptorsFormals");
       }
-/* 
+/*
       int c = 0;
       foreach (var tp in typeParams) {
         if (useAllTypeArgs || tp.Characteristics.MustSupportZeroInitialization) {
@@ -743,7 +743,7 @@ namespace Microsoft.Armada {
       Contract.Requires(tok != null);
       Contract.Requires(wr != null);
       throw NotSupported(string.Format("RuntimeTypeDescriptor {0} not yet supported", type), tok);
-/* 
+/*
       var xType = type.NormalizeExpandKeepConstraints();
       if (xType is TypeProxy) {
         // unresolved proxy; just treat as bool, since no particular type information is apparently needed for this type
@@ -835,7 +835,7 @@ namespace Microsoft.Armada {
     protected void Warn(string msg, Bpl.IToken tok) {
       Console.Error.WriteLine("WARNING: {3} ({0}:{1}:{2})", tok.filename, tok.line, tok.col, msg);
     }
-    
+
     // Use class_name = true if you want the actual name of the class, not the type used when declaring variables/arguments/etc.
     protected string TypeName(Type type, TextWriter wr, Bpl.IToken tok, MemberDecl/*?*/ member = null, bool class_name=false) {
       Contract.Ensures(Contract.Result<string>() != null);
@@ -858,7 +858,7 @@ namespace Microsoft.Armada {
         {
           return ty.ToString();
         }
-        else 
+        else
         {
           return "struct " + (((UserDefinedType) type).ToString());
         }
@@ -867,10 +867,10 @@ namespace Microsoft.Armada {
       {
         throw NotSupported(String.Format("Unknown Type: {0}", type.ToString()));
       }
-      
+
 //      var xType = type.NormalizeExpand();
 //      Console.WriteLine("Handling TypeName {0}",xType.ToString());
-//      
+//
 //      if (xType is TypeProxy) {
 //        // unresolved proxy; just treat as ref, since no particular type information is apparently needed for this type
 //        return "object";
@@ -926,7 +926,7 @@ namespace Microsoft.Armada {
 //        if (class_name || xType.IsTypeParameter || xType.IsDatatype) {  // Don't add pointer decorations to class names or type parameters
 //          return IdProtect(s) + ActualTypeArgs(xType.TypeArgs);
 //        } else {
-//          return TypeName_UDT(s, udt.TypeArgs, wr, udt.tok);          
+//          return TypeName_UDT(s, udt.TypeArgs, wr, udt.tok);
 //        }
 //      } else if (xType is SetType) {
 //        Type argType = ((SetType)xType).Arg;
@@ -979,7 +979,7 @@ namespace Microsoft.Armada {
     {
       var xType = type.NormalizeExpandKeepConstraints();
       Console.WriteLine("Handling Type {0}",xType.ToString());
-      
+
       if (xType is BoolType) {
         return "false";
       } else if (xType is CharType) {
@@ -1112,14 +1112,14 @@ namespace Microsoft.Armada {
     // ----- Declarations -------------------------------------------------------------
     protected override void DeclareExternType(OpaqueTypeDecl d, Expression compileTypeHint, TargetWriter wr) {
       if (compileTypeHint.AsStringLiteral() == "struct") {
-        wr.WriteLine("// Extern declaration of {1}\n{0} struct {1} {2};", DeclareTemplate(d.TypeArgs), d.Name, TemplateMethod(d.TypeArgs));        
+        wr.WriteLine("// Extern declaration of {1}\n{0} struct {1} {2};", DeclareTemplate(d.TypeArgs), d.Name, TemplateMethod(d.TypeArgs));
       } else {
         Error(d.tok, "Opaque type ('{0}') with unrecognized extern attribute {1} cannot be compiled.  Expected {{:extern compile_type_hint}} ", wr, d.FullName, compileTypeHint.AsStringLiteral());
       }
     }
 
     protected void DeclareField(string className, List<TypeParameter> targs, string name, bool isStatic, bool isConst, Type type, Bpl.IToken tok, string rhs, TargetWriter wr, TargetWriter finisher) {
-     
+
       var t = TypeName(type, wr, tok);
       var pref = "";
       if (isStatic)
@@ -1142,7 +1142,7 @@ namespace Microsoft.Armada {
 
       var fieldWriter = wr.NewBlock(string.Format("struct {0};\n" +
                                                   "typedef struct {0} {0};\n" +
-                                                  "struct {0}", s.Name), 
+                                                  "struct {0}", s.Name),
         ";");
       foreach (string name in s.FieldNames)
       {
@@ -1167,11 +1167,11 @@ namespace Microsoft.Armada {
         CompileArmadaStruct(s, wr);
       }
     }
-    
+
     protected BlockTargetWriter/*?*/ CreateArmadaMethod(Method m, bool createBody, TargetWriter wr) {
       var method_name = m.Name;
       if (IsMain(m)) method_name = "_main";
-      
+
       string targetReturnTypeReplacement = null;
       foreach (var p in m.Outs) {
         if (!p.IsGhost) {
@@ -1185,9 +1185,9 @@ namespace Microsoft.Armada {
         }
       }
 
-      
 
-      if (m.TypeArgs.Count != 0) {        
+
+      if (m.TypeArgs.Count != 0) {
         wr.WriteLine(DeclareTemplate(m.TypeArgs));
       }
 
@@ -1200,7 +1200,7 @@ namespace Microsoft.Armada {
       if (targetReturnTypeReplacement == null) {
         WriteFormals(nIns == 0 ? "" : ", ", m.Outs, wr);
       }
-      
+
       if (!createBody) {
         wr.WriteLine(");");
         return null;
@@ -1239,7 +1239,7 @@ namespace Microsoft.Armada {
       if (IsMain(m)) method_name = "_main";
       var wrapper_name = "_thread_of_" + method_name;
       var struct_name = "_params_of_" + method_name;
-      
+
       wr.Write("void* {0} (void* vargs)", wrapper_name);
       if (!createBody)
       {
@@ -1262,9 +1262,9 @@ namespace Microsoft.Armada {
     protected void CompileArmadaMethod(Method m, TargetWriter wr)
     {
       var method_name = m.Name;
-      if (IsMain(m)) 
-        method_name = "_main"; 
-      
+      if (IsMain(m))
+        method_name = "_main";
+
       if (m.IsExtern(out _, out _))
       {
         Console.WriteLine("Method {0} is extern",method_name);
@@ -1272,7 +1272,7 @@ namespace Microsoft.Armada {
         CreateThreadWrpper(m, true, wr);
         return;
       }
-      
+
       wr.WriteLine("// Beginning of method {0}", method_name);
 
       // create the writer for the method
@@ -1284,7 +1284,7 @@ namespace Microsoft.Armada {
             nonGhostOutsCount++;
           }
         }
-        
+
         var useReturnStyleOuts = UseReturnStyleOuts(m, nonGhostOutsCount);
         foreach (var p in m.Outs) {
           if (!p.IsGhost) {
@@ -1307,7 +1307,7 @@ namespace Microsoft.Armada {
 
         // create thread wrapper for the method.
         CreateThreadWrpper(m, true, wr);
-        
+
         wr.WriteLine("// End of method {0}\n",method_name);
       }
 
@@ -1325,14 +1325,14 @@ namespace Microsoft.Armada {
           w.WriteLine("{0}();", IdName(m));
         }
       }*/
-      
+
     }
-    
+
     protected void DeclareArmadaGlobalVar(string name, Type/*?*/ type, Bpl.IToken/*?*/ tok, bool leaveRoomForRhs, string/*?*/ rhs, TargetWriter wr) {
       if (type != null) {
         if (type is SizedArrayType)
           wr.Write(DeclareSizedArray(name, (SizedArrayType) type, wr, tok));
-        else 
+        else
           wr.Write("volatile {0} {1}", TypeName(type, wr, tok), name);
       } else {
         throw NotSupported("auto type");
@@ -1346,7 +1346,7 @@ namespace Microsoft.Armada {
       }
     }
 
-   
+
     public void CompileArmadaGlobalVariables(ArmadaGlobalVariableSymbolTable table, TargetWriter wr)
     {
       foreach (var name in table.VariableNames)
@@ -1405,7 +1405,7 @@ namespace Microsoft.Armada {
       {
         var methodInfo = methods.LookupMethod(methodName);
         var method = methodInfo.method;
-        
+
         // Skip the method decl if it is extern
         if (!method.IsExtern(out _, out _))
         {
@@ -1427,7 +1427,7 @@ namespace Microsoft.Armada {
         }
       }
     }
-    
+
     public override void CompileArmadaLayer(ModuleDefinition layer, TargetWriter wr)
     {
       var symbols = layer.ArmadaSymbols;
@@ -1436,24 +1436,24 @@ namespace Microsoft.Armada {
       // Compile the global varibales
       wr.WriteLine("// Global Variables");
       CompileArmadaGlobalVariables(globals, wr);
-      
+
       // Create the Param structs for each method
       wr.WriteLine("// Param Stucts");
       CreateParamStructs(methods, wr);
-      
+
       // Update the info about method params for the use of create thread
       UpdateArmadaMethodParams(methods);
-      
+
       // Declare all methods and their wrappers
       wr.WriteLine("// Method Decls");
       DeclareArmadaMethods(methods, wr);
-      
+
       // Compile the methods together with their wrappers
       wr.WriteLine("// Methods Defns");
       CompileArmadaMethods(methods, wr);
-      
-     
-      
+
+
+
     }
 
     public override void CompileArmadaCreateThread(ArmadaCreateThreadStatement stmt, TargetWriter wr)
@@ -1462,7 +1462,7 @@ namespace Microsoft.Armada {
       var s = (UpdateStmt) stmt.Stmt;
       var bw = wr.NewBlock("//Begin Create Thread\n", "\n//End Create Thread\n" );
       var lhs_name = "_temp_thread_id";
-      
+
       if (s.Lhss.Count == 0)
       {
         // create a temp tid if there is no LHS
@@ -1476,16 +1476,16 @@ namespace Microsoft.Armada {
         TrExpr(s.Lhss[0], lhs_wr, false);
         lhs_name = lhs_wr.ToString();
       }
-      
-     
+
+
       Contract.Assert(s.Rhss.Count == 1);
       Contract.Assert(s.Rhss[0] is CreateThreadRhs);
-      
+
       var rhs = (CreateThreadRhs) s.Rhss[0];
       var method_name = rhs.MethodName.val;
       Contract.Assert(this.armadaMethodParams.ContainsKey(method_name));
       var param_names = this.armadaMethodParams[method_name];
-      
+
       // create and init param struct
       bw.WriteLine("_params_of_{0}* args = malloc(sizeof(_params_of_{0}));", method_name);
       var index = 0;
@@ -1502,8 +1502,40 @@ namespace Microsoft.Armada {
       bw.WriteLine("pthread_create((pthread_t*) &({0}), NULL, _thread_of_{1}, (void *) args);",lhs_name,method_name);
     }
 
+    public override void CompileArmadaCompareAndSwap(ArmadaCompareAndSwapStatement stmt, TargetWriter wr)
+    {
+      var us = (UpdateStmt)stmt.Stmt;
+      var crhs = (CompareAndSwapRhs)us.Rhss[0];
+      if (us.Lhss.Count > 0) {
+        TrExpr(us.Lhss[0], wr, false);
+        wr.Write(" = ");
+      }
+      wr.Write("__sync_val_compare_and_swap(&");
+      TrParenExpr(crhs.Target, wr, false);
+      wr.Write(", ");
+      TrExpr(crhs.OldVal, wr, false);
+      wr.Write(", ");
+      TrExpr(crhs.NewVal, wr, false);
+      wr.WriteLine(");");
+    }
+
+    public override void CompileArmadaAtomicExchange(ArmadaAtomicExchangeStatement stmt, TargetWriter wr)
+    {
+      var us = (UpdateStmt)stmt.Stmt;
+      var crhs = (CompareAndSwapRhs)us.Rhss[0];
+      if (us.Lhss.Count > 0) {
+        TrExpr(us.Lhss[0], wr, false);
+        wr.Write(" = ");
+      }
+      wr.Write("__armada_atomic_exchange(&");
+      TrParenExpr(crhs.Target, wr, false);
+      wr.Write(", ");
+      TrExpr(crhs.NewVal, wr, false);
+      wr.WriteLine(");");
+    }
+
     private string DeclareFormalString(string prefix, string name, Type type, Bpl.IToken tok, bool isInParam) {
-      if (isInParam) {        
+      if (isInParam) {
         return String.Format("{0}{2} {1}", prefix, name, TypeName(type, null, tok));
       } else {
         return null;
@@ -1514,7 +1546,7 @@ namespace Microsoft.Armada {
       var formal_str = DeclareFormalString(prefix, name, type, tok, isInParam);
       if (formal_str != null) {
         wr.Write(formal_str);
-        return true;        
+        return true;
       } else {
         return false;
       }
@@ -1547,7 +1579,7 @@ namespace Microsoft.Armada {
       if (type != null) {
         if (type is SizedArrayType)
           wr.Write(DeclareSizedArray(name, (SizedArrayType) type, wr, tok));
-        else 
+        else
           wr.Write("{0} {1}", TypeName(type, wr, tok), name);
       } else {
         throw NotSupported("auto type");
@@ -1560,7 +1592,7 @@ namespace Microsoft.Armada {
         wr.WriteLine(";");
       }
     }
-    
+
 
     protected override TargetWriter DeclareLocalVar(string name, Type/*?*/ type, Bpl.IToken/*?*/ tok, TargetWriter wr) {
       if (type != null) {
@@ -1623,6 +1655,16 @@ namespace Microsoft.Armada {
       TrExpr(thread_id, thread_id_wr, false);
       var thread_id_val = thread_id_wr.ToString();
       wr.WriteLine("pthread_join((pthread_t){0},NULL);",thread_id_val);
+    }
+
+    protected override void EmitFenceStmt(TargetWriter wr)
+    {
+      wr.WriteLine("asm volatile (\"mfence\" ::: \"memory\");");
+    }
+
+    protected override void EmitGotoStmt(TargetWriter wr, string target)
+    {
+      wr.WriteLine($"goto after_{target};");
     }
 
     protected override void EmitDeallocStmt(TargetWriter wr, Expression addr)
@@ -1772,7 +1814,7 @@ namespace Microsoft.Armada {
         EmitIntegerLiteral(i, wr);
       } else if (e.Value is BaseTypes.BigDec) {
         throw NotSupported("EmitLiteralExpr of BaseTypes.BigDec");
-        /* 
+        /*
         var n = (BaseTypes.BigDec)e.Value;
         if (0 <= n.Exponent) {
           wr.Write("new _dafny.BigRational(new BigNumber(\"{0}", n.Mantissa);
@@ -1971,7 +2013,7 @@ namespace Microsoft.Armada {
         case "volatile":
         case "wchar_t":
         case "while":
-        
+
         // Also reserved
         case "And":
         case "and_eq":
@@ -2040,7 +2082,7 @@ namespace Microsoft.Armada {
         if (dt.Ctors.Count == 1) {
           wr.Write("{3}::{0}{1}({2})",
             dtName,
-            TemplateMethod(dt.TypeArgs), 
+            TemplateMethod(dt.TypeArgs),
             arguments,
             dt.Module.CompileName);
         } else {
@@ -2048,7 +2090,7 @@ namespace Microsoft.Armada {
             dtName, ActualTypeArgs(dtv.InferredTypeArgs), ctorName,
             arguments, dt.Module.CompileName);
         }
-        
+
       } else {
         // Co-recursive call
         // Generate:  Dt.lazy_Ctor(($dt) => Dt.create_Ctor($dt, args))
@@ -2105,7 +2147,7 @@ namespace Microsoft.Armada {
       }
     }
 
-    protected override TargetWriter EmitMemberSelect(MemberDecl member, bool isLValue, Type expectedType, TargetWriter wr) {      
+    protected override TargetWriter EmitMemberSelect(MemberDecl member, bool isLValue, Type expectedType, TargetWriter wr) {
       var wSource = wr.Fork();
       if (isLValue && member is ConstantField) {
         wr.Write(".{0}", member.Name);
@@ -2151,7 +2193,7 @@ namespace Microsoft.Armada {
       var w = wr.Fork();
       foreach (var index in indices) {
         wr.Write("[{0}]", index);
-      }   
+      }
       return w;
     }
 
@@ -2443,7 +2485,7 @@ namespace Microsoft.Armada {
             truncateResult = true;
           }
           if (AsNativeType(resultType) != null) {
-            opString = "<<";            
+            opString = "<<";
           } else {
             if (AsNativeType(e1.Type) != null) {
               callString = "Lsh(_dafny.IntOfUint64(uint64";
@@ -2730,9 +2772,9 @@ namespace Microsoft.Armada {
           }
           wr.Write("})");
         }
-        
-          
-        
+
+
+
         string sep = "";
         foreach (var e in elements) {
           wrElements.Write(sep);
@@ -2743,7 +2785,7 @@ namespace Microsoft.Armada {
     }
 
     protected override void EmitMapDisplay(MapType mt, Bpl.IToken tok, List<ExpressionPair> elements, bool inLetExprBody, TargetWriter wr) {
-      wr.Write("DafnyMap<{0},{1}>::Create({{", 
+      wr.Write("DafnyMap<{0},{1}>::Create({{",
                TypeName(mt.TypeArgs[0], wr, tok, null, false),
                TypeName(mt.TypeArgs[1], wr, tok, null, false));
       string sep = "";
@@ -2760,7 +2802,7 @@ namespace Microsoft.Armada {
     }
 
     protected override void EmitCollectionBuilder_New(CollectionType ct, Bpl.IToken tok, TargetWriter wr) {
-      
+
       if (ct is SetType) {
         wr.Write("DafnySet<{0}>()", TypeName(ct.TypeArgs[0], wr, tok, null, false));
       } else {
@@ -2820,6 +2862,6 @@ namespace Microsoft.Armada {
         throw NotSupported("Running C++ programs is not yet supported");
     }
   }
-  
-  
+
+
 }

@@ -1,0 +1,57 @@
+include "B.arm"
+include "C.arm"
+
+proof BC {
+    refinement B C
+    assume_intro
+
+    inductive_invariant no_joinable "forall jtid :: jtid in s.s.joinable_tids ==> jtid !in threads"
+
+    inductive_invariant zero_is_not_a_mutex "0 !in ghosts.acquire_map"
+
+    chl_invariant no_other_threads @"
+      && (forall tid :: tid in threads ==> (tid == ghosts.inc1 || tid == ghosts.inc2 || tid == tid_init))
+    "
+
+    chl_invariant inc1_2_uses_mutex @"
+      forall tid :: tid in {ghosts.inc1, ghosts.inc2} && tid in threads ==> 
+        && (threads[tid].top.Armada_StackFrame_Acquire? ==> threads[tid].top.Acquire.m == ghosts.mutex)
+        && (threads[tid].top.Armada_StackFrame_Release? ==> threads[tid].top.Release.m == ghosts.mutex)
+    "
+
+    chl_invariant no_threads_when_main_reading @"
+      forall tid :: tid in threads && tid != tid_init ==> ghosts.main_reading == 0
+    "
+
+    chl_invariant only_mutex_is_used
+
+    chl_invariant GlobalInvariant @"
+        (ghosts.mutex in ghosts.acquire_map && ghosts.acquire_map[ghosts.mutex].OptionalSome? ==> ghosts.acquire_map[ghosts.mutex].tid in threads)
+    "
+
+    inductive_invariant One_Main @"
+        forall tid :: (tid in threads && (threads[tid].top.Armada_StackFrame_main? || 
+                                     threads[tid].top.Armada_StackFrame_print_uint32? ||
+                                     threads[tid].top.Armada_StackFrame_Mutex_Init?))
+                  <==> 
+                 (tid in threads && tid == tid_init)
+    "
+
+    chl_yield_pred inc_threads @"
+        && (ghosts.inc1 != 0 && ghosts.inc1 !in threads ==> ghosts'.inc1 !in threads')
+        && (ghosts.inc2 != 0 && ghosts.inc2 !in threads ==> ghosts'.inc2 !in threads')
+    "
+
+    chl_yield_pred main_owns_incs_and_mutex_and_reading @"
+        && ghosts.mutex == ghosts'.mutex
+        && (tid == tid_init ==> (ghosts.inc1 == ghosts'.inc1 && ghosts.inc2 == ghosts'.inc2 && ghosts.mutex == ghosts'.mutex && ghosts.main_reading == ghosts'.main_reading))
+    "
+
+    chl_yield_pred YP1
+    //chl_yield_pred {:excludeMethod Acquire, Release, inc} YP2
+    chl_yield_pred {:excludeMethod Acquire, Release, inc} YP2 @"
+        && (ghosts.mutex in ghosts.acquire_map ==> ghosts'.mutex in ghosts'.acquire_map)
+        && (ghosts.mutex in ghosts.acquire_map && ghosts.acquire_map[ghosts.mutex] == OptionalSome(tid) ==> ghosts'.acquire_map[ghosts'.mutex] == OptionalSome(tid))
+        && (ghosts.mutex in ghosts.acquire_map && ghosts.acquire_map[ghosts.mutex] != OptionalSome(tid) ==> ghosts'.acquire_map[ghosts'.mutex] != OptionalSome(tid))
+    "
+}

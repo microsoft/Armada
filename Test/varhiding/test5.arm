@@ -1,0 +1,93 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs5 {
+
+}
+
+level I using SharedStructs5 {
+  ghost var w:int32;
+  ghost var x:int32;
+  ghost var y:int32;
+  ghost var z:int32;
+
+  method {:atomic} foo()
+  {
+    x := 3;
+  }
+
+  method bar()
+  {
+    atomic {
+      if (x > 2) {
+        y := 4;
+      }
+      else {
+        while (x > 3) {
+          y := 5;
+          yield;
+          y := 4;
+          w := w + 1;
+        }
+        y := 2;
+        foo();
+      }
+    }
+    z := 6;
+  }
+
+  method main()
+  {
+    x := 3;
+    atomic {
+      y := 8;
+      foo();
+      w := 7;
+      z := 5;
+    }
+  }
+}
+
+level J using SharedStructs5 {
+  ghost var x:int32;
+  ghost var y:int32;
+  ghost var z:int32;
+
+  method {:atomic} foo()
+  {
+    x := 3;
+  }
+
+  method bar()
+  {
+    atomic {
+      if (x > 2) {
+        y := 4;
+      }
+      else {
+        while (x > 3) {
+          y := 5;
+          yield;
+          y := 4;
+        }
+        y := 2;
+        foo();
+      }
+    }
+    z := 6;
+  }
+
+  method main()
+  {
+    x := 3;
+    atomic {
+      y := 8;
+      foo();
+      z := 5;
+    }
+  }
+}
+
+proof IJ {
+  refinement I J
+  var_hiding w
+}

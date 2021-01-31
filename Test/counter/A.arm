@@ -1,0 +1,67 @@
+include "SharedStructs.arm"
+
+level A using SharedStructs {
+    noaddr var x:uint32 := 0;
+    ghost var acquire_map: map<uint64, OptionalThread> := map[];
+
+    method {:extern} print_uint32(i:uint32)
+
+    method {:extern} Mutex_Init() returns (m: uint64)
+        ensures m in acquire_map && acquire_map[m] == OptionalNone()
+        ensures m != 0
+    {
+        atomic {
+            somehow modifies m 
+                ensures (m !in acquire_map) && (m != 0);
+            acquire_map := acquire_map[m := OptionalNone()];
+        }
+    }
+
+    // decl acquire lock
+    method {:extern} Acquire(m: uint64)
+        ensures m in acquire_map && acquire_map[m] == OptionalSome($me)
+    {
+        assume acquire_map[m].OptionalNone?;
+        acquire_map[m] := OptionalSome($me);
+    }
+
+    // decl release lock
+    method {:extern} Release(m: uint64)
+        ensures m in acquire_map && acquire_map[m] != OptionalSome($me)
+    {
+        atomic {
+            assume $sb_empty;
+            assert acquire_map[m] == OptionalSome($me);
+            acquire_map[m] := OptionalNone();
+        }
+    }
+ 
+    method inc(m: uint64)
+    {
+        noaddr var y: uint32;
+        Acquire(m);
+        
+        y := x + 1;
+        x := y;
+
+        Release(m);
+    }
+
+    method main()
+    {
+        noaddr var tid1:uint64 := 0;
+        noaddr var tid2:uint64 := 0;
+        noaddr var m:uint64 := 0;
+
+        m := Mutex_Init();
+
+        tid1 := create_thread inc(m);
+        tid2 := create_thread inc(m);
+
+        join tid1;
+        join tid2;
+        
+        print_uint32(x);
+    }
+}
+        

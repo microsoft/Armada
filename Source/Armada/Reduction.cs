@@ -14,28 +14,16 @@ namespace Microsoft.Armada
     private ReductionStrategyDecl strategy;
     private HashSet<ArmadaPC> phase1PCs;
     private HashSet<ArmadaPC> phase2PCs;
-    private Dictionary<ArmadaPC, NextRoutine> phase2PCToNextRoutine;
+    private HashSet<ArmadaPC> extraRecurrentPCs;
+    private Dictionary<ArmadaPC, AtomicPath> phase2PCToPath;
 
     public ReductionProofGenerator(ProofGenerationParams i_pgp, ReductionStrategyDecl i_strategy)
       : base(i_pgp)
     {
       strategy = i_strategy;
 
-      phase1PCs = GetPCsForLabelRanges(strategy.Phase1LabelRanges);
-      phase2PCs = GetPCsForLabelRanges(strategy.Phase2LabelRanges);
-
-      phase2PCToNextRoutine = new Dictionary<ArmadaPC, NextRoutine>();
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        if (phase2PCs.Contains(nextRoutine.pc)) {
-          var pc = nextRoutine.pc;
-          if (phase2PCToNextRoutine.ContainsKey(pc)) {
-            AH.PrintError(pgp.prog, $"Multiple instructions occur at phase-2 PC {pc}.  I can't tell which of them to use for the proof that left movers are always enabled.");
-          }
-          else {
-            phase2PCToNextRoutine[pc] = nextRoutine;
-          }
-        }
-      }
+      phase1PCs = GetYieldingPCsForLabelRanges(strategy.Phase1LabelRanges);
+      phase2PCs = GetYieldingPCsForLabelRanges(strategy.Phase2LabelRanges);
     }
 
     public override void GenerateProof()
@@ -47,6 +35,7 @@ namespace Microsoft.Armada
 
       AddIncludesAndImports();
       MakeTrivialPCMap();
+      GenerateExtraRecurrentPCs();
       GenerateNextRoutineMap();
       GenerateProofGivenMap();
     }
@@ -60,7 +49,7 @@ namespace Microsoft.Armada
       return pc;
     }
 
-    private HashSet<ArmadaPC> GetPCsForLabelRanges(List<Tuple<string, string>> labelRanges)
+    private HashSet<ArmadaPC> GetYieldingPCsForLabelRanges(List<Tuple<string, string>> labelRanges)
     {
       HashSet<ArmadaPC> pcs = new HashSet<ArmadaPC>();
 
@@ -82,11 +71,18 @@ namespace Microsoft.Armada
 
         for (var i = pc1.instructionCount; i <= pc2.instructionCount; ++i) {
           var pc = new ArmadaPC(pgp.symbolsLow, pc1.methodName, i);
-          pcs.Add(pc);
+          if (!pgp.symbolsLow.IsNonyieldingPC(pc)) {
+            pcs.Add(pc);
+          }
         }
       }
 
       return pcs;
+    }
+
+    private void GenerateExtraRecurrentPCs()
+    {
+      extraRecurrentPCs = new HashSet<ArmadaPC>(phase1PCs.Concat(phase2PCs).Select(pc => pcMap[pc]));
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -97,7 +93,7 @@ namespace Microsoft.Armada
     {
       base.AddIncludesAndImports();
 
-      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/reduction/ArmadaReduction.i.dfy");
+      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/reduction/AtomicReduction.i.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy");
       pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy");
@@ -106,10 +102,9 @@ namespace Microsoft.Armada
 
       pgp.MainProof.AddImport("InvariantsModule");
       pgp.MainProof.AddImport("GenericArmadaSpecModule");
-      pgp.MainProof.AddImport("ArmadaReductionSpecModule");
-      pgp.MainProof.AddImport("ArmadaReductionModule");
+      pgp.MainProof.AddImport("AtomicReductionSpecModule");
+      pgp.MainProof.AddImport("AtomicReductionModule");
       pgp.MainProof.AddImport("GeneralRefinementLemmasModule");
-      pgp.MainProof.AddImport("RefinementConvolutionModule");
       pgp.MainProof.AddImport("util_option_s");
       pgp.MainProof.AddImport("util_collections_seqs_s");
       pgp.MainProof.AddImport("util_collections_seqs_i");
@@ -117,43 +112,43 @@ namespace Microsoft.Armada
       pgp.MainProof.AddImport("util_collections_maps_i");
 
       pgp.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaLemmas.i.dfy", "invariants");
-      pgp.AddImport("GenericArmadaSpecModule", null, "invariants");
       pgp.AddImport("GenericArmadaLemmasModule", null, "invariants");
+
+      pgp.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/reduction/AtomicReductionSpec.i.dfy", "defs");
+      pgp.AddImport("AtomicReductionSpecModule", null, "defs");
+
+      pgp.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/reduction/AtomicReductionSpec.i.dfy", "lift");
+      pgp.AddImport("AtomicReductionSpecModule", null, "lift");
     }
 
     private void InitializeAuxiliaryProofFiles()
     {
-      var defsFile = pgp.proofFiles.CreateAuxiliaryProofFile("defs");
-      defsFile.IncludeAndImportGeneratedFile("specs");
-      defsFile.IncludeAndImportGeneratedFile("convert");
-      defsFile.IncludeAndImportGeneratedFile("invariants");
-      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/reduction/ArmadaReductionSpec.i.dfy",
-                                "ArmadaReductionSpecModule");
-      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("defs");
-
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var nextFileName = "next_" + nextRoutine.NameSuffix;
-        var nextFile = pgp.proofFiles.CreateAuxiliaryProofFile(nextFileName);
-        nextFile.IncludeAndImportGeneratedFile("specs");
-        nextFile.IncludeAndImportGeneratedFile("invariants");
-        nextFile.IncludeAndImportGeneratedFile("defs");
-        nextFile.IncludeAndImportGeneratedFile("utility");
-        nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
-        nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
-        nextFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
-        nextFile.AddImport("util_collections_seqs_s");
-        pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile(nextFileName);
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var pathFileName = "path_" + atomicPath.Name;
+        var pathFile = pgp.proofFiles.CreateAuxiliaryProofFile(pathFileName);
+        pathFile.IncludeAndImportGeneratedFile("specs");
+        pathFile.IncludeAndImportGeneratedFile("revelations");
+        pathFile.IncludeAndImportGeneratedFile("invariants");
+        pathFile.IncludeAndImportGeneratedFile("defs");
+        pathFile.IncludeAndImportGeneratedFile("utility");
+        pathFile.IncludeAndImportGeneratedFile("latomic");
+        pathFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+        pathFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
+        pathFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
+        pathFile.AddImport("util_collections_seqs_s");
+        pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile(pathFileName);
       }
     }
 
     private void GenerateProofGivenMap()
     {
       GenerateProofHeader();
+      GenerateAtomicSpecs(true, null, extraRecurrentPCs);
       InitializeAuxiliaryProofFiles();
       GeneratePhasePredicates();
       GenerateStateAbstractionFunctions_LH();
-      GenerateConvertTraceEntry_LH();
-      GenerateNextState_H();
+      GenerateConvertStep_LH();
+      GenerateConvertAtomicPath_LH();
       GenerateLocalViewCommutativityLemmas();
 
       GeneratePCFunctions_L();
@@ -165,9 +160,10 @@ namespace Microsoft.Armada
       GenerateLInitImpliesHInitLemma();
       GenerateLeftMoverCommutativityLemmas();
       GenerateRightMoverCommutativityLemmas();
-      GenerateLiftStepLemmas();
+      GenerateLiftAtomicPathLemmas("LHPathTypesMatchYR(ty, HAtomic_GetPathType(hpath))");
       GenerateLemmasSupportingValidRequest();
       GenerateIsValidRequest();
+      GenerateLiftLAtomicToHAtomicLemma();
       GenerateFinalProof();
     }
 
@@ -216,8 +212,16 @@ namespace Microsoft.Armada
     {
       string str;
 
-      CreateGenericArmadaSpec_L();
-      CreateGenericArmadaSpec_H();
+      phase2PCToPath = new Dictionary<ArmadaPC, AtomicPath>();
+      foreach (var atomicPath in lAtomic.AtomicPaths.Where(ap => !ap.Tau && !ap.Stopping && phase2PCs.Contains(ap.StartPC))) {
+        var pc = atomicPath.StartPC;
+        if (phase2PCToPath.ContainsKey(pc)) {
+          AH.PrintError(pgp.prog, $"Multiple instructions occur at phase-2 PC {pc}.  I can't tell which of them to use for the proof that left movers are always enabled.");
+        }
+        else {
+          phase2PCToPath[pc] = atomicPath;
+        }
+      }
 
       str = $@"
         predicate LLStateRefinement(ls:LState, hs:LState)
@@ -244,19 +248,19 @@ namespace Microsoft.Armada
       pgp.AddFunction(str, "defs");
 
       str = @"
-        function GenerateLeftMover(s:LPlusState, tid:Armada_ThreadHandle) : L.Armada_TraceEntry
+        function GenerateLeftMover(s:LPlusState, tid:Armada_ThreadHandle) : LAtomic_Path
         {
            if tid in s.s.threads then
              var pc := s.s.threads[tid].pc;
       ";
-      foreach (KeyValuePair<ArmadaPC, NextRoutine> entry in phase2PCToNextRoutine) {
-        str += $"    if pc.{entry.Key}? then L.Armada_TraceEntry_{entry.Value.NameSuffix}(tid) else\n";
+      foreach (KeyValuePair<ArmadaPC, AtomicPath> entry in phase2PCToPath) {
+        str += $"    if pc.{entry.Key}? then { lAtomic.GetConstructorString(entry.Value) } else\n";
       }
-      str += @"
-             L.Armada_TraceEntry_Tau(tid)
+      str += $@"
+             { lAtomic.GetConstructorString(lAtomic.TauPath) }
            else
-             L.Armada_TraceEntry_Tau(tid)
-        }
+             { lAtomic.GetConstructorString(lAtomic.TauPath) }
+        }}
       ";
       pgp.AddFunction(str, "defs");
 
@@ -277,23 +281,14 @@ namespace Microsoft.Armada
 
     private void GenerateReductionRequest()
     {
-      var arrequest = AH.MakeGenericTypeSpecific("ArmadaReductionRequest",
-                                                 new List<Type> {
-                                                   AH.ReferToType("LPlusState"),
-                                                   AH.ReferToType("L.Armada_TraceEntry"),
-                                                   AH.ReferToType("L.Armada_PC"),
-                                                   AH.ReferToType("HState"),
-                                                   AH.ReferToType("H.Armada_TraceEntry"),
-                                                   AH.ReferToType("H.Armada_PC")
-                                                 });
-      pgp.AddTypeSynonymDecl("ARRequest", arrequest, "defs");
+      pgp.AddTypeSynonym("type ARRequest = AtomicReductionRequest<LPlusState, LAtomic_Path, L.Armada_PC, HState, HAtomic_Path, H.Armada_PC>", "defs");
 
       string str = @"
-        function GetArmadaReductionRequest() : ARRequest
+        function GetAtomicReductionRequest() : ARRequest
         {
-          ArmadaReductionRequest(LPlus_GetSpecFunctions(), H.Armada_GetSpecFunctions(),
+          AtomicReductionRequest(LAtomic_GetSpecFunctions(), HAtomic_GetSpecFunctions(),
                                  GetLPlusHRefinementRelation(), InductiveInv, GetLLRefinementRelation(),
-                                 ConvertTotalState_LPlusH, ConvertTraceEntry_LH, ConvertPC_LH, 
+                                 ConvertTotalState_LPlusH, ConvertAtomicPath_LH, ConvertPC_LH, 
                                  IsPhase1PC, IsPhase2PC, GenerateLeftMover, LeftMoverGenerationProgress)
         }
       ";
@@ -308,7 +303,7 @@ namespace Microsoft.Armada
 
       str = @"
         lemma lemma_LInitImpliesHInit(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+          requires arr == GetAtomicReductionRequest()
           ensures  LInitImpliesHInit(arr)
         {
           forall ls | arr.l.init(ls)
@@ -325,120 +320,171 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateRightMoverCommutativityLemmaWithSpecificOther(NextRoutine nextRoutine1, NextRoutine nextRoutine2)
+    private void GenerateRightMoverCommutativityLemmaWithSpecificOther(AtomicPath rightMoverPath, AtomicPath otherPath)
     {
       string str;
 
-      string nameSuffix1 = nextRoutine1.NameSuffix;
-      string nameSuffix2 = nextRoutine2.NameSuffix;
-      str = $@"
-        lemma lemma_RightMoverCommutativityWithSpecificOther_{nameSuffix1}_{nameSuffix2}(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          s2':LPlusState
-          )
-          requires InductiveInv(s1)
-          requires step1.Armada_TraceEntry_{nameSuffix1}?
-          requires step2.Armada_TraceEntry_{nameSuffix2}?
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step1.tid
-          requires tid in s2.s.threads
-          requires IsPhase1PC(s2.s.threads[tid].pc)
-          requires step2.Armada_TraceEntry_Tau? || step2.tid != tid
-          requires s2' == LPlus_GetNextStateAlways(s1, step2)
-          requires s3.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(s2', step1)
-          ensures  s3 == LPlus_GetNextStateAlways(s2', step1)
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "next_" + nameSuffix2);
+      var prRightMover = new ReductionPathPrinter(lAtomic, "right_mover", "initial_state", "state_after_right_mover",
+                                                  "right_mover", "mover_tid");
+      var prOther = new ReductionPathPrinter(lAtomic, "other_path", "state_after_right_mover", "state_after_both_paths",
+                                             "other_path", "other_tid");
+      var prOtherAlt = new ReductionPathPrinter(lAtomic, "right_mover_alt", "initial_state", "state_after_other_path",
+                                                "other_path", "other_tid");
+      var prRightMoverAlt = new ReductionPathPrinter(lAtomic, "other_path_alt", "state_after_other_path", "state_after_both_paths'",
+                                                     "right_mover", "mover_tid");
 
-      str = $@"
-        lemma lemma_RightMoverPreservesCrashWithSpecificOther_{nameSuffix1}_{nameSuffix2}(
-          initial_state:LPlusState,
-          state_after_right_mover:LPlusState,
-          state_after_both_steps:LPlusState,
-          right_mover:L.Armada_TraceEntry,
-          other_step:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_other_step':LPlusState
-          )
-          requires InductiveInv(initial_state)
-          requires right_mover.Armada_TraceEntry_{nameSuffix1}?
-          requires other_step.Armada_TraceEntry_{nameSuffix2}?
-          requires !right_mover.Armada_TraceEntry_Tau?
-          requires LPlus_ValidStep(initial_state, right_mover)
-          requires state_after_right_mover == LPlus_GetNextStateAlways(initial_state, right_mover)
-          requires LPlus_ValidStep(state_after_right_mover, other_step)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_right_mover, other_step)
-          requires tid == right_mover.tid
-          requires tid in state_after_right_mover.s.threads
-          requires IsPhase1PC(state_after_right_mover.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires state_after_other_step' == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(initial_state, other_step)
-          ensures  !state_after_other_step'.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_other_step')
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "next_" + nameSuffix2);
+      if (otherPath.Stopping) {
+        str = $@"
+          lemma lemma_RightMoverPreservesCrashWithSpecificOther_{rightMoverPath.Name}_{otherPath.Name}(
+            initial_state: LPlusState,
+            state_after_right_mover: LPlusState,
+            state_after_both_paths: LPlusState,
+            right_mover: LAtomic_Path,
+            other_path: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_other_path: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires right_mover.LAtomic_Path_{rightMoverPath.Name}?
+            requires other_path.LAtomic_Path_{otherPath.Name}?
+            requires !right_mover.LAtomic_Path_Tau?
+            requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+            requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+            requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+            requires mover_tid in state_after_right_mover.s.threads
+            requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+            ensures  !state_after_other_path.s.stop_reason.Armada_NotStopped?
+            ensures  LLPlusStateRefinement(state_after_both_paths, state_after_other_path)
+          {{
+            { prRightMover.GetOpenValidPathInvocation(rightMoverPath) }
+            { prOther.GetOpenValidPathInvocation(otherPath) }
+
+            { prOtherAlt.GetOpenPathInvocation(otherPath) }
+
+            /* { prOtherAlt.GetAssertValidPathInvocation(otherPath) } */
+
+            ProofCustomizationGoesHere();
+          }}
+        ";
+        pgp.AddLemma(str, "path_" + otherPath.Name);
+      }
+      else {
+        str = $@"
+          lemma lemma_RightMoverCommutativityWithSpecificOther_{rightMoverPath.Name}_{otherPath.Name}(
+            initial_state:LPlusState,
+            state_after_right_mover:LPlusState,
+            state_after_both_paths:LPlusState,
+            right_mover:LAtomic_Path,
+            other_path:LAtomic_Path,
+            mover_tid:Armada_ThreadHandle,
+            other_tid:Armada_ThreadHandle,
+            state_after_other_path:LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires right_mover.LAtomic_Path_{rightMoverPath.Name}?
+            requires other_path.LAtomic_Path_{otherPath.Name}?
+            requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+            requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+            requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+            requires mover_tid in state_after_right_mover.s.threads
+            requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+            ensures  LAtomic_ValidPath(state_after_other_path, right_mover, mover_tid)
+            ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, right_mover, mover_tid)
+          {{
+            var state_after_both_paths' := LAtomic_GetStateAfterPath(state_after_other_path, right_mover, mover_tid);
+
+            { prRightMover.GetOpenValidPathInvocation(rightMoverPath) }
+            { prOther.GetOpenValidPathInvocation(otherPath) }
+
+            { prOtherAlt.GetOpenPathInvocation(otherPath) }
+            { prRightMoverAlt.GetOpenPathInvocation(rightMoverPath) }
+
+            /* { prOtherAlt.GetAssertValidPathInvocation(otherPath) } */
+            /* { prRightMoverAlt.GetAssertValidPathInvocation(rightMoverPath) } */
+
+            ProofCustomizationGoesHere();
+          }}
+        ";
+        pgp.AddLemma(str, "path_" + otherPath.Name);
+      }
     }
 
-    private void GenerateSpecificRightMoverCommutativityLemmaCasePhase1(NextRoutine nextRoutine1)
+    private void GenerateSpecificRightMoverCommutativityLemma(AtomicPath rightMoverPath)
     {
-      var nextRoutine1Name = nextRoutine1.NameSuffix;
-
       var finalCasesCommutativity = "";
       var finalCasesCrashPreservation = "";
 
-      foreach (var nextRoutine2 in pgp.symbolsLow.NextRoutines) {
-        GenerateRightMoverCommutativityLemmaWithSpecificOther(nextRoutine1, nextRoutine2);
-        var nextRoutine2Name = nextRoutine2.NameSuffix;
-        var step_params = String.Join("", nextRoutine2.Formals.Select(f => $", _"));
-        finalCasesCommutativity += $"case Armada_TraceEntry_{nextRoutine2Name}(_{step_params}) => lemma_RightMoverCommutativityWithSpecificOther_{nextRoutine1Name}_{nextRoutine2Name}(s1, s2, s3, step1, step2, tid, s2');";
-        finalCasesCrashPreservation += $"case Armada_TraceEntry_{nextRoutine2Name}(_{step_params}) => lemma_RightMoverPreservesCrashWithSpecificOther_{nextRoutine1Name}_{nextRoutine2Name}(initial_state, state_after_right_mover, state_after_both_steps, right_mover, other_step, tid, state_after_other_step');";
+      foreach (var otherPath in lAtomic.AtomicPaths) {
+        GenerateRightMoverCommutativityLemmaWithSpecificOther(rightMoverPath, otherPath);
+
+        var caseIntro = $"case LAtomic_Path_{otherPath.Name}(_) =>\n";
+        finalCasesCommutativity += caseIntro;
+        finalCasesCrashPreservation += caseIntro;
+        
+        if (otherPath.Stopping) {
+          finalCasesCommutativity += $@"
+            lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(state_after_right_mover, other_path, other_tid);
+            assert !asf.state_ok(state_after_both_paths);
+            assert false;";
+          finalCasesCrashPreservation += $@"
+            lemma_RightMoverPreservesCrashWithSpecificOther_{rightMoverPath.Name}_{otherPath.Name}(
+              initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+              mover_tid, other_tid, state_after_other_path);";
+        }
+        else {
+          finalCasesCommutativity += $@"
+            lemma_RightMoverCommutativityWithSpecificOther_{rightMoverPath.Name}_{otherPath.Name}(
+              initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+              mover_tid, other_tid, state_after_other_path);";
+          finalCasesCrashPreservation += $@"
+            lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(state_after_right_mover, other_path, other_tid);
+            lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(state_after_right_mover, other_path, other_tid);
+            assert asf.state_ok(state_after_both_paths);
+            assert false;";
+        }
       }
 
       string str;
 
       str = $@"
-        lemma lemma_RightMoverCommutativity_{nextRoutine1Name}(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          s2':LPlusState
+        lemma lemma_RightMoverCommutativity_{rightMoverPath.Name}(
+          initial_state: LPlusState,
+          state_after_right_mover: LPlusState,
+          state_after_both_paths: LPlusState,
+          right_mover: LAtomic_Path,
+          other_path: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_other_path: LPlusState
           )
-          requires InductiveInv(s1)
-          requires step1.Armada_TraceEntry_{nextRoutine1Name}?
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step1.tid
-          requires tid in s2.s.threads
-          requires IsPhase1PC(s2.s.threads[tid].pc)
-          requires step2.Armada_TraceEntry_Tau? || step2.tid != tid
-          requires s2' == LPlus_GetNextStateAlways(s1, step2)
-          requires s3.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(s2', step1)
-          ensures  s3 == LPlus_GetNextStateAlways(s2', step1)
+          requires InductiveInv(initial_state)
+          requires right_mover.LAtomic_Path_{rightMoverPath.Name}?
+          requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+          requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+          requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+          requires mover_tid in state_after_right_mover.s.threads
+          requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+          ensures  LAtomic_ValidPath(state_after_other_path, right_mover, mover_tid)
+          ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, right_mover, mover_tid)
         {{
-          match step2 {{
+          var asf := LAtomic_GetSpecFunctions();
+          match other_path {{
             {finalCasesCommutativity}
           }}
         }}
@@ -446,32 +492,33 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = $@"
-        lemma lemma_RightMoverPreservesCrash_{nextRoutine1Name}(
-          initial_state:LPlusState,
-          state_after_right_mover:LPlusState,
-          state_after_both_steps:LPlusState,
-          right_mover:L.Armada_TraceEntry,
-          other_step:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_other_step':LPlusState
+        lemma lemma_RightMoverPreservesCrash_{rightMoverPath.Name}(
+          initial_state: LPlusState,
+          state_after_right_mover: LPlusState,
+          state_after_both_paths: LPlusState,
+          right_mover: LAtomic_Path,
+          other_path: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_other_path: LPlusState
           )
           requires InductiveInv(initial_state)
-          requires right_mover.Armada_TraceEntry_{nextRoutine1Name}?
-          requires LPlus_ValidStep(initial_state, right_mover)
-          requires state_after_right_mover == LPlus_GetNextStateAlways(initial_state, right_mover)
-          requires LPlus_ValidStep(state_after_right_mover, other_step)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_right_mover, other_step)
-          requires tid == right_mover.tid
-          requires tid in state_after_right_mover.s.threads
-          requires IsPhase1PC(state_after_right_mover.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires state_after_other_step' == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(initial_state, other_step)
-          ensures  !state_after_other_step'.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_other_step')
+          requires right_mover.LAtomic_Path_{rightMoverPath.Name}?
+          requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+          requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+          requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+          requires mover_tid in state_after_right_mover.s.threads
+          requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+          ensures  !state_after_other_path.s.stop_reason.Armada_NotStopped?
+          ensures  LLPlusStateRefinement(state_after_both_paths, state_after_other_path)
         {{
-          match other_step {{
+          var asf := LAtomic_GetSpecFunctions();
+          match other_path {{
             {finalCasesCrashPreservation}
           }}
         }}
@@ -479,100 +526,55 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateSpecificRightMoverCommutativityLemmaCaseNotPhase1(NextRoutine nextRoutine)
-    {
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      string str;
-
-      str = $@"
-        lemma lemma_RightMoverCommutativity_{nextRoutineName}(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          s2':LPlusState
-          )
-          requires InductiveInv(s1)
-          requires step1.Armada_TraceEntry_{nextRoutineName}?
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step1.tid
-          requires tid in s2.s.threads
-          requires IsPhase1PC(s2.s.threads[tid].pc)
-          requires step2.Armada_TraceEntry_Tau? || step2.tid != tid
-          requires s2' == LPlus_GetNextStateAlways(s1, step2)
-          requires s3.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(s2', step1)
-          ensures  s3 == LPlus_GetNextStateAlways(s2', step1)
-        {{
-          assert !IsPhase1PC(s2.s.threads[tid].pc);
-          assert false;
-        }}
-      ";
-      pgp.AddLemma(str);
-
-      str = $@"
-        lemma lemma_RightMoverPreservesCrash_{nextRoutineName}(
-          initial_state:LPlusState,
-          state_after_right_mover:LPlusState,
-          state_after_both_steps:LPlusState,
-          right_mover:L.Armada_TraceEntry,
-          other_step:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_other_step':LPlusState
-          )
-          requires InductiveInv(initial_state)
-          requires right_mover.Armada_TraceEntry_{nextRoutineName}?
-          requires LPlus_ValidStep(initial_state, right_mover)
-          requires state_after_right_mover == LPlus_GetNextStateAlways(initial_state, right_mover)
-          requires LPlus_ValidStep(state_after_right_mover, other_step)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_right_mover, other_step)
-          requires tid == right_mover.tid
-          requires tid in state_after_right_mover.s.threads
-          requires IsPhase1PC(state_after_right_mover.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires state_after_other_step' == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(initial_state, other_step)
-          ensures  !state_after_other_step'.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_other_step')
-        {{
-          assert !IsPhase1PC(state_after_right_mover.s.threads[tid].pc);
-          assert false;
-        }}
-      ";
-      pgp.AddLemma(str);
-    }
-
-    private void GenerateSpecificRightMoverCommutativityLemma(NextRoutine nextRoutine)
-    {
-      var pc = nextRoutine.endPC;
-      if (pc != null && phase1PCs.Contains(pc)) {
-        GenerateSpecificRightMoverCommutativityLemmaCasePhase1(nextRoutine);
-        return;
-      }
-
-      GenerateSpecificRightMoverCommutativityLemmaCaseNotPhase1(nextRoutine);
-    }
-
     private void GenerateRightMoverCommutativityLemmas()
     {
-      var finalCasesCommutativity = "";
-      var finalCasesCrashPreservation = "";
+      string finalCasesCommutativity = "";
+      string finalCasesCrashPreservation = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        if (nextRoutine.nextType != NextType.Tau) {
-          GenerateSpecificRightMoverCommutativityLemma(nextRoutine);
-          var nextRoutineName = nextRoutine.NameSuffix;
-          var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-          finalCasesCommutativity += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RightMoverCommutativity_{nextRoutineName}(s1, s2, s3, step1, step2, tid, s2');";
-          finalCasesCrashPreservation += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_RightMoverPreservesCrash_{nextRoutineName}(initial_state, state_after_right_mover, state_after_both_steps, right_mover, other_step, tid, state_after_other_step');";
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+
+        var caseIntro = $"case LAtomic_Path_{atomicPath.Name}(_) =>\n";
+        finalCasesCommutativity += caseIntro;
+        finalCasesCrashPreservation += caseIntro;
+        
+        if (atomicPath.Tau) {
+          finalCasesCommutativity += $@"
+            assert right_mover.LAtomic_Path_Tau?;
+            assert false;";
+          finalCasesCrashPreservation += $@"
+            assert right_mover.LAtomic_Path_Tau?;
+            assert false;";
+        }
+        else if (atomicPath.Stopping) {
+          finalCasesCommutativity += $@"
+              lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(initial_state, right_mover, mover_tid);
+              assert !asf.state_ok(state_after_right_mover);
+              assert false;";
+          finalCasesCrashPreservation += $@"
+              lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(initial_state, right_mover, mover_tid);
+              assert !asf.state_ok(state_after_right_mover);
+              assert false;";
+        }
+        else if (phase1PCs.Contains(atomicPath.EndPC)) {
+          GenerateSpecificRightMoverCommutativityLemma(atomicPath);
+          finalCasesCommutativity += $@"
+            lemma_RightMoverCommutativity_{atomicPath.Name}(
+              initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+              mover_tid, other_tid, state_after_other_path);";
+          finalCasesCrashPreservation += $@"
+            lemma_RightMoverPreservesCrash_{atomicPath.Name}(
+              initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+              mover_tid, other_tid, state_after_other_path);";
+        }
+        else {
+          finalCasesCommutativity += $@"
+            lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(initial_state, right_mover, mover_tid);
+            assert !IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc);
+            assert false;";
+          finalCasesCrashPreservation += $@"
+            lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(initial_state, right_mover, mover_tid);
+            assert !IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc);
+            assert false;";
         }
       }
 
@@ -580,32 +582,34 @@ namespace Microsoft.Armada
 
       str = $@"
         lemma lemma_RightMoverCommutativity(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          s2':LPlusState
+          initial_state: LPlusState,
+          state_after_right_mover: LPlusState,
+          state_after_both_paths: LPlusState,
+          right_mover: LAtomic_Path,
+          other_path: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_other_path: LPlusState
           )
-          requires InductiveInv(s1)
-          requires !step1.Armada_TraceEntry_Tau?
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step1.tid
-          requires tid in s2.s.threads
-          requires IsPhase1PC(s2.s.threads[tid].pc)
-          requires step2.Armada_TraceEntry_Tau? || step2.tid != tid
-          requires s2' == LPlus_GetNextStateAlways(s1, step2)
-          requires s3.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(s2', step1)
-          ensures  s3 == LPlus_GetNextStateAlways(s2', step1)
+          requires InductiveInv(initial_state)
+          requires !right_mover.LAtomic_Path_Tau?
+          requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+          requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+          requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+          requires mover_tid in state_after_right_mover.s.threads
+          requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+          ensures  LAtomic_ValidPath(state_after_other_path, right_mover, mover_tid)
+          ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, right_mover, mover_tid)
         {{
-          match step1 {{
-            case Armada_TraceEntry_Tau(_) => assert false;
+          var asf := LAtomic_GetSpecFunctions();
+          lemma_LAtomic_PathImpliesThreadRunning(state_after_right_mover, other_path, other_tid);
+          assert asf.state_ok(state_after_right_mover);
+          match right_mover {{
             {finalCasesCommutativity}
           }}
         }}
@@ -614,32 +618,33 @@ namespace Microsoft.Armada
 
       str = $@"
         lemma lemma_RightMoverPreservesCrash(
-          initial_state:LPlusState,
-          state_after_right_mover:LPlusState,
-          state_after_both_steps:LPlusState,
-          right_mover:L.Armada_TraceEntry,
-          other_step:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_other_step':LPlusState
+          initial_state: LPlusState,
+          state_after_right_mover: LPlusState,
+          state_after_both_paths: LPlusState,
+          right_mover: LAtomic_Path,
+          other_path: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_other_path: LPlusState
           )
           requires InductiveInv(initial_state)
-          requires !right_mover.Armada_TraceEntry_Tau?
-          requires LPlus_ValidStep(initial_state, right_mover)
-          requires state_after_right_mover == LPlus_GetNextStateAlways(initial_state, right_mover)
-          requires LPlus_ValidStep(state_after_right_mover, other_step)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_right_mover, other_step)
-          requires tid == right_mover.tid
-          requires tid in state_after_right_mover.s.threads
-          requires IsPhase1PC(state_after_right_mover.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires state_after_other_step' == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LPlus_ValidStep(initial_state, other_step)
-          ensures  !state_after_other_step'.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_other_step')
+          requires !right_mover.LAtomic_Path_Tau?
+          requires LAtomic_ValidPath(initial_state, right_mover, mover_tid)
+          requires state_after_right_mover == LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid)
+          requires LAtomic_ValidPath(state_after_right_mover, other_path, other_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid)
+          requires mover_tid in state_after_right_mover.s.threads
+          requires IsPhase1PC(state_after_right_mover.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LAtomic_ValidPath(initial_state, other_path, other_tid)
+          ensures  !state_after_other_path.s.stop_reason.Armada_NotStopped?
+          ensures  LLPlusStateRefinement(state_after_both_paths, state_after_other_path)
         {{
+          var asf := LAtomic_GetSpecFunctions();
+          lemma_LAtomic_PathImpliesThreadRunning(state_after_right_mover, other_path, other_tid);
           match right_mover {{
-            case Armada_TraceEntry_Tau(_) => assert false;
             {finalCasesCrashPreservation}
           }}
         }}
@@ -647,219 +652,328 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateLeftMoverCommutativityLemmaWithSpecificOther(NextRoutine nextRoutine1, NextRoutine nextRoutine2)
+    private void GenerateLeftMoverCommutativityLemmaWithSpecificOther(AtomicPath otherPath, AtomicPath leftMoverPath)
     {
       string str;
 
-      string nameSuffix1 = nextRoutine1.NameSuffix;
-      string nameSuffix2 = nextRoutine2.NameSuffix;
-      str = $@"
-        lemma lemma_LeftMoverCommutativityWithSpecificOther_{nameSuffix1}_{nameSuffix2}(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle
-          )
-          requires InductiveInv(s1)
-          requires step1.Armada_TraceEntry_{nameSuffix1}?
-          requires step2.Armada_TraceEntry_{nameSuffix2}?
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step2.tid
-          requires tid in s2.s.threads
-          requires IsPhase2PC(s2.s.threads[tid].pc)
-          requires step1.Armada_TraceEntry_Tau? || step1.tid != tid
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(LPlus_GetNextStateAlways(s1, step2), step1)
-          ensures  s3 == LPlus_GetNextStateAlways(LPlus_GetNextStateAlways(s1, step2), step1)
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "next_" + nameSuffix1);
+      if (!otherPath.Stopping && !leftMoverPath.Stopping) {
+        var prOther = new ReductionPathPrinter(lAtomic, "other_path", "initial_state", "state_after_othe_path", "other_path", "other_tid");
+        var prLeftMover = new ReductionPathPrinter(lAtomic, "left_mover", "state_after_other_path", "state_after_both_paths",
+                                                   "left_mover", "mover_tid");
+        var prLeftMoverAlt = new ReductionPathPrinter(lAtomic, "left_mover_alt", "initial_state", "state_after_left_mover",
+                                                      "left_mover", "mover_tid");
+        var prOtherAlt = new ReductionPathPrinter(lAtomic, "other_path_alt", "state_after_left_mover", "state_after_both_paths'",
+                                                  "other_path", "other_tid");
 
-      str = $@"
-        lemma lemma_LeftMoverPreservesCrashWithSpecificOther_{nameSuffix1}_{nameSuffix2}(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_left_mover:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_both_steps:LPlusState
-          )
-          requires InductiveInv(initial_state)
-          requires other_step.Armada_TraceEntry_{nameSuffix1}?
-          requires left_mover.Armada_TraceEntry_{nameSuffix2}?
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(initial_state, left_mover)
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          requires tid == left_mover.tid
-          requires tid in initial_state.s.threads
-          requires IsPhase2PC(initial_state.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires !state_after_other_step.s.stop_reason.Armada_NotStopped?
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_left_mover, other_step)
-          ensures  LPlus_ValidStep(state_after_left_mover, other_step)
-          ensures  !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_other_step, state_after_both_steps)
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "next_" + nameSuffix1);
+        str = $@"
+          lemma lemma_LeftMoverCommutativityWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+            initial_state: LPlusState,
+            state_after_other_path: LPlusState,
+            state_after_both_paths: LPlusState,
+            other_path: LAtomic_Path,
+            left_mover: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_left_mover: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires other_path.LAtomic_Path_{otherPath.Name}?
+            requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+            requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+            requires mover_tid in state_after_other_path.s.threads
+            requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(state_after_left_mover, other_path, other_tid)
+            ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
+          {{
+            var state_after_both_paths' := LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid);
 
-      str = $@"
-        lemma lemma_LeftMoverPreservesSelfCrashWithSpecificOther_{nameSuffix1}_{nameSuffix2}(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_both_steps:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_left_mover:LPlusState
-          )
-          requires InductiveInv(initial_state)
-          requires other_step.Armada_TraceEntry_{nameSuffix1}?
-          requires left_mover.Armada_TraceEntry_{nameSuffix2}?
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(state_after_other_step, left_mover)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_other_step, left_mover)
-          requires tid == left_mover.tid
-          requires tid in state_after_other_step.s.threads
-          requires IsPhase2PC(state_after_other_step.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires initial_state.s.stop_reason.Armada_NotStopped?
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          ensures  LPlus_ValidStep(initial_state, left_mover)
-          ensures  !state_after_left_mover.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_left_mover)
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "next_" + nameSuffix1);
+            { prOther.GetOpenValidPathInvocation(otherPath) }
+            { prLeftMover.GetOpenValidPathInvocation(leftMoverPath) }
+
+            { prLeftMoverAlt.GetOpenPathInvocation(leftMoverPath) }
+            { prOtherAlt.GetOpenPathInvocation(otherPath) }
+
+            /* { prLeftMoverAlt.GetAssertValidPathInvocation(leftMoverPath) } */
+            /* { prOtherAlt.GetAssertValidPathInvocation(otherPath) } */
+
+            ProofCustomizationGoesHere();
+          }}
+        ";
+        pgp.AddLemma(str, "path_" + otherPath.Name);
+      }
+
+      if (otherPath.Stopping) {
+        var prOther = new ReductionPathPrinter(lAtomic, "other_path", "initial_state", "state_after_other_path", "other_path", "other_tid");
+        var prLeftMover = new ReductionPathPrinter(lAtomic, "left_mover", "initial_state", "state_after_left_mover",
+                                                   "left_mover", "mover_tid");
+        var prOtherAlt = new ReductionPathPrinter(lAtomic, "other_path_alt", "state_after_left_mover", "state_after_both_paths",
+                                                  "other_path", "other_tid");
+
+        str = $@"
+          lemma lemma_LeftMoverPreservesCrashWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+            initial_state: LPlusState,
+            state_after_other_path: LPlusState,
+            state_after_left_mover: LPlusState,
+            other_path: LAtomic_Path,
+            left_mover: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_both_paths: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires other_path.LAtomic_Path_{otherPath.Name}?
+            requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+            requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+            requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+            requires mover_tid in initial_state.s.threads
+            requires IsPhase2PC(initial_state.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires !state_after_other_path.s.stop_reason.Armada_NotStopped?
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
+            ensures  LAtomic_ValidPath(state_after_left_mover, other_path, other_tid)
+            ensures  !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            ensures  LLPlusStateRefinement(state_after_other_path, state_after_both_paths)
+          {{
+            { prOther.GetOpenValidPathInvocation(otherPath) }
+            { prLeftMover.GetOpenValidPathInvocation(leftMoverPath) }
+
+            { prOtherAlt.GetOpenPathInvocation(otherPath) }
+
+            /* { prOtherAlt.GetAssertValidPathInvocation(otherPath) } */
+
+            ProofCustomizationGoesHere();
+          }}
+        ";
+        pgp.AddLemma(str, "path_" + otherPath.Name);
+      }
+
+      if (!otherPath.Stopping && leftMoverPath.Stopping) {
+        var prOther = new ReductionPathPrinter(lAtomic, "other_path", "initial_state", "state_after_other_path", "other_path", "other_tid");
+        var prLeftMover = new ReductionPathPrinter(lAtomic, "left_mover", "state_after_other_path", "state_after_both_paths",
+                                                   "left_mover", "mover_tid");
+        var prLeftMoverAlt = new ReductionPathPrinter(lAtomic, "left_mover_alt", "initial_state", "state_after_left_mover",
+                                                      "left_mover", "mover_tid");
+
+        str = $@"
+          lemma lemma_LeftMoverPreservesSelfCrashWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+            initial_state: LPlusState,
+            state_after_other_path: LPlusState,
+            state_after_both_paths: LPlusState,
+            other_path: LAtomic_Path,
+            left_mover: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_left_mover: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires other_path.LAtomic_Path_{otherPath.Name}?
+            requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+            requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+            requires mover_tid in state_after_other_path.s.threads
+            requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires initial_state.s.stop_reason.Armada_NotStopped?
+            requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+            ensures  !state_after_left_mover.s.stop_reason.Armada_NotStopped?
+            ensures  LLPlusStateRefinement(state_after_both_paths, state_after_left_mover)
+          {{
+            { prOther.GetOpenValidPathInvocation(otherPath) }
+            { prLeftMover.GetOpenValidPathInvocation(leftMoverPath) }
+
+            { prLeftMoverAlt.GetOpenPathInvocation(leftMoverPath) }
+
+            /* { prLeftMoverAlt.GetAssertValidPathInvocation(leftMoverPath) } */
+
+            ProofCustomizationGoesHere();
+          }}
+        ";
+        pgp.AddLemma(str, "path_" + otherPath.Name);
+      }
     }
 
-    private void GenerateSpecificLeftMoverCommutativityLemma(NextRoutine nextRoutine2)
+    private void GenerateSpecificLeftMoverCommutativityLemma(AtomicPath leftMoverPath)
     {
-      var nextRoutine2Name = nextRoutine2.NameSuffix;
-
       var finalCasesCommutativity = "";
       var finalCasesCrashPreservation = "";
       var finalCasesSelfCrashPreservation = "";
 
-      foreach (var nextRoutine1 in pgp.symbolsLow.NextRoutines) {
-        GenerateLeftMoverCommutativityLemmaWithSpecificOther(nextRoutine1, nextRoutine2);
-        var nextRoutine1Name = nextRoutine1.NameSuffix;
-        var step_params = String.Join("", nextRoutine1.Formals.Select(f => $", _"));
-        finalCasesCommutativity += $"case Armada_TraceEntry_{nextRoutine1Name}(_{step_params}) => lemma_LeftMoverCommutativityWithSpecificOther_{nextRoutine1Name}_{nextRoutine2Name}(s1, s2, s3, step1, step2, tid);";
-        finalCasesCrashPreservation += $"case Armada_TraceEntry_{nextRoutine1Name}(_{step_params}) => lemma_LeftMoverPreservesCrashWithSpecificOther_{nextRoutine1Name}_{nextRoutine2Name}(initial_state, state_after_other_step, state_after_left_mover, other_step, left_mover, tid, state_after_both_steps);";
-        finalCasesSelfCrashPreservation += $"case Armada_TraceEntry_{nextRoutine1Name}(_{step_params}) => lemma_LeftMoverPreservesSelfCrashWithSpecificOther_{nextRoutine1Name}_{nextRoutine2Name}(initial_state, state_after_other_step, state_after_both_steps, other_step, left_mover, tid, state_after_left_mover);";
+      foreach (var otherPath in lAtomic.AtomicPaths) {
+        GenerateLeftMoverCommutativityLemmaWithSpecificOther(otherPath, leftMoverPath);
+
+        var caseIntro = $"case LAtomic_Path_{otherPath.Name}(_) =>\n";
+
+        if (!leftMoverPath.Stopping) {
+          finalCasesCommutativity += caseIntro;
+          if (otherPath.Stopping) {
+            finalCasesCommutativity += $@"
+              lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(initial_state, other_path, other_tid);
+              assert !asf.state_ok(state_after_other_path);
+              assert false;";
+          }
+          else {
+            finalCasesCommutativity += $@"
+              lemma_LeftMoverCommutativityWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+                initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                mover_tid, other_tid, state_after_left_mover);";
+          }
+        }
+
+        finalCasesCrashPreservation += caseIntro;
+        if (otherPath.Stopping) {
+          finalCasesCrashPreservation += $@"
+            lemma_LeftMoverPreservesCrashWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+              initial_state, state_after_other_path, state_after_left_mover, other_path, left_mover,
+              mover_tid, other_tid, state_after_both_paths);";
+        }
+        else {
+          finalCasesCrashPreservation += $@"
+            lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(initial_state, other_path, other_tid);
+            lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(initial_state, other_path, other_tid);
+            assert asf.state_ok(state_after_other_path);
+            assert false;";
+        }
+
+        if (leftMoverPath.Stopping) {
+          finalCasesSelfCrashPreservation += caseIntro;
+          if (otherPath.Stopping) {
+            finalCasesSelfCrashPreservation += $@"
+              lemma_LAtomic_PathHasPCEffect_{otherPath.Name}(initial_state, other_path, other_tid);
+              assert !asf.state_ok(state_after_other_path);
+              assert false;";
+          }
+          else {
+            finalCasesSelfCrashPreservation += $@"
+              lemma_LeftMoverPreservesSelfCrashWithSpecificOther_{otherPath.Name}_{leftMoverPath.Name}(
+                initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                mover_tid, other_tid, state_after_left_mover);";
+          }
+        }
       }
 
       string str;
 
-      str = $@"
-        lemma lemma_LeftMoverCommutativity_{nextRoutine2Name}(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle
-          )
-          requires InductiveInv(s1)
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires step2.Armada_TraceEntry_{nextRoutine2Name}?
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step2.tid
-          requires tid in s2.s.threads
-          requires IsPhase2PC(s2.s.threads[tid].pc)
-          requires step1.Armada_TraceEntry_Tau? || step1.tid != tid
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(LPlus_GetNextStateAlways(s1, step2), step1)
-          ensures  s3 == LPlus_GetNextStateAlways(LPlus_GetNextStateAlways(s1, step2), step1)
-        {{
-          match step1 {{
-            {finalCasesCommutativity}
+      if (!leftMoverPath.Stopping) {
+        str = $@"
+          lemma lemma_LeftMoverCommutativity_{leftMoverPath.Name}(
+            initial_state: LPlusState,
+            state_after_other_path: LPlusState,
+            state_after_both_paths: LPlusState,
+            other_path: LAtomic_Path,
+            left_mover: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_left_mover: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+            requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+            requires mover_tid in state_after_other_path.s.threads
+            requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(state_after_left_mover, other_path, other_tid)
+            ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
+          {{
+            var asf := LAtomic_GetSpecFunctions();
+            lemma_LAtomic_PathImpliesThreadRunning(state_after_other_path, left_mover, mover_tid);
+            match other_path {{
+              {finalCasesCommutativity}
+            }}
           }}
-        }}
-      ";
-      pgp.AddLemma(str);
+        ";
+        pgp.AddLemma(str);
+      }
 
       str = $@"
-        lemma lemma_LeftMoverPreservesCrash_{nextRoutine2Name}(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_left_mover:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_both_steps:LPlusState
+        lemma lemma_LeftMoverPreservesCrash_{leftMoverPath.Name}(
+          initial_state: LPlusState,
+          state_after_other_path: LPlusState,
+          state_after_left_mover: LPlusState,
+          other_path: LAtomic_Path,
+          left_mover: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_both_paths: LPlusState
           )
           requires InductiveInv(initial_state)
-          requires left_mover.Armada_TraceEntry_{nextRoutine2Name}?
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(initial_state, left_mover)
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          requires tid == left_mover.tid
-          requires tid in initial_state.s.threads
-          requires IsPhase2PC(initial_state.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires !state_after_other_step.s.stop_reason.Armada_NotStopped?
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_left_mover, other_step)
-          ensures  LPlus_ValidStep(state_after_left_mover, other_step)
-          ensures  !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_other_step, state_after_both_steps)
+          requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+          requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+          requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+          requires mover_tid in initial_state.s.threads
+          requires IsPhase2PC(initial_state.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires !state_after_other_path.s.stop_reason.Armada_NotStopped?
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
+          ensures  LAtomic_ValidPath(state_after_left_mover, other_path, other_tid)
+          ensures  !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LLPlusStateRefinement(state_after_other_path, state_after_both_paths)
         {{
-          match other_step {{
+          var asf := LAtomic_GetSpecFunctions();
+          match other_path {{
             {finalCasesCrashPreservation}
           }}
         }}
       ";
       pgp.AddLemma(str);
 
-      str = $@"
-        lemma lemma_LeftMoverPreservesSelfCrash_{nextRoutine2Name}(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_both_steps:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_left_mover:LPlusState
-          )
-          requires InductiveInv(initial_state)
-          requires left_mover.Armada_TraceEntry_{nextRoutine2Name}?
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(state_after_other_step, left_mover)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_other_step, left_mover)
-          requires tid == left_mover.tid
-          requires tid in state_after_other_step.s.threads
-          requires IsPhase2PC(state_after_other_step.s.threads[tid].pc)
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires initial_state.s.stop_reason.Armada_NotStopped?
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          ensures  LPlus_ValidStep(initial_state, left_mover)
-          ensures  !state_after_left_mover.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_left_mover)
-        {{
-          match other_step {{
-            {finalCasesSelfCrashPreservation}
+      if (leftMoverPath.Stopping) {
+        str = $@"
+          lemma lemma_LeftMoverPreservesSelfCrash_{leftMoverPath.Name}(
+            initial_state: LPlusState,
+            state_after_other_path: LPlusState,
+            state_after_both_paths: LPlusState,
+            other_path: LAtomic_Path,
+            left_mover: LAtomic_Path,
+            mover_tid: Armada_ThreadHandle,
+            other_tid: Armada_ThreadHandle,
+            state_after_left_mover: LPlusState
+            )
+            requires InductiveInv(initial_state)
+            requires left_mover.LAtomic_Path_{leftMoverPath.Name}?
+            requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+            requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+            requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+            requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+            requires mover_tid in state_after_other_path.s.threads
+            requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+            requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+            requires initial_state.s.stop_reason.Armada_NotStopped?
+            requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+            requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+            ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+            ensures  !state_after_left_mover.s.stop_reason.Armada_NotStopped?
+            ensures  LLPlusStateRefinement(state_after_both_paths, state_after_left_mover)
+          {{
+            var asf := LAtomic_GetSpecFunctions();
+            lemma_LAtomic_PathImpliesThreadRunning(state_after_other_path, left_mover, mover_tid);
+            match other_path {{
+              {finalCasesSelfCrashPreservation}
+            }}
           }}
-        }}
-      ";
-      pgp.AddLemma(str);
+        ";
+        pgp.AddLemma(str);
+      }
     }
 
     private void GenerateLeftMoverCommutativityLemmas()
@@ -868,20 +982,72 @@ namespace Microsoft.Armada
       var finalCasesCrashPreservation = "";
       var finalCasesSelfCrashPreservation = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        if (nextRoutine.nextType != NextType.Tau) {
-          var nextRoutineName = nextRoutine.NameSuffix;
-          var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-          if (phase2PCs.Contains(nextRoutine.pc)) {
-            GenerateSpecificLeftMoverCommutativityLemma(nextRoutine);
-            finalCasesCommutativity += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_LeftMoverCommutativity_{nextRoutineName}(s1, s2, s3, step1, step2, tid);";
-            finalCasesCrashPreservation += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_LeftMoverPreservesCrash_{nextRoutineName}(initial_state, state_after_other_step, state_after_left_mover, other_step, left_mover, tid, state_after_both_steps);";
-            finalCasesSelfCrashPreservation += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => lemma_LeftMoverPreservesSelfCrash_{nextRoutineName}(initial_state, state_after_other_step, state_after_both_steps, other_step, left_mover, tid, state_after_left_mover);";
+      foreach (var atomicPath in lAtomic.AtomicPaths)
+      {
+        string caseIntro = $"case LAtomic_Path_{atomicPath.Name}(_) =>\n";
+        finalCasesCommutativity += caseIntro;
+        finalCasesCrashPreservation += caseIntro;
+        finalCasesSelfCrashPreservation += caseIntro;
+
+        if (atomicPath.Tau)
+        {
+          finalCasesCommutativity += $@"
+            assert left_mover.LAtomic_Path_Tau?;
+            assert false;";
+          finalCasesCrashPreservation += $@"
+            assert left_mover.LAtomic_Path_Tau?;
+            assert false;";
+          finalCasesSelfCrashPreservation += $@"
+            assert left_mover.LAtomic_Path_Tau?;
+            assert false;";
+        }
+        else if (!phase2PCs.Contains(atomicPath.StartPC))
+        {
+          finalCasesCommutativity += $@"
+            lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(state_after_other_path, left_mover, mover_tid);
+            assert !IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc);
+            assert false;";
+          finalCasesCrashPreservation += $@"
+            lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(initial_state, left_mover, mover_tid);
+            assert !IsPhase2PC(initial_state.s.threads[mover_tid].pc);
+            assert false;";
+          finalCasesSelfCrashPreservation += $@"
+            lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(state_after_other_path, left_mover, mover_tid);
+            assert !IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc);
+            assert false;";
+        }
+        else {
+          GenerateSpecificLeftMoverCommutativityLemma(atomicPath);
+
+          if (atomicPath.Stopping) {
+            finalCasesCommutativity += $@"
+              lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(state_after_other_path, left_mover, mover_tid);
+              assert !asf.state_ok(state_after_both_paths);
+              assert false;";
           }
           else {
-            finalCasesCommutativity += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => assert false;";
-            finalCasesCrashPreservation += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => assert false;";
-            finalCasesSelfCrashPreservation += $"case Armada_TraceEntry_{nextRoutineName}(_{step_params}) => assert false;";
+            finalCasesCommutativity += $@"
+              lemma_LeftMoverCommutativity_{atomicPath.Name}(
+                initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                mover_tid, other_tid, state_after_left_mover);";
+          }
+
+          finalCasesCrashPreservation += $@"
+            lemma_LeftMoverPreservesCrash_{atomicPath.Name}(
+              initial_state, state_after_other_path, state_after_left_mover, other_path, left_mover,
+              mover_tid, other_tid, state_after_both_paths);";
+
+          if (atomicPath.Stopping) {
+            finalCasesSelfCrashPreservation += $@"
+              lemma_LeftMoverPreservesSelfCrash_{atomicPath.Name}(
+                initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                mover_tid, other_tid, state_after_left_mover);";
+          }
+          else {
+            finalCasesSelfCrashPreservation += $@"
+              lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(state_after_other_path, left_mover, mover_tid);
+              assert asf.state_ok(state_after_both_paths);
+              assert false;";
           }
         }
       }
@@ -890,29 +1056,32 @@ namespace Microsoft.Armada
 
       str = $@"
         lemma lemma_LeftMoverCommutativity(
-          s1:LPlusState,
-          s2:LPlusState,
-          s3:LPlusState,
-          step1:L.Armada_TraceEntry,
-          step2:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle
+          initial_state: LPlusState,
+          state_after_other_path: LPlusState,
+          state_after_both_paths: LPlusState,
+          other_path: LAtomic_Path,
+          left_mover: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_left_mover: LPlusState
           )
-          requires InductiveInv(s1)
-          requires LPlus_ValidStep(s1, step1)
-          requires s2 == LPlus_GetNextStateAlways(s1, step1)
-          requires !step2.Armada_TraceEntry_Tau?
-          requires LPlus_ValidStep(s2, step2)
-          requires s3 == LPlus_GetNextStateAlways(s2, step2)
-          requires tid == step2.tid
-          requires tid in s2.s.threads
-          requires IsPhase2PC(s2.s.threads[tid].pc)
-          requires step1.Armada_TraceEntry_Tau? || step1.tid != tid
-          ensures  LPlus_ValidStep(s1, step2)
-          ensures  LPlus_ValidStep(LPlus_GetNextStateAlways(s1, step2), step1)
-          ensures  s3 == LPlus_GetNextStateAlways(LPlus_GetNextStateAlways(s1, step2), step1)
+          requires InductiveInv(initial_state)
+          requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires !left_mover.LAtomic_Path_Tau?
+          requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+          requires mover_tid in state_after_other_path.s.threads
+          requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid);
+          ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+          ensures  LAtomic_ValidPath(LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid), other_path, other_tid)
+          ensures  state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
         {{
-          match step2 {{
-            case Armada_TraceEntry_Tau(_) => assert false;
+          var asf := LAtomic_GetSpecFunctions();
+          match left_mover {{
             {finalCasesCommutativity}
           }}
         }}
@@ -921,32 +1090,32 @@ namespace Microsoft.Armada
 
       str = $@"
         lemma lemma_LeftMoverPreservesCrash(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_left_mover:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_both_steps:LPlusState
+          initial_state: LPlusState,
+          state_after_other_path: LPlusState,
+          state_after_left_mover: LPlusState,
+          other_path: LAtomic_Path,
+          left_mover: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_both_paths: LPlusState
           )
           requires InductiveInv(initial_state)
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(initial_state, left_mover)
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          requires tid == left_mover.tid
-          requires tid in initial_state.s.threads
-          requires IsPhase2PC(initial_state.s.threads[tid].pc)
-          requires !left_mover.Armada_TraceEntry_Tau?
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
-          requires !state_after_other_step.s.stop_reason.Armada_NotStopped?
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_left_mover, other_step)
-          ensures  LPlus_ValidStep(state_after_left_mover, other_step)
-          ensures  !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_other_step, state_after_both_steps)
+          requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires LAtomic_ValidPath(initial_state, left_mover, mover_tid)
+          requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+          requires mover_tid in initial_state.s.threads
+          requires IsPhase2PC(initial_state.s.threads[mover_tid].pc)
+          requires !left_mover.LAtomic_Path_Tau?
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
+          requires !state_after_other_path.s.stop_reason.Armada_NotStopped?
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_left_mover, other_path, other_tid)
+          ensures  LAtomic_ValidPath(state_after_left_mover, other_path, other_tid)
+          ensures  !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          ensures  LLPlusStateRefinement(state_after_other_path, state_after_both_paths)
         {{
+          var asf := LAtomic_GetSpecFunctions();
           match left_mover {{
-            case Armada_TraceEntry_Tau(_) => assert false;
             {finalCasesCrashPreservation}
           }}
         }}
@@ -955,34 +1124,34 @@ namespace Microsoft.Armada
 
       str = $@"
         lemma lemma_LeftMoverPreservesSelfCrash(
-          initial_state:LPlusState,
-          state_after_other_step:LPlusState,
-          state_after_both_steps:LPlusState,
-          other_step:L.Armada_TraceEntry,
-          left_mover:L.Armada_TraceEntry,
-          tid:Armada_ThreadHandle,
-          state_after_left_mover:LPlusState
+          initial_state: LPlusState,
+          state_after_other_path: LPlusState,
+          state_after_both_paths: LPlusState,
+          other_path: LAtomic_Path,
+          left_mover: LAtomic_Path,
+          mover_tid: Armada_ThreadHandle,
+          other_tid: Armada_ThreadHandle,
+          state_after_left_mover: LPlusState
           )
           requires InductiveInv(initial_state)
-          requires LPlus_ValidStep(initial_state, other_step)
-          requires state_after_other_step == LPlus_GetNextStateAlways(initial_state, other_step)
-          requires LPlus_ValidStep(state_after_other_step, left_mover)
-          requires state_after_both_steps == LPlus_GetNextStateAlways(state_after_other_step, left_mover)
-          requires tid == left_mover.tid
-          requires tid in state_after_other_step.s.threads
-          requires IsPhase2PC(state_after_other_step.s.threads[tid].pc)
-          requires !left_mover.Armada_TraceEntry_Tau?
-          requires other_step.Armada_TraceEntry_Tau? || other_step.tid != tid
+          requires LAtomic_ValidPath(initial_state, other_path, other_tid)
+          requires state_after_other_path == LAtomic_GetStateAfterPath(initial_state, other_path, other_tid)
+          requires LAtomic_ValidPath(state_after_other_path, left_mover, mover_tid)
+          requires state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, left_mover, mover_tid)
+          requires mover_tid in state_after_other_path.s.threads
+          requires IsPhase2PC(state_after_other_path.s.threads[mover_tid].pc)
+          requires !left_mover.LAtomic_Path_Tau?
+          requires other_path.LAtomic_Path_Tau? || other_tid != mover_tid
           requires initial_state.s.stop_reason.Armada_NotStopped?
-          requires !state_after_both_steps.s.stop_reason.Armada_NotStopped?
-          requires state_after_left_mover == LPlus_GetNextStateAlways(initial_state, left_mover)
-          ensures  LPlus_ValidStep(initial_state, left_mover)
+          requires !state_after_both_paths.s.stop_reason.Armada_NotStopped?
+          requires state_after_left_mover == LAtomic_GetStateAfterPath(initial_state, left_mover, mover_tid)
+          ensures  LAtomic_ValidPath(initial_state, left_mover, mover_tid)
           ensures  !state_after_left_mover.s.stop_reason.Armada_NotStopped?
-          ensures  LLPlusStateRefinement(state_after_both_steps, state_after_left_mover)
+          ensures  LLPlusStateRefinement(state_after_both_paths, state_after_left_mover)
         {{
+          var asf := LAtomic_GetSpecFunctions();
           match left_mover {{
-            case Armada_TraceEntry_Tau(_) => assert false;
-            {finalCasesCrashPreservation}
+            {finalCasesSelfCrashPreservation}
           }}
         }}
       ";
@@ -994,8 +1163,8 @@ namespace Microsoft.Armada
       string str;
 
       str = @"
-        lemma lemma_LHYieldingCorrespondence(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LHYieldingCorrespondence(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LHYieldingCorrespondence(arr)
         {
           forall lpc:L.Armada_PC
@@ -1010,8 +1179,9 @@ namespace Microsoft.Armada
       pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
       foreach (var pc in pcs)
       {
-        str += $@"        case {pc} => assert arr.h.is_pc_nonyielding(hpc) <==> (arr.l.is_pc_nonyielding(lpc) || arr.is_phase1(lpc) || arr.is_phase2(lpc));
-";
+        str += $@"
+          case {pc} => assert arr.h.is_pc_nonyielding(hpc) <==> (arr.l.is_pc_nonyielding(lpc) || arr.is_phase1(lpc) || arr.is_phase2(lpc));
+        ";
       }
 
       str += @"
@@ -1028,39 +1198,44 @@ namespace Microsoft.Armada
 
       string finalCases = "";
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var nameSuffix = nextRoutine.NameSuffix;
+      var pr = new PathPrinter(lAtomic);
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        var nameSuffix = atomicPath.Name;
         str = $@"
-          lemma lemma_RightMoversPreserveStateRefinement_{nameSuffix}(arr:ARRequest, s:LPlusState, step:L.Armada_TraceEntry)
-            requires arr == GetArmadaReductionRequest()
-            requires LPlus_ValidStep(s, step)
-            requires !step.Armada_TraceEntry_Tau?
-            requires step.Armada_TraceEntry_{nameSuffix}?
-            ensures  var tid := step.tid;
-                     var s' := LPlus_GetNextStateAlways(s, step);
+          lemma lemma_RightMoversPreserveStateRefinement_{nameSuffix}(
+            arr: ARRequest,
+            s: LPlusState,
+            path: LAtomic_Path,
+            tid: Armada_ThreadHandle
+            )
+            requires arr == GetAtomicReductionRequest()
+            requires LAtomic_ValidPath(s, path, tid)
+            requires !path.LAtomic_Path_Tau?
+            requires path.LAtomic_Path_{nameSuffix}?
+            ensures  var s' := LAtomic_GetStateAfterPath(s, path, tid);
                      var pc' := arr.l.get_thread_pc(s', tid);
                      (pc'.Some? && arr.is_phase1(pc'.v) && arr.l.state_ok(s') ==> RefinementPair(s', s) in arr.self_relation)
           {{
+            { pr.GetOpenValidPathInvocation(atomicPath) }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
 
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"case Armada_TraceEntry_{nameSuffix}(_{step_params}) => lemma_RightMoversPreserveStateRefinement_{nameSuffix}(arr, s, step);\n";
+        finalCases += $"case LAtomic_Path_{nameSuffix}(_) => lemma_RightMoversPreserveStateRefinement_{nameSuffix}(arr, s, path, tid);\n";
       }
 
       str = $@"
-        lemma lemma_RightMoversPreserveStateRefinement(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_RightMoversPreserveStateRefinement(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures RightMoversPreserveStateRefinement(arr)
         {{
-           forall s, step | arr.l.step_valid(s, step) && !arr.l.is_step_tau(step)
-             ensures var tid := arr.l.step_to_thread(step);
-                     var s' := arr.l.step_next(s, step);
+           forall s, path, tid | arr.l.path_valid(s, path, tid) && !arr.l.path_type(path).AtomicPathType_Tau?
+             ensures var s' := arr.l.path_next(s, path, tid);
                      var pc' := arr.l.get_thread_pc(s', tid);
                      (pc'.Some? && arr.is_phase1(pc'.v) && arr.l.state_ok(s') ==> RefinementPair(s', s) in arr.self_relation)
            {{
-             match step {{
+             match path {{
                {finalCases}
              }}
            }}
@@ -1069,13 +1244,58 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
+    private void GenerateAtomicPathCantAffectOtherThreadPhaseExceptViaForkLemma()
+    {
+
+      string postcondition = @"forall other_tid :: tid != other_tid ==>
+                               var s' := asf.path_next(s, path, tid);
+                               var pc := asf.get_thread_pc(s, other_tid);
+                               var pc' := asf.get_thread_pc(s', other_tid);
+                               (pc' != pc ==> pc.None? && !IsPhase1PC(pc'.v) && !IsPhase2PC(pc'.v) && !asf.is_pc_nonyielding(pc'.v))";
+      lAtomic.GeneratePerAtomicPathLemma(null,
+                                         "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",
+                                         atomicPath => true,
+                                         atomicPath => postcondition,
+                                         atomicPath => "");
+      lAtomic.GenerateOverallAtomicPathLemma(null,
+                                             "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",
+                                             "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",
+                                             postcondition,
+                                             ap => true);
+
+      string str = @"
+        lemma lemma_ThreadCantAffectOtherThreadPhaseExceptViaFork(arr:ARRequest)
+          requires arr == GetAtomicReductionRequest()
+          ensures  ThreadCantAffectOtherThreadPhaseExceptViaFork(arr)
+        {
+          forall s, path, tid, other_tid | arr.l.path_valid(s, path, tid) && tid != other_tid
+            ensures var s' := arr.l.path_next(s, path, tid);
+                    var pc := arr.l.get_thread_pc(s, other_tid);
+                    var pc' := arr.l.get_thread_pc(s', other_tid);
+                    pc' != pc ==> pc.None? && !arr.is_phase1(pc'.v) && !arr.is_phase2(pc'.v) && !arr.l.is_pc_nonyielding(pc'.v)
+          {
+            lemma_LAtomic_AtomicPathCantAffectOtherThreadPhaseExceptViaFork(arr.l, s, path, tid);
+          }
+        }
+      ";
+      pgp.AddLemma(str);
+    }
+
     private void GenerateLemmasSupportingValidRequest()
     {
       string str;
 
+      lAtomic.GeneratePCEffectLemmas();
+      lAtomic.GenerateAtomicPathRequiresOKLemma();
+      lAtomic.GenerateAtomicSteppingThreadHasPCLemma();
+      lAtomic.GenerateAtomicTauLeavesPCUnchangedLemma();
+      lAtomic.GenerateAtomicPathTypeAlwaysMatchesPCTypesLemma();
+      hAtomic.GeneratePCEffectLemmas();
+      hAtomic.GenerateAtomicPathTypeAlwaysMatchesPCTypesLemma();
+
       str = @"
-        lemma lemma_RefinementRelationsSatisfyRequirements(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_RefinementRelationsSatisfyRequirements(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures RefinementRelationReflexive(arr.self_relation)
           ensures RefinementRelationTransitive(arr.self_relation)
           ensures RefinementRelationsConvolve(arr.self_relation, arr.relation, arr.relation)
@@ -1084,9 +1304,19 @@ namespace Microsoft.Armada
       ";
       pgp.AddLemma(str);
 
+      GenerateGenericAtomicPropertyLemmas();
+
+      str = $@"
+        lemma lemma_LAtomic_AtomicInitImpliesYielding()
+          ensures AtomicInitImpliesYielding(LAtomic_GetSpecFunctions())
+        {{
+        }}
+      ";
+      pgp.AddLemma(str);
+
       str = @"
-        lemma lemma_LStateToHStateMapsPCsCorrectly(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LStateToHStateMapsPCsCorrectly(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LStateToHStateMapsPCsCorrectly(arr)
         {
         }
@@ -1096,36 +1326,36 @@ namespace Microsoft.Armada
       GenerateLHYieldingCorrespondenceLemma();
 
       str = @"
-        lemma lemma_LHOneStepPropertiesMatch(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
-          ensures LHOneStepPropertiesMatch(arr)
+        lemma lemma_LHPathPropertiesMatch(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
+          ensures LHPathPropertiesMatch(arr)
         {
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_LOneStepImpliesHOneStep(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
-          ensures LOneStepImpliesHOneStep(arr)
+        lemma lemma_LPathImpliesHPath(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
+          ensures LPathImpliesHPath(arr)
         {
-          forall ls, lstep | arr.inv(ls) && arr.l.step_valid(ls, lstep)
-            ensures var ls' := arr.l.step_next(ls, lstep);
+          forall ls, lpath, tid | arr.inv(ls) && arr.l.path_valid(ls, lpath, tid)
+            ensures var ls' := arr.l.path_next(ls, lpath, tid);
                     var hs := arr.lstate_to_hstate(ls);
-                    var hstep := arr.lonestep_to_honestep(lstep);
+                    var hpath := arr.lpath_to_hpath(lpath);
                     var hs' := arr.lstate_to_hstate(ls');
-                    && arr.h.step_valid(hs, hstep)
-                    && hs' == arr.h.step_next(hs, hstep)
+                    && arr.h.path_valid(hs, hpath, tid)
+                    && hs' == arr.h.path_next(hs, hpath, tid)
           {
-            lemma_LiftStep(ls, lstep);
+            lemma_LiftAtomicPath(ls, lpath, tid);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_StateConversionPreservesOK(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_StateConversionPreservesOK(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures StateConversionPreservesOK(arr)
         {
         }
@@ -1133,8 +1363,8 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_StateConversionSatisfiesRelation(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_StateConversionSatisfiesRelation(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures StateConversionSatisfiesRelation(arr)
         {
         }
@@ -1142,8 +1372,8 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_ThreadsDontStartInAnyPhase(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_ThreadsDontStartInAnyPhase(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures ThreadsDontStartInAnyPhase(arr)
         {
         }
@@ -1151,232 +1381,250 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_PhasesDontOverlap(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_PhasesDontOverlap(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures PhasesDontOverlap(arr)
         {
         }
       ";
       pgp.AddLemma(str);
 
-      str = @"
-        lemma lemma_ThreadCantAffectOtherThreadPhaseExceptViaFork(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
-          ensures ThreadCantAffectOtherThreadPhaseExceptViaFork(arr)
-        {
-        }
-      ";
-      pgp.AddLemma(str);
+      GenerateAtomicPathCantAffectOtherThreadPhaseExceptViaForkLemma();
 
       str = @"
-        lemma lemma_PhasesPrecededByYielding(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_PhasesPrecededByYielding(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures PhasesPrecededByYielding(arr)
         {
-        }
+          forall s, path, tid |
+            var s' := arr.l.path_next(s, path, tid);
+            var pc := arr.l.get_thread_pc(s, tid);
+            var pc' := arr.l.get_thread_pc(s', tid);
+            && arr.l.path_valid(s, path, tid)
+            && pc'.Some?
+            && (arr.is_phase1(pc'.v) || arr.is_phase2(pc'.v))
+            && pc.Some?
+            && (!arr.is_phase1(pc.v) && !arr.is_phase2(pc.v))
+            ensures var pc := arr.l.get_thread_pc(s, tid);
+                    !arr.l.is_pc_nonyielding(pc.v)
+          {
+            match path {
       ";
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        str += $@"
+              case LAtomic_Path_{atomicPath.Name}(_) =>
+                lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(s, path, tid);
+        ";
+      }
+      str += "} } }\n";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_PhasesSucceededByYielding(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_PhasesSucceededByYielding(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures PhasesSucceededByYielding(arr)
         {
-        }
+          forall s, path, tid |
+            var s' := arr.l.path_next(s, path, tid);
+            var pc := arr.l.get_thread_pc(s, tid);
+            var pc' := arr.l.get_thread_pc(s', tid);
+            && arr.l.path_valid(s, path, tid)
+            && pc.Some?
+            && (arr.is_phase1(pc.v) || arr.is_phase2(pc.v))
+            && pc'.Some?
+            && (!arr.is_phase1(pc'.v) && !arr.is_phase2(pc'.v))
+            ensures var s' := arr.l.path_next(s, path, tid);
+                    var pc' := arr.l.get_thread_pc(s', tid);
+                    !arr.l.is_pc_nonyielding(pc'.v)
+          {
+            match path {
       ";
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        str += $@"
+              case LAtomic_Path_{atomicPath.Name}(_) =>
+                lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(s, path, tid);
+        ";
+      }
+      str += "} } }\n";
       pgp.AddLemma(str);
 
       str = @"
         lemma lemma_Phase2NotFollowedByPhase1(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+          requires arr == GetAtomicReductionRequest()
           ensures Phase2NotFollowedByPhase1(arr)
         {
-        }
+          forall s, path, tid |
+            var s' := arr.l.path_next(s, path, tid);
+            var pc := arr.l.get_thread_pc(s, tid);
+            var pc' := arr.l.get_thread_pc(s', tid);
+            && arr.l.path_valid(s, path, tid)
+            && pc.Some?
+            && arr.is_phase2(pc.v)
+            && pc'.Some?
+            && !arr.is_phase2(pc'.v)
+            ensures var s' := arr.l.path_next(s, path, tid);
+                    var pc' := arr.l.get_thread_pc(s', tid);
+                    !arr.is_phase1(pc'.v)
+          {
+            match path {
       ";
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        str += $@"
+              case LAtomic_Path_{atomicPath.Name}(_) =>
+                lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(s, path, tid);
+        ";
+      }
+      str += "} } }\n";
       pgp.AddLemma(str);
 
       GenerateRightMoversPreserveStateRefinementLemma();
 
+      var pr = new PathPrinter(lAtomic);
       str = @"
-        lemma lemma_LeftMoversPreserveStateRefinement(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LeftMoversPreserveStateRefinement(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LeftMoversPreserveStateRefinement(arr)
         {
-        }
+          forall s, path, tid | arr.l.path_valid(s, path, tid) && !arr.l.path_type(path).AtomicPathType_Tau?
+            ensures var s' := arr.l.path_next(s, path, tid);
+                    var pc := arr.l.get_thread_pc(s, tid);
+                    (pc.Some? && arr.is_phase2(pc.v) ==> RefinementPair(s, s') in arr.self_relation)
+          {
+            var pc := arr.l.get_thread_pc(s, tid);
+            var s' := arr.l.path_next(s, path, tid);
+            match path {
       ";
+      str += String.Join("\n", lAtomic.AtomicPaths.Select(atomicPath => $@"
+        case LAtomic_Path_{atomicPath.Name}(_) => " +
+          (phase2PCs.Contains(atomicPath.StartPC)
+             ? $@"{ pr.GetOpenValidPathInvocation(atomicPath) }
+                  assert RefinementPair(s, s') in arr.self_relation;"
+             : $@"lemma_LAtomic_PathHasPCEffect_{atomicPath.Name}(s, path, tid);
+                  assert !arr.is_phase2(pc.v);")
+      ));
+      str += "}\n}\n}";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_RightMoversCommute(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_RightMoversCommute(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures RightMoversCommute(arr)
         {
-          forall s1, step1, step2 |
-            var tid := arr.l.step_to_thread(step1);
-            var other_tid := arr.l.step_to_thread(step2);
-            var other_tau := arr.l.is_step_tau(step2);
-            var s2 := LPlus_GetNextStateAlways(s1, step1);
-            var s3 := LPlus_GetNextStateAlways(s2, step2);
-            var pc := arr.l.get_thread_pc(s2, tid);
-            var s2' := LPlus_GetNextStateAlways(s1, step2);
-            && arr.inv(s1)
-            && !arr.l.is_step_tau(step1)
-            && LPlus_ValidStep(s1, step1)
-            && pc.Some?
-            && arr.is_phase1(pc.v)
-            && LPlus_ValidStep(s2, step2)
-            && s3.s.stop_reason.Armada_NotStopped?
-            && (other_tau || other_tid != tid)
-            ensures var s2 := LPlus_GetNextStateAlways(s1, step1);
-                    var s3 := LPlus_GetNextStateAlways(s2, step2);
-                    var s2' := LPlus_GetNextStateAlways(s1, step2);
-                    && LPlus_ValidStep(s1, step2)
-                    && LPlus_ValidStep(s2', step1)
-                    && s3 == LPlus_GetNextStateAlways(s2', step1)
+          forall initial_state, right_mover, other_path, mover_tid, other_tid
+            {:trigger RightMoversCommuteConditions(arr, initial_state, right_mover, other_path, mover_tid, other_tid)}
+            | RightMoversCommuteConditions(arr, initial_state, right_mover, other_path, mover_tid, other_tid)
+            ensures var state_after_right_mover := LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid);
+                    var state_after_both_paths := LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid);
+                    var state_after_other_path := LAtomic_GetStateAfterPath(initial_state, other_path, other_tid);
+                    && LAtomic_ValidPath(initial_state, other_path, other_tid)
+                    && LAtomic_ValidPath(state_after_other_path, right_mover, mover_tid)
+                    && state_after_both_paths == LAtomic_GetStateAfterPath(state_after_other_path, right_mover, mover_tid)
           {
-            var tid := arr.l.step_to_thread(step1);
-            var s2 := LPlus_GetNextStateAlways(s1, step1);
-            var s3 := LPlus_GetNextStateAlways(s2, step2);
-            var s2' := LPlus_GetNextStateAlways(s1, step2);
-            lemma_RightMoverCommutativity(s1, s2, s3, step1, step2, tid, s2');
+            var state_after_right_mover := LAtomic_GetStateAfterPath(initial_state, right_mover, mover_tid);
+            var state_after_both_paths := LAtomic_GetStateAfterPath(state_after_right_mover, other_path, other_tid);
+            var state_after_other_path := LAtomic_GetStateAfterPath(initial_state, other_path, other_tid);
+            lemma_RightMoverCommutativity(initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+                                          mover_tid, other_tid, state_after_other_path);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_RightMoverCrashPreservation(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_RightMoverCrashPreservation(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures RightMoverCrashPreservation(arr)
         {
-          forall initial_state, right_mover, other_step |
-            var state_after_right_mover := arr.l.step_next(initial_state, right_mover);
-            var state_after_both_steps := arr.l.step_next(state_after_right_mover, other_step);
-            var tid := arr.l.step_to_thread(right_mover);
-            var pc := arr.l.get_thread_pc(state_after_right_mover, tid);
-            var other_tau := arr.l.is_step_tau(other_step);
-            var other_tid := arr.l.step_to_thread(other_step);
-            && arr.inv(initial_state)
-            && arr.l.step_valid(initial_state, right_mover)
-            && arr.l.step_valid(state_after_right_mover, other_step)
-            && !arr.l.state_ok(state_after_both_steps)
-            && !arr.l.is_step_tau(right_mover)
-            && pc.Some?
-            && arr.is_phase1(pc.v)
-            && (other_tau || other_tid != tid)
-            ensures var state_after_right_mover := arr.l.step_next(initial_state, right_mover);
-                    var state_after_both_steps := arr.l.step_next(state_after_right_mover, other_step);
-                    var state_after_other_step' := arr.l.step_next(initial_state, other_step);
-                    && arr.l.step_valid(initial_state, other_step)
-                    && !arr.l.state_ok(state_after_other_step')
-                    && RefinementPair(state_after_both_steps, state_after_other_step') in arr.self_relation
+          forall initial_state, right_mover, other_path, mover_tid, other_tid
+            {:trigger RightMoverCrashPreservationConditions(arr, initial_state, right_mover, other_path, mover_tid, other_tid)}
+            | RightMoverCrashPreservationConditions(arr, initial_state, right_mover, other_path, mover_tid, other_tid)
+            ensures var state_after_right_mover := arr.l.path_next(initial_state, right_mover, mover_tid);
+                    var state_after_both_paths := arr.l.path_next(state_after_right_mover, other_path, other_tid);
+                    var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+                    && arr.l.path_valid(initial_state, other_path, other_tid)
+                    && !arr.l.state_ok(state_after_other_path)
+                    && RefinementPair(state_after_both_paths, state_after_other_path) in arr.self_relation
           {
-            var tid := arr.l.step_to_thread(right_mover);
-            var state_after_right_mover := arr.l.step_next(initial_state, right_mover);
-            var state_after_both_steps := arr.l.step_next(state_after_right_mover, other_step);
-            var state_after_other_step' := arr.l.step_next(initial_state, other_step);
-            lemma_RightMoverPreservesCrash(initial_state, state_after_right_mover, state_after_both_steps, right_mover, other_step,
-                                           tid, state_after_other_step');
+            var state_after_right_mover := arr.l.path_next(initial_state, right_mover, mover_tid);
+            var state_after_both_paths := arr.l.path_next(state_after_right_mover, other_path, other_tid);
+            var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+            lemma_RightMoverPreservesCrash(initial_state, state_after_right_mover, state_after_both_paths, right_mover, other_path,
+                                           mover_tid, other_tid, state_after_other_path);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_LeftMoversCommute(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LeftMoversCommute(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LeftMoversCommute(arr)
         {
-          forall initial_state, other_step, left_mover | LeftMoversCommuteConditions(arr, initial_state, other_step, left_mover)
-            ensures var state_after_other_step := arr.l.step_next(initial_state, other_step);
-                    var state_after_both_steps := arr.l.step_next(state_after_other_step, left_mover);
-                    var new_middle_state := arr.l.step_next(initial_state, left_mover);
-                    && arr.l.step_valid(initial_state, left_mover)
-                    && arr.l.step_valid(new_middle_state, other_step)
-                    && state_after_both_steps == arr.l.step_next(new_middle_state, other_step)
+          forall initial_state, other_path, left_mover, mover_tid, other_tid
+            {:trigger LeftMoversCommuteConditions(arr, initial_state, other_path, left_mover, mover_tid, other_tid)}
+            | LeftMoversCommuteConditions(arr, initial_state, other_path, left_mover, mover_tid, other_tid)
+            ensures var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+                    var state_after_both_paths := arr.l.path_next(state_after_other_path, left_mover, mover_tid);
+                    var new_middle_state := arr.l.path_next(initial_state, left_mover, mover_tid);
+                    && arr.l.path_valid(initial_state, left_mover, mover_tid)
+                    && arr.l.path_valid(new_middle_state, other_path, other_tid)
+                    && state_after_both_paths == arr.l.path_next(new_middle_state, other_path, other_tid)
           {
-            var tid := arr.l.step_to_thread(left_mover);
-            var state_after_other_step := arr.l.step_next(initial_state, other_step);
-            var state_after_both_steps := arr.l.step_next(state_after_other_step, left_mover);
-            lemma_LeftMoverCommutativity(initial_state, state_after_other_step, state_after_both_steps, other_step, left_mover, tid);
+            var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+            var state_after_both_paths := arr.l.path_next(state_after_other_path, left_mover, mover_tid);
+            var state_after_left_mover := arr.l.path_next(initial_state, left_mover, mover_tid);
+            lemma_LeftMoverCommutativity(initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                                         mover_tid, other_tid, state_after_left_mover);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_LeftMoverCrashPreservation(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LeftMoverCrashPreservation(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LeftMoverCrashPreservation(arr)
         {
-          forall initial_state, left_mover, other_step |
-            var state_after_left_mover := arr.l.step_next(initial_state, left_mover);
-            var state_after_other_step := arr.l.step_next(initial_state, other_step);
-            var tid := arr.l.step_to_thread(left_mover);
-            var pc := arr.l.get_thread_pc(initial_state, tid);
-            var other_tau := arr.l.is_step_tau(other_step);
-            var other_tid := arr.l.step_to_thread(other_step);
-            && arr.inv(initial_state)
-            && !arr.l.is_step_tau(left_mover)
-            && arr.l.step_valid(initial_state, left_mover)
-            && arr.l.step_valid(initial_state, other_step)
-            && arr.l.state_ok(initial_state)
-            && !arr.l.state_ok(state_after_other_step)
-            && pc.Some?
-            && arr.is_phase2(pc.v)
-            && (other_tau || other_tid != tid)
-            ensures var state_after_left_mover := arr.l.step_next(initial_state, left_mover);
-                    var state_after_other_step := arr.l.step_next(initial_state, other_step);
-                    var state_after_both_steps := arr.l.step_next(state_after_left_mover, other_step);
-                    && arr.l.step_valid(state_after_left_mover, other_step)
-                    && !arr.l.state_ok(state_after_both_steps)
-                    && RefinementPair(state_after_other_step, state_after_both_steps) in arr.self_relation
+          forall initial_state, left_mover, other_path, mover_tid, other_tid
+            {:trigger LeftMoverCrashPreservationConditions(arr, initial_state, left_mover, other_path, mover_tid, other_tid)}
+            | LeftMoverCrashPreservationConditions(arr, initial_state, left_mover, other_path, mover_tid, other_tid)
+            ensures var state_after_left_mover := arr.l.path_next(initial_state, left_mover, mover_tid);
+                    var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+                    var state_after_both_paths := arr.l.path_next(state_after_left_mover, other_path, other_tid);
+                    && arr.l.path_valid(state_after_left_mover, other_path, other_tid)
+                    && !arr.l.state_ok(state_after_both_paths)
+                    && RefinementPair(state_after_other_path, state_after_both_paths) in arr.self_relation
           {
-            var tid := arr.l.step_to_thread(left_mover);
-            var state_after_left_mover := arr.l.step_next(initial_state, left_mover);
-            var state_after_other_step := arr.l.step_next(initial_state, other_step);
-            var state_after_both_steps := arr.l.step_next(state_after_left_mover, other_step);
-            lemma_LeftMoverPreservesCrash(initial_state, state_after_other_step, state_after_left_mover, other_step, left_mover,
-                                          tid, state_after_both_steps);
+            var state_after_left_mover := arr.l.path_next(initial_state, left_mover, mover_tid);
+            var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+            var state_after_both_paths := arr.l.path_next(state_after_left_mover, other_path, other_tid);
+            lemma_LeftMoverPreservesCrash(initial_state, state_after_other_path, state_after_left_mover, other_path, left_mover,
+                                          mover_tid, other_tid, state_after_both_paths);
           }
         }
       ";
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_LeftMoverSelfCrashPreservation(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LeftMoverSelfCrashPreservation(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures LeftMoverSelfCrashPreservation(arr)
         {
-          forall initial_state, left_mover, other_step |
-            var state_after_other_step := arr.l.step_next(initial_state, other_step);
-            var state_after_both_steps := arr.l.step_next(state_after_other_step, left_mover);
-            var tid := arr.l.step_to_thread(left_mover);
-            var pc := arr.l.get_thread_pc(state_after_other_step, tid);
-            var other_tau := arr.l.is_step_tau(other_step);
-            var other_tid := arr.l.step_to_thread(other_step);
-            && arr.inv(initial_state)
-            && !arr.l.is_step_tau(left_mover)
-            && arr.l.step_valid(initial_state, left_mover)
-            && arr.l.step_valid(state_after_other_step, other_step)
-            && arr.l.state_ok(initial_state)
-            && !arr.l.state_ok(state_after_both_steps)
-            && pc.Some?
-            && arr.is_phase2(pc.v)
-            && (other_tau || other_tid != tid)
-            ensures var state_after_other_step := arr.l.step_next(initial_state, other_step);
-                    var state_after_both_steps := arr.l.step_next(state_after_other_step, left_mover);
-                    var state_after_left_mover := arr.l.step_next(initial_state, left_mover);
-                    && arr.l.step_valid(initial_state, left_mover)
+          forall initial_state, left_mover, other_path, mover_tid, other_tid
+            {:trigger LeftMoverSelfCrashPreservationConditions(arr, initial_state, left_mover, other_path, mover_tid, other_tid)}
+            | LeftMoverSelfCrashPreservationConditions(arr, initial_state, left_mover, other_path, mover_tid, other_tid)
+            ensures var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+                    var state_after_both_paths := arr.l.path_next(state_after_other_path, left_mover, mover_tid);
+                    var state_after_left_mover := arr.l.path_next(initial_state, left_mover, mover_tid);
+                    && arr.l.path_valid(initial_state, left_mover, mover_tid)
                     && !arr.l.state_ok(state_after_left_mover)
-                    && RefinementPair(state_after_both_steps, state_after_left_mover) in arr.self_relation
+                    && RefinementPair(state_after_both_paths, state_after_left_mover) in arr.self_relation
           {
-            var tid := arr.l.step_to_thread(left_mover);
-            var state_after_other_step := arr.l.step_next(initial_state, other_step);
-            var state_after_both_steps := arr.l.step_next(state_after_other_step, left_mover);
-            var state_after_left_mover := arr.l.step_next(initial_state, left_mover);
-            lemma_LeftMoverPreservesSelfCrash(initial_state, state_after_other_step, state_after_both_steps, other_step, left_mover,
-                                              tid, state_after_left_mover);
+            var state_after_other_path := arr.l.path_next(initial_state, other_path, other_tid);
+            var state_after_both_paths := arr.l.path_next(state_after_other_path, left_mover, mover_tid);
+            var state_after_left_mover := arr.l.path_next(initial_state, left_mover, mover_tid);
+            lemma_LeftMoverPreservesSelfCrash(initial_state, state_after_other_path, state_after_both_paths, other_path, left_mover,
+                                              mover_tid, other_tid, state_after_left_mover);
           }
         }
       ";
@@ -1390,45 +1638,46 @@ namespace Microsoft.Armada
       string str;
       string body = "";
 
-      foreach (KeyValuePair<ArmadaPC, NextRoutine> entry in phase2PCToNextRoutine)
+      var pr = new PathPrinter(lAtomic);
+      foreach (KeyValuePair<ArmadaPC, AtomicPath> entry in phase2PCToPath)
       {
         var pc = entry.Key;
-        var nextRoutine = entry.Value;
-        var nameSuffix = nextRoutine.NameSuffix;
+        var atomicPath = entry.Value;
+        var nameSuffix = atomicPath.Name;
         str = $@"
-          lemma lemma_LeftMoverEnabled_{nameSuffix}(s:LPlusState, tid:Armada_ThreadHandle, step:L.Armada_TraceEntry)
+          lemma lemma_LeftMoverEnabled_{nameSuffix}(s: LPlusState, tid: Armada_ThreadHandle, path: LAtomic_Path)
             requires InductiveInv(s)
             requires s.s.stop_reason.Armada_NotStopped?
             requires tid in s.s.threads
             requires s.s.threads[tid].pc.{pc}?
-            requires step == GenerateLeftMover(s, tid)
-            ensures  LPlus_ValidStep(s, step)
-            ensures  step.tid == tid
-            ensures  !step.Armada_TraceEntry_Tau?
-            ensures  0 <= LeftMoverGenerationProgress(LPlus_GetNextStateAlways(s, step), tid) < LeftMoverGenerationProgress(s, tid)
+            requires path == GenerateLeftMover(s, tid)
+            ensures  LAtomic_ValidPath(s, path, tid)
+            ensures  !path.LAtomic_Path_Tau?
+            ensures  0 <= LeftMoverGenerationProgress(LAtomic_GetStateAfterPath(s, path, tid), tid) < LeftMoverGenerationProgress(s, tid)
           {{
             assert s.s.threads[tid].top.Armada_StackFrame_{pc.methodName}?;
+            { pr.GetOpenPathInvocation(atomicPath) }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
         body += $@"
           if pc.{pc}? {{
-            lemma_LeftMoverEnabled_{nameSuffix}(s, tid, step);
+            lemma_LeftMoverEnabled_{nameSuffix}(s, tid, path);
           }}
         ";
       }
 
       str = $@"
-        lemma lemma_LeftMoverEnabled(s:LPlusState, tid:Armada_ThreadHandle, step:L.Armada_TraceEntry)
+        lemma lemma_LeftMoverEnabled(s: LPlusState, tid: Armada_ThreadHandle, path: LAtomic_Path)
           requires InductiveInv(s)
           requires s.s.stop_reason.Armada_NotStopped?
           requires tid in s.s.threads
           requires IsPhase2PC(s.s.threads[tid].pc)
-          requires step == GenerateLeftMover(s, tid)
-          ensures  LPlus_ValidStep(s, step)
-          ensures  step.tid == tid
-          ensures  !step.Armada_TraceEntry_Tau?
-          ensures  0 <= LeftMoverGenerationProgress(LPlus_GetNextStateAlways(s, step), tid) < LeftMoverGenerationProgress(s, tid)
+          requires path == GenerateLeftMover(s, tid)
+          ensures  LAtomic_ValidPath(s, path, tid)
+          ensures  !path.LAtomic_Path_Tau?
+          ensures  0 <= LeftMoverGenerationProgress(LAtomic_GetStateAfterPath(s, path, tid), tid) < LeftMoverGenerationProgress(s, tid)
         {{
           var pc := s.s.threads[tid].pc;
           { body }
@@ -1437,24 +1686,20 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_LeftMoversAlwaysEnabled(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
+        lemma lemma_LeftMoversAlwaysEnabled(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
           ensures  LeftMoversAlwaysEnabled(arr)
         {
-          forall s, tid |
-            && arr.inv(s)
-            && s.s.stop_reason.Armada_NotStopped?
-            && arr.l.get_thread_pc(s, tid).Some?
-            && arr.is_phase2(arr.l.get_thread_pc(s, tid).v)
-            ensures var step := arr.generate_left_mover(s, tid);
-                    && LPlus_ValidStep(s, step)
-                    && arr.l.step_to_thread(step) == tid
-                    && !arr.l.is_step_tau(step)
-                    && var s' := LPlus_GetNextStateAlways(s, step);
-                      0 <= arr.left_mover_generation_progress(s', tid) < arr.left_mover_generation_progress(s, tid)
+          forall s, tid {:trigger LeftMoversAlwaysEnabledConditions(arr, s, tid)}
+            | LeftMoversAlwaysEnabledConditions(arr, s, tid)
+            ensures var path := arr.generate_left_mover(s, tid);
+                    && LAtomic_ValidPath(s, path, tid)
+                    && !arr.l.path_type(path).AtomicPathType_Tau?
+                    && var s' := LAtomic_GetStateAfterPath(s, path, tid);
+                       0 <= arr.left_mover_generation_progress(s', tid) < arr.left_mover_generation_progress(s, tid)
           {
-            var step := arr.generate_left_mover(s, tid);
-            lemma_LeftMoverEnabled(s, tid, step);
+            var path := arr.generate_left_mover(s, tid);
+            lemma_LeftMoverEnabled(s, tid, path);
           }
         }
       ";
@@ -1464,20 +1709,23 @@ namespace Microsoft.Armada
     private void GenerateIsValidRequest()
     {
       string str = @"
-        lemma lemma_IsValidArmadaReductionRequest(arr:ARRequest)
-          requires arr == GetArmadaReductionRequest()
-          ensures  ValidArmadaReductionRequest(arr)
+        lemma lemma_IsValidAtomicReductionRequest(arr: ARRequest)
+          requires arr == GetAtomicReductionRequest()
+          ensures  ValidAtomicReductionRequest(arr)
         {
           lemma_RefinementRelationsSatisfyRequirements(arr);
           lemma_LInitImpliesHInit(arr);
-          lemma_InductiveInvInvariantInLPlusSpec(arr.l);
-          lemma_InitImpliesYielding_L(arr.l);
-          lemma_InitImpliesOK_L(arr.l);
-          lemma_OneStepRequiresOK_L(arr.l);
+          lemma_LAtomic_AtomicInitImpliesInv();
+          lemma_LAtomic_AtomicPathPreservesInv();
+          lemma_LAtomic_AtomicPathRequiresOK();
+          lemma_LAtomic_AtomicInitImpliesYielding();
+          lemma_LAtomic_AtomicInitImpliesOK();
+          lemma_LAtomic_AtomicPathTypeAlwaysMatchesPCTypes();
+          lemma_HAtomic_AtomicPathTypeAlwaysMatchesPCTypes();
           lemma_LStateToHStateMapsPCsCorrectly(arr);
           lemma_LHYieldingCorrespondence(arr);
-          lemma_LHOneStepPropertiesMatch(arr);
-          lemma_LOneStepImpliesHOneStep(arr);
+          lemma_LHPathPropertiesMatch(arr);
+          lemma_LPathImpliesHPath(arr);
           lemma_StateConversionPreservesOK(arr);
           lemma_StateConversionSatisfiesRelation(arr);
           lemma_ThreadsDontStartInAnyPhase(arr);
@@ -1486,8 +1734,8 @@ namespace Microsoft.Armada
           lemma_PhasesPrecededByYielding(arr);
           lemma_PhasesSucceededByYielding(arr);
           lemma_Phase2NotFollowedByPhase1(arr);
-          lemma_SteppingThreadHasPC_L(arr.l);
-          lemma_TauLeavesPCUnchanged_L(arr.l);
+          lemma_LAtomic_AtomicSteppingThreadHasPC();
+          lemma_LAtomic_AtomicTauLeavesPCUnchanged();
           lemma_RightMoversPreserveStateRefinement(arr);
           lemma_LeftMoversPreserveStateRefinement(arr);
           lemma_RightMoversCommute(arr);
@@ -1501,26 +1749,17 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
     }
 
-    private void GenerateFinalProof()
+    private void GenerateLiftLAtomicToHAtomicLemma()
     {
-      string str = @"
-        lemma lemma_ProveRefinementViaReduction()
-          ensures SpecRefinesSpec(L.Armada_Spec(), H.Armada_Spec(), GetLHRefinementRelation())
+      var str = @"
+        lemma lemma_LiftLAtomicToHAtomic() returns (refinement_relation: RefinementRelation<LPlusState, H.Armada_TotalState>)
+          ensures SpecRefinesSpec(AtomicSpec(LAtomic_GetSpecFunctions()), AtomicSpec(HAtomic_GetSpecFunctions()), refinement_relation)
+          ensures refinement_relation == GetLPlusHRefinementRelation()
         {
-          var lspec := L.Armada_Spec();
-          var hspec := H.Armada_Spec();
-          var arr := GetArmadaReductionRequest();
-    
-          forall lb | BehaviorSatisfiesSpec(lb, lspec)
-            ensures BehaviorRefinesSpec(lb, hspec, GetLHRefinementRelation())
-          {
-            var alb := lemma_GetLPlusAnnotatedBehavior(lb);
-            lemma_IsValidArmadaReductionRequest(arr);
-            var ahb := lemma_PerformArmadaReduction(arr, alb);
-            assert BehaviorRefinesBehavior(alb.states, ahb.states, arr.relation);
-            lemma_IfLPlusBehaviorRefinesBehaviorThenLBehaviorDoes(lb, alb.states, ahb.states);
-            lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes(ahb);
-          }
+          var arr := GetAtomicReductionRequest();
+          lemma_IsValidAtomicReductionRequest(arr);
+          lemma_PerformAtomicReduction(arr);
+          refinement_relation := GetLPlusHRefinementRelation();
         }
       ";
       pgp.AddLemma(str);

@@ -1,10 +1,12 @@
 include "util/collections/seqs.i.dfy"
 include "util/option.s.dfy"
+include "spec/refinement.s.dfy"
 
 module ArmadaCommonDefinitions {
 
   import opened util_collections_seqs_i
   import opened util_option_s
+  import opened GeneralRefinementModule
 
   ////////////////////////////////
   // Primitive types
@@ -102,6 +104,20 @@ module ArmadaCommonDefinitions {
       v.Armada_PrimitiveValue_int32?
     case Armada_PrimitiveType_int64 =>
       v.Armada_PrimitiveValue_int64?
+  }
+
+  predicate Armada_PrimitiveValuesOfSameType(v: Armada_PrimitiveValue, v': Armada_PrimitiveValue)
+  {
+    match v
+      case Armada_PrimitiveValueNone => v'.Armada_PrimitiveValueNone?
+      case Armada_PrimitiveValue_uint8(_) => v'.Armada_PrimitiveValue_uint8?
+      case Armada_PrimitiveValue_uint16(_) => v'.Armada_PrimitiveValue_uint16?
+      case Armada_PrimitiveValue_uint32(_) => v'.Armada_PrimitiveValue_uint32?
+      case Armada_PrimitiveValue_uint64(_) => v'.Armada_PrimitiveValue_uint64?
+      case Armada_PrimitiveValue_int8(_) => v'.Armada_PrimitiveValue_int8?
+      case Armada_PrimitiveValue_int16(_) => v'.Armada_PrimitiveValue_int16?
+      case Armada_PrimitiveValue_int32(_) => v'.Armada_PrimitiveValue_int32?
+      case Armada_PrimitiveValue_int64(_) => v'.Armada_PrimitiveValue_int64?
   }
 
   ////////////////////////////////
@@ -392,47 +408,16 @@ module ArmadaCommonDefinitions {
   // Multisteps
   ////////////////////////////////
 
-  datatype Armada_Multistep<OneStep> = Armada_Multistep(steps:seq<OneStep>, tid:Armada_ThreadHandle, tau:bool)
-
   datatype Armada_SpecFunctions<!State, !OneStep, !PC> =
     Armada_SpecFunctions(
       init:State->bool,
-      step_valid:(State, OneStep)->bool,
-      step_next:(State, OneStep)->State,
-      step_to_thread:OneStep->Armada_ThreadHandle,
+      step_valid:(State, OneStep, Armada_ThreadHandle)->bool,
+      step_next:(State, OneStep, Armada_ThreadHandle)->State,
       is_step_tau:OneStep->bool,
       state_ok:State->bool,
       get_thread_pc:(State, Armada_ThreadHandle)->Option<PC>,
       is_pc_nonyielding:PC->bool
       )
-
-  predicate Armada_NextMultipleSteps<State, OneStep, PC>(
-    asf:Armada_SpecFunctions<State, OneStep, PC>,
-    s:State,
-    s':State,
-    steps:seq<OneStep>
-    )
-  {
-    if |steps| == 0 then
-      s' == s
-    else
-      asf.step_valid(s, steps[0]) && Armada_NextMultipleSteps(asf, asf.step_next(s, steps[0]), s', steps[1..])
-  }
-
-  function Armada_GetStateSequence<State, OneStep, PC>(
-    asf:Armada_SpecFunctions<State, OneStep, PC>,
-    s:State,
-    steps:seq<OneStep>
-    ) : (states:seq<State>)
-    ensures |states| == |steps| + 1
-    ensures states[0] == s
-    decreases |steps|
-  {
-    if |steps| == 0 then
-      [s]
-    else
-      [s] + Armada_GetStateSequence(asf, asf.step_next(s, steps[0]), steps[1..])
-  }
 
   predicate Armada_ThreadYielding<State, OneStep, PC>(
     asf:Armada_SpecFunctions<State, OneStep, PC>,
@@ -445,6 +430,35 @@ module ArmadaCommonDefinitions {
     !asf.state_ok(s) || pc.None? || !asf.is_pc_nonyielding(pc.v)
   }
 
+  predicate Armada_StepsStartNonyielding<State, OneStep, PC>(
+    asf:Armada_SpecFunctions<State, OneStep, PC>,
+    s:State,
+    s':State,
+    steps:seq<OneStep>,
+    tid:Armada_ThreadHandle
+    )
+  {
+    |steps| > 0 ==>
+      && !Armada_ThreadYielding(asf, s, tid)
+      && !asf.is_step_tau(steps[0])
+      && Armada_StepsStartNonyielding(asf, asf.step_next(s, steps[0], tid), s', steps[1..], tid)
+  }
+
+  predicate Armada_NextMultipleSteps<State, OneStep, PC>(
+    asf:Armada_SpecFunctions<State, OneStep, PC>,
+    s:State,
+    s':State,
+    steps:seq<OneStep>,
+    tid:Armada_ThreadHandle
+    )
+  {
+    if |steps| == 0 then
+      s' == s
+    else
+      && asf.step_valid(s, steps[0], tid)
+      && Armada_NextMultipleSteps(asf, asf.step_next(s, steps[0], tid), s', steps[1..], tid)
+  }
+
   predicate Armada_NextMultistep<State, OneStep, PC>(
     asf:Armada_SpecFunctions<State, OneStep, PC>,
     s:State,
@@ -454,16 +468,34 @@ module ArmadaCommonDefinitions {
     tau:bool
     )
   {
-    && Armada_NextMultipleSteps(asf, s, s', steps)
-    && (forall step :: step in steps ==> asf.step_to_thread(step) == tid)
-    && (forall step :: step in steps ==> asf.is_step_tau(step) == tau)
-    && if tau then |steps| <= 1 else |steps| > 0 ==> (
-        && Armada_ThreadYielding(asf, s, tid)
-        && Armada_ThreadYielding(asf, s', tid)
-        && (forall i {:trigger Armada_GetStateSequence(asf, s, steps)[i]} ::
-               0 < i < |steps| ==> !Armada_ThreadYielding(asf, Armada_GetStateSequence(asf, s, steps)[i], tid))
-      )
+    && Armada_NextMultipleSteps(asf, s, s', steps, tid)
+    && (|steps| > 0 ==>
+       if tau then
+         && |steps| == 1
+         && asf.is_step_tau(steps[0])
+       else
+         && Armada_ThreadYielding(asf, s, tid)
+         && Armada_ThreadYielding(asf, s', tid)
+         && !asf.is_step_tau(steps[0])
+         && Armada_StepsStartNonyielding(asf, asf.step_next(s, steps[0], tid), s', steps[1..], tid)
+       )
   }
+
+  function Armada_SpecFunctionsToSpec<State(!new), OneStep(!new), PC>(
+    asf:Armada_SpecFunctions<State, OneStep, PC>
+    ) : Spec<State>
+  {
+    Spec(iset s | asf.init(s),
+         iset s, s', steps, tid, tau | Armada_NextMultistep(asf, s, s', steps, tid, tau) :: StatePair(s, s'))
+  }
+
+  ////////////////////////////////
+  // Heap types
+  ////////////////////////////////
+
+  datatype Armada_ObjectType = Armada_ObjectTypePrimitive(pty: Armada_PrimitiveType)
+                             | Armada_ObjectTypeStruct(fieldTypes: seq<Armada_ObjectType>)
+                             | Armada_ObjectTypeArray(subtype: Armada_ObjectType, sz: int)
 
   ////////////////////////////////
   // Pointers and heaps
@@ -471,598 +503,252 @@ module ArmadaCommonDefinitions {
 
   type Armada_Pointer = uint64
 
+  function Armada_TriggerPointer(p:Armada_Pointer) : Armada_Pointer { p }
+
   datatype Armada_RootType = Armada_RootTypeStaticHeap | Armada_RootTypeDynamicHeap | Armada_RootTypeStack
 
-  datatype Armada_FieldGeneric<F> = Armada_FieldNone(rt:Armada_RootType) | Armada_FieldArrayIndex(i: int) | Armada_FieldStruct(f: F)
+  datatype Armada_ChildType = Armada_ChildTypeRoot(rt: Armada_RootType) | Armada_ChildTypeIndex(i: int)
 
-  datatype Armada_ObjectTypeGeneric<S> = Armada_ObjectType_primitive(pty: Armada_PrimitiveType) | Armada_ObjectType_struct(s: S) | Armada_ObjectType_array(subtype: Armada_ObjectTypeGeneric<S>, sz: int)
+  datatype Armada_Node = Armada_Node(parent: Armada_Pointer, child_type: Armada_ChildType,
+                                     children: seq<Armada_Pointer>, ty: Armada_ObjectType)
 
-  datatype Armada_NodeGeneric<S, F(==)> = Armada_Node(parent: Armada_Pointer, field_of_parent: Armada_FieldGeneric<F>, children: map<Armada_FieldGeneric<F>, Armada_Pointer>, ty: Armada_ObjectTypeGeneric<S>, lvl: int)
+  type Armada_HeapValues = map<Armada_Pointer, Armada_PrimitiveValue>
 
-  datatype Armada_HeapGeneric<S, F> = Armada_Heap(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>, valid: set<Armada_Pointer>, freed: set<Armada_Pointer>, values: map<Armada_Pointer, Armada_PrimitiveValue>)
-
-  predicate Armada_TriggerPointer(p:Armada_Pointer) { true }
-  predicate Armada_TriggerIndex(i:int) { true }
-  predicate Armada_TriggerField<F>(f:Armada_FieldGeneric<F>) { true }
+  datatype Armada_Heap = Armada_Heap(tree: map<Armada_Pointer, Armada_Node>, valid: set<Armada_Pointer>, freed: set<Armada_Pointer>,
+                                     values: Armada_HeapValues)
     
-  predicate Armada_TreeForestProperties<S, F>(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>)
+  predicate Armada_TreeForestProperties(tree: map<Armada_Pointer, Armada_Node>)
   {
     && (forall p {:trigger Armada_TriggerPointer(p)} ::
-           Armada_TriggerPointer(p) && p in tree
-           ==> tree[p].lvl >= 0)
+           Armada_TriggerPointer(p) in tree ==> tree[p].parent in tree)
     && (forall p {:trigger Armada_TriggerPointer(p)} ::
-           Armada_TriggerPointer(p) && p in tree
-           ==> tree[p].parent in tree)
-    && (forall p {:trigger Armada_TriggerPointer(p)} ::
-           Armada_TriggerPointer(p) && p in tree
-           ==> tree[p].lvl == if tree[p].parent == p then 0 else tree[tree[p].parent].lvl + 1)
-    && (forall p {:trigger Armada_TriggerPointer(p)} ::
-           Armada_TriggerPointer(p) && p in tree
-           ==> (tree[p].field_of_parent.Armada_FieldNone? <==> tree[p].parent == p))
-    && (forall p, f {:trigger Armada_TriggerPointer(p), Armada_TriggerField(f)} ::
-           Armada_TriggerPointer(p) && Armada_TriggerField(f) && p in tree && f in tree[p].children
-           ==> var q := tree[p].children[f]; q in tree && tree[q].parent == p && tree[q].field_of_parent == f)
+           Armada_TriggerPointer(p) in tree ==> (tree[p].child_type.Armada_ChildTypeRoot? <==> tree[p].parent == p))
+    && (forall p, i {:trigger Armada_TriggerPointer(p), tree[p].children[i]} ::
+           Armada_TriggerPointer(p) in tree && 0 <= i < |tree[p].children|
+           ==> var q := tree[p].children[i]; q in tree && tree[q].parent == p && tree[q].child_type == Armada_ChildTypeIndex(i))
     && (forall q {:trigger Armada_TriggerPointer(q)} ::
-           Armada_TriggerPointer(q) && q in tree && !tree[q].field_of_parent.Armada_FieldNone?
-           ==> var p, f := tree[q].parent, tree[q].field_of_parent; p in tree && f in tree[p].children && tree[p].children[f] == q)
+           Armada_TriggerPointer(q) in tree && !tree[q].child_type.Armada_ChildTypeRoot?
+           ==> var p, f := tree[q].parent, tree[q].child_type;
+               p in tree && 0 <= f.i < |tree[p].children| && tree[p].children[f.i] == q)
   }
 
-  predicate Armada_TreeArrayProperties<S, F>(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>)
+  predicate Armada_TreeStructProperties(tree: map<Armada_Pointer, Armada_Node>)
   {
     && (forall p {:trigger Armada_TriggerPointer(p)} ::
-           Armada_TriggerPointer(p) && p in tree && tree[p].ty.Armada_ObjectType_array?
-           ==> tree[p].ty.sz >= 0)
-    && (forall p, i {:trigger Armada_TriggerPointer(p), Armada_TriggerIndex(i)} ::
-           Armada_TriggerPointer(p) && Armada_TriggerIndex(i) && p in tree && tree[p].ty.Armada_ObjectType_array? && 0 <= i < tree[p].ty.sz
-           ==> Armada_FieldArrayIndex(i) in tree[p].children)
-    && (forall p, f {:trigger Armada_TriggerPointer(p), Armada_TriggerField(f)} ::
-           Armada_TriggerPointer(p) && Armada_TriggerField(f) && p in tree && tree[p].ty.Armada_ObjectType_array? && f in tree[p].children
-           ==> f.Armada_FieldArrayIndex? && 0 <= f.i < tree[p].ty.sz)
-    && (forall p, q {:trigger Armada_TriggerPointer(p), Armada_TriggerPointer(q)} ::
-           Armada_TriggerPointer(p) && Armada_TriggerPointer(q)
-               && p in tree && q in tree && tree[p].ty.Armada_ObjectType_array? && tree[q].parent == p && q != p
+         Armada_TriggerPointer(p) in tree && tree[p].ty.Armada_ObjectTypeStruct? ==> |tree[p].children| == |tree[p].ty.fieldTypes|)
+    && (forall p, i {:trigger Armada_TriggerPointer(p), tree[p].children[i]} ::
+         Armada_TriggerPointer(p) in tree && tree[p].ty.Armada_ObjectTypeStruct? && 0 <= i < |tree[p].children| ==>
+         var q := tree[p].children[i];
+         q in tree && tree[q].ty == tree[p].ty.fieldTypes[i])
+  }
+
+  predicate Armada_TreeArrayProperties(tree: map<Armada_Pointer, Armada_Node>)
+  {
+    && (forall p {:trigger Armada_TriggerPointer(p)} ::
+           Armada_TriggerPointer(p) in tree && tree[p].ty.Armada_ObjectTypeArray? ==> tree[p].ty.sz >= 0)
+    && (forall p {:trigger Armada_TriggerPointer(p)} ::
+           Armada_TriggerPointer(p) in tree && tree[p].ty.Armada_ObjectTypeArray? ==> |tree[p].children| == tree[p].ty.sz)
+    && (forall p, q {:trigger Armada_TriggerPointer(p), Armada_TriggerPointer(q), tree[p].ty.Armada_ObjectTypeArray?} ::
+           && Armada_TriggerPointer(p) in tree && Armada_TriggerPointer(q) in tree
+           && tree[p].ty.Armada_ObjectTypeArray? && tree[q].parent == p && q != p
            ==> tree[q].ty == tree[p].ty.subtype)
   }
 
-  predicate Armada_TreePrimitiveProperties<S, F(!new)>(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>)
+  predicate Armada_TreePrimitiveProperties(tree: map<Armada_Pointer, Armada_Node>)
   {
-    forall p, f {:trigger Armada_TriggerPointer(p), Armada_TriggerField(f)} ::
-        Armada_TriggerPointer(p) && Armada_TriggerField(f) && p in tree && tree[p].ty.Armada_ObjectType_primitive?
-        ==> f !in tree[p].children
+    forall p {:trigger Armada_TriggerPointer(p)} ::
+      Armada_TriggerPointer(p) in tree && tree[p].ty.Armada_ObjectTypePrimitive? ==> |tree[p].children| == 0
   }
 
-  predicate Armada_PointerIsAncestorOfPointer<S, F>(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>, p: Armada_Pointer, q: Armada_Pointer)
-    requires Armada_TreeForestProperties(tree)
-    requires p in tree
-    requires q in tree
-    requires Armada_TriggerPointer(p)
-    requires Armada_TriggerPointer(q)
-    decreases tree[q].lvl
+  predicate Armada_TreeProperties(tree: map<Armada_Pointer, Armada_Node>)
   {
-    p == q || (!tree[q].field_of_parent.Armada_FieldNone? && Armada_PointerIsAncestorOfPointer(tree, p, tree[q].parent))
+    && Armada_TreeForestProperties(tree)
+    && Armada_TreeStructProperties(tree)
+    && Armada_TreeArrayProperties(tree)
+    && Armada_TreePrimitiveProperties(tree)
   }
 
-  predicate Armada_DisjointPointers<S, F>(tree: map<Armada_Pointer, Armada_NodeGeneric<S, F>>, p: Armada_Pointer, q: Armada_Pointer)
-    requires p in tree
-    requires q in tree
-    requires Armada_TreeForestProperties(tree)
+  predicate Armada_HeapInvariant(h: Armada_Heap)
   {
-    && !Armada_PointerIsAncestorOfPointer(tree, p, q)
-    && !Armada_PointerIsAncestorOfPointer(tree, q, p)
+    && h.valid * h.freed == {}
+    && 0 in h.freed
+    && !(0 in h.valid)
+    && Armada_TreeProperties(h.tree)
+    && (forall p {:trigger Armada_TriggerPointer(p)} {:trigger Armada_TriggerPointer(h.tree[p].parent)} :: 
+        Armada_TriggerPointer(p) in h.tree ==>
+          (p in h.valid <==> Armada_TriggerPointer(h.tree[p].parent) in h.valid))
+    && forall p {:trigger Armada_TriggerPointer(p)} :: 
+        Armada_TriggerPointer(p) in h.tree &&
+        h.tree[p].ty.Armada_ObjectTypePrimitive? ==>
+          p in h.values &&
+          Armada_PrimitiveValueMatchesType(h.values[p], h.tree[p].ty.pty)
   }
 
-  function Armada_UpdateHeapValues(values: map<Armada_Pointer, Armada_PrimitiveValue>, p: Armada_Pointer, new_value: Armada_PrimitiveValue): (new_values: map<Armada_Pointer, Armada_PrimitiveValue>)
-    ensures  new_values.Keys == values.Keys + {p}
-    ensures  p in new_values
-    ensures  new_values[p] == new_value
-    ensures  forall other :: other in values && other != p ==> other in new_values && new_values[other] == values[other]
+  predicate Armada_HeapMetadataUnchanged(h: Armada_Heap, h': Armada_Heap)
   {
-    var s:set<Armada_Pointer> := values.Keys + {p};
-    map q | q in s :: if q == p then new_value else values[q]
+    && h'.tree == h.tree
+    && h'.valid == h.valid
+    && h'.freed == h.freed
   }
 
-  predicate Armada_ComparablePointer<S, F>(p: Armada_Pointer, h: Armada_HeapGeneric<S, F>)
+  predicate Armada_ComparablePointer(p: Armada_Pointer, h: Armada_Heap)
   {
     p !in h.freed || p == 0
   }
 
-  predicate Armada_ValidPointerToPrimitive<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, pty:Armada_PrimitiveType)
+  /////////////////////////////////////////////
+  // Pointer subtree structural correctness
+  /////////////////////////////////////////////
+
+  predicate Armada_PointerSubtreeHasObjectType(tree: map<Armada_Pointer, Armada_Node>, p: Armada_Pointer, ty: Armada_ObjectType)
+    decreases ty
   {
+    && p in tree
+    && tree[p].ty == ty
+    && match tree[p].ty
+        case Armada_ObjectTypePrimitive(pty) =>
+          |tree[p].children| == 0
+        case Armada_ObjectTypeStruct(fieldTypes) =>
+          && |tree[p].children| == |fieldTypes|
+          && (forall i {:trigger tree[p].children[i]} :: 0 <= i < |fieldTypes| ==>
+               Armada_PointerSubtreeHasObjectType(tree, tree[p].children[i], fieldTypes[i]))
+        case Armada_ObjectTypeArray(subtype, sz) =>
+          && |tree[p].children| == sz
+          && (forall i {:trigger tree[p].children[i]} :: 0 <= i < sz ==>
+               Armada_PointerSubtreeHasObjectType(tree, tree[p].children[i], subtype))
+  }
+
+  predicate Armada_PointerSubtreeCorrect(tree: map<Armada_Pointer, Armada_Node>, p: Armada_Pointer)
+  {
+    p in tree && Armada_PointerSubtreeHasObjectType(tree, p, tree[p].ty)
+  }
+
+  ////////////////////////////////////
+  // Descendants in heap tree
+  ////////////////////////////////////
+
+  function Armada_DescendantsOfPointerToObjectType(
+    tree: map<Armada_Pointer, Armada_Node>,
+    p: Armada_Pointer,
+    ty: Armada_ObjectType
+    ) : set<Armada_Pointer>
+    decreases ty
+  {
+    match ty
+      case Armada_ObjectTypePrimitive(_) =>
+        {Armada_TriggerPointer(p)}
+      case Armada_ObjectTypeStruct(fieldTypes) =>
+        {Armada_TriggerPointer(p)}
+        + (set q, i, ty {:trigger q in Armada_DescendantsOfPointerToObjectType(tree, tree[p].children[i], ty)}
+            | && p in tree
+              && 0 <= i < |tree[p].children| && i < |fieldTypes|
+              && ty == fieldTypes[i]
+              && q in Armada_DescendantsOfPointerToObjectType(tree, tree[p].children[i], ty)
+            :: Armada_TriggerPointer(q))
+      case Armada_ObjectTypeArray(subtype, _) =>
+        {Armada_TriggerPointer(p)}
+        + (set q, i {:trigger q in Armada_DescendantsOfPointerToObjectType(tree, tree[p].children[i], subtype)}
+            | && p in tree
+              && 0 <= i < |tree[p].children|
+              && q in Armada_DescendantsOfPointerToObjectType(tree, tree[p].children[i], subtype)
+            :: Armada_TriggerPointer(q))
+  }
+
+  function Armada_DescendantsOfPointer(tree: map<Armada_Pointer, Armada_Node>, p: Armada_Pointer) : set<Armada_Pointer>
+    requires p in tree
+  {
+    Armada_DescendantsOfPointerToObjectType(tree, p, tree[p].ty)
+  }
+
+  ////////////////////////////////////
+  // Pointer validity
+  ////////////////////////////////////
+
+  function Armada_ValidPointerToObjectType(h: Armada_Heap, p: Armada_Pointer, ty: Armada_ObjectType) : (b: bool)
+    ensures  b ==> Armada_PointerSubtreeHasObjectType(h.tree, p, ty)
+    decreases ty
+  {
+    && Armada_TriggerPointer(p) in h.tree
     && p in h.valid
-    && p in h.tree
-    && p in h.values
-    && h.tree[p].ty.Armada_ObjectType_primitive?
-    && h.tree[p].ty.pty == pty
-    && Armada_PrimitiveValueMatchesType(h.values[p], pty)
+    && h.tree[p].ty == ty
+    && match h.tree[p].ty
+        case Armada_ObjectTypePrimitive(pty) =>
+          && |h.tree[p].children| == 0
+          && p in h.values
+          && Armada_PrimitiveValueMatchesType(h.values[p], pty)
+        case Armada_ObjectTypeStruct(fieldTypes) =>
+          && |h.tree[p].children| == |fieldTypes|
+          && (forall i {:trigger h.tree[p].children[i]} :: 0 <= i < |fieldTypes| ==>
+               Armada_ValidPointerToObjectType(h, h.tree[p].children[i], fieldTypes[i]))
+        case Armada_ObjectTypeArray(subtype, sz) =>
+          && |h.tree[p].children| == sz
+          && (forall i {:trigger h.tree[p].children[i]} :: 0 <= i < sz ==>
+               Armada_ValidPointerToObjectType(h, h.tree[p].children[i], subtype))
   }
 
-  predicate Armada_ValidPointerToPrimitiveArray<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, pty:Armada_PrimitiveType)
+  function Armada_ValidPointer(h: Armada_Heap, p: Armada_Pointer) : (b: bool)
+    ensures  b ==> Armada_PointerSubtreeCorrect(h.tree, p)
   {
-    && p in h.valid
-    && p in h.tree
-    && var ty := h.tree[p].ty; ty.Armada_ObjectType_array? && ty.subtype.Armada_ObjectType_primitive? && ty.subtype.pty == pty && ty.sz >= 0 && forall i :: 0 <= i < ty.sz ==> var idx := Armada_FieldArrayIndex(i); idx in h.tree[p].children && Armada_ValidPointerToPrimitive(h, h.tree[p].children[idx], pty)
+    p in h.tree && Armada_ValidPointerToObjectType(h, p, h.tree[p].ty)
   }
 
-  predicate Armada_ValidPointerToPrimitiveSizedArray<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, pty:Armada_PrimitiveType, sz: int)
-  {
-    && sz >= 0
-    && Armada_ValidPointerToPrimitiveArray(h, p, pty)
-    && h.tree[p].ty.sz == sz
-  }
-
-  function Armada_DereferencePointerToPrimitive_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): uint8
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_uint8)
-  {
-    h.values[p].n_uint8
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<uint8>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_uint8)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_uint8(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: uint8): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_uint8(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: uint8): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_uint8(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<uint8>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_uint8(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_uint8(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_uint8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<uint8>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_uint8(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_uint8<F>(v:uint8, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : uint8
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_uint8? then
-        value.n_uint8
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_uint8<F>(v:seq<uint8>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<uint8>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_uint8? then
-        v[fields[0].i := value.n_uint8]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): uint16
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_uint16)
-  {
-    h.values[p].n_uint16
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<uint16>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_uint16)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_uint16(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: uint16): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_uint16(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: uint16): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_uint16(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<uint16>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_uint16(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_uint16(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_uint16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<uint16>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_uint16(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_uint16<F>(v:uint16, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : uint16
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_uint16? then
-        value.n_uint16
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_uint16<F>(v:seq<uint16>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<uint16>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_uint16? then
-        v[fields[0].i := value.n_uint16]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): uint32
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_uint32)
-  {
-    h.values[p].n_uint32
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<uint32>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_uint32)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_uint32(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: uint32): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_uint32(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: uint32): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_uint32(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<uint32>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_uint32(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_uint32(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_uint32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<uint32>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_uint32(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_uint32<F>(v:uint32, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : uint32
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_uint32? then
-        value.n_uint32
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_uint32<F>(v:seq<uint32>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<uint32>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_uint32? then
-        v[fields[0].i := value.n_uint32]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): uint64
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_uint64)
-  {
-    h.values[p].n_uint64
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<uint64>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_uint64)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_uint64(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: uint64): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_uint64(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: uint64): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_uint64(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<uint64>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_uint64(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_uint64(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_uint64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<uint64>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_uint64(h, h.tree[p].children[field], a)
-    else
-      h
-  }
+  ////////////////////////////////////
+  // Updating heap via pointers
+  ////////////////////////////////////
 
-  function Armada_PerformFieldUpdateForPrimitive_uint64<F>(v:uint64, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : uint64
+  function Armada_UpdateHeapValuesWithPrimitiveValue(
+    values: map<Armada_Pointer, Armada_PrimitiveValue>,
+    p: Armada_Pointer,
+    new_value: Armada_PrimitiveValue
+    ) : (
+    new_values: map<Armada_Pointer, Armada_PrimitiveValue>
+    )
   {
-    if |fields| == 0 && value.Armada_PrimitiveValue_uint64? then
-        value.n_uint64
-    else
-        v
+    map q | q in values :: if q == p then new_value else values[q]
   }
 
-  function Armada_PerformFieldUpdateForPrimitiveArray_uint64<F>(v:seq<uint64>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<uint64>
+  predicate Armada_ArbitrarilyResolveConflictingUpdatesTrigger(p: Armada_Pointer)
   {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_uint64? then
-        v[fields[0].i := value.n_uint64]
-    else
-        v
+    true
   }
 
-  function Armada_DereferencePointerToPrimitive_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): int8
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_int8)
+  function {:opaque} Armada_ArbitrarilyResolveConflictingUpdates(update_set: set<(Armada_Pointer, Armada_PrimitiveValue)>)
+    : (update_map : map<Armada_Pointer, Armada_PrimitiveValue>)
+    ensures forall p :: p in update_map ==> (p, update_map[p]) in update_set
+    ensures forall p, v :: (p, v) in update_set ==> p in update_map
   {
-    h.values[p].n_int8
+    map p {:trigger Armada_ArbitrarilyResolveConflictingUpdatesTrigger(p)}
+          | Armada_ArbitrarilyResolveConflictingUpdatesTrigger(p) && (exists v :: (p, v) in update_set)
+          :: (var v :| (p, v) in update_set; v)
   }
 
-  function Armada_DereferencePointerToPrimitiveArray_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<int8>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_int8)
+  function Armada_UpdateHeapValuesSimultaneously(
+    values: Armada_HeapValues,
+    updates: set<(Armada_Pointer, Armada_PrimitiveValue)>
+    ) : (
+    values': Armada_HeapValues
+    )
   {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_int8(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
+    var update_map := Armada_ArbitrarilyResolveConflictingUpdates(updates);
+    map p | p in values :: if p in update_map then update_map[p] else values[p]
   }
+   
+  ////////////////////////////////
+  // Configuration
+  ////////////////////////////////
 
-  function Armada_UpdatePointerToPrimitive_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: int8): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_int8(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: int8): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_int8(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<int8>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_int8(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_int8(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_int8<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<int8>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_int8(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_int8<F>(v:int8, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : int8
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_int8? then
-        value.n_int8
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_int8<F>(v:seq<int8>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<int8>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_int8? then
-        v[fields[0].i := value.n_int8]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): int16
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_int16)
-  {
-    h.values[p].n_int16
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<int16>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_int16)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_int16(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: int16): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_int16(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: int16): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_int16(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<int16>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_int16(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_int16(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_int16<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<int16>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_int16(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_int16<F>(v:int16, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : int16
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_int16? then
-        value.n_int16
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_int16<F>(v:seq<int16>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<int16>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_int16? then
-        v[fields[0].i := value.n_int16]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): int32
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_int32)
-  {
-    h.values[p].n_int32
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<int32>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_int32)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_int32(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: int32): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_int32(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: int32): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_int32(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<int32>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_int32(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_int32(new_heap, p, a[..|a| - 1])
-  }
-
-  function Armada_UpdateChildToPrimitiveArray_int32<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<int32>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_int32(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_int32<F>(v:int32, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : int32
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_int32? then
-        value.n_int32
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_int32<F>(v:seq<int32>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<int32>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_int32? then
-        v[fields[0].i := value.n_int32]
-    else
-        v
-  }
-
-  function Armada_DereferencePointerToPrimitive_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): int64
-    requires Armada_ValidPointerToPrimitive(h, p, Armada_PrimitiveType_int64)
-  {
-    h.values[p].n_int64
-  }
-
-  function Armada_DereferencePointerToPrimitiveArray_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer): seq<int64>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, Armada_PrimitiveType_int64)
-  {
-    ConvertMapToSeq(h.tree[p].ty.sz, map i | 0 <= i < h.tree[p].ty.sz :: Armada_DereferencePointerToPrimitive_int64(h, h.tree[p].children[Armada_FieldArrayIndex(i)]))
-  }
-
-  function Armada_UpdatePointerToPrimitive_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, value: int64): Armada_HeapGeneric<S, F>
-  {
-    h.(values := Armada_UpdateHeapValues(h.values, p, Armada_PrimitiveValue_int64(value)))
-  }
-
-  function Armada_UpdateChildToPrimitive_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, value: int64): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitive_int64(h, h.tree[p].children[field], value)
-    else
-      h
-  }
-
-  function Armada_UpdatePointerToPrimitiveArray_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, a: seq<int64>): Armada_HeapGeneric<S, F>
-    decreases |a|
-  {
-    if |a| == 0 then
-      h
-    else
-      var new_heap := Armada_UpdateChildToPrimitive_int64(h, p, Armada_FieldArrayIndex(|a| - 1), a[|a| - 1]); Armada_UpdatePointerToPrimitiveArray_int64(new_heap, p, a[..|a| - 1])
-  }
+  datatype Armada_Config = Armada_Config(tid_init: Armada_ThreadHandle, new_ptrs: set<Armada_Pointer>)
 
-  function Armada_UpdateChildToPrimitiveArray_int64<S, F>(h: Armada_HeapGeneric<S, F>, p: Armada_Pointer, field: Armada_FieldGeneric<F>, a: seq<int64>): Armada_HeapGeneric<S, F>
-  {
-    if p in h.tree && field in h.tree[p].children then
-      Armada_UpdatePointerToPrimitiveArray_int64(h, h.tree[p].children[field], a)
-    else
-      h
-  }
-
-  function Armada_PerformFieldUpdateForPrimitive_int64<F>(v:int64, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : int64
-  {
-    if |fields| == 0 && value.Armada_PrimitiveValue_int64? then
-        value.n_int64
-    else
-        v
-  }
-
-  function Armada_PerformFieldUpdateForPrimitiveArray_int64<F>(v:seq<int64>, fields:seq<Armada_FieldGeneric<F>>, value:Armada_PrimitiveValue) : seq<int64>
-  {
-    if |fields| == 1 && fields[0].Armada_FieldArrayIndex? && fields[0].i >= 0 && fields[0].i < |v| && value.Armada_PrimitiveValue_int64? then
-        v[fields[0].i := value.n_int64]
-    else
-        v
-  }
+  ////////////////////////////////
+  // Placeholder types
+  ////////////////////////////////
 
-  function Armada_AllocatedByPrimitive(h: Armada_HeapGeneric, p: Armada_Pointer, pty:Armada_PrimitiveType): set<Armada_Pointer>
-    requires Armada_ValidPointerToPrimitive(h, p, pty)
-  {
-    {p}
-  }
+  type ArmadaPlaceholder_ExtendedFrame
+  datatype ArmadaPlaceholder_StoreBufferEntry = ArmadaPlaceholder_StoreBufferEntry(value: Armada_PrimitiveValue)
+  datatype ArmadaPlaceholder_Thread =
+    ArmadaPlaceholder_Thread(stack: seq<ArmadaPlaceholder_ExtendedFrame>, storeBuffer: seq<ArmadaPlaceholder_StoreBufferEntry>)
+  datatype ArmadaPlaceholder_TotalState =
+    ArmadaPlaceholder_TotalState(stop_reason: Armada_StopReason, threads: map<Armada_ThreadHandle, ArmadaPlaceholder_Thread>,
+                                 joinable_tids: set<Armada_ThreadHandle>)
 
-  function Armada_AllocatedByPrimitiveArray(h: Armada_HeapGeneric, p: Armada_Pointer, pty:Armada_PrimitiveType): set<Armada_Pointer>
-    requires Armada_ValidPointerToPrimitiveArray(h, p, pty)
-  {
-    {p} + set i | 0 <= i < h.tree[p].ty.sz :: var idx := Armada_FieldArrayIndex(i); h.tree[p].children[idx]
-  }
 }

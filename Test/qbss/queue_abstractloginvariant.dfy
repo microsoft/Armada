@@ -198,8 +198,8 @@ predicate {:verify false} DequeueInputPointersDoNotAliasElementArray(s:LPlusStat
   forall tid2 :: tid2 in s.s.threads
     && s.s.threads[tid2].top.Armada_StackFrame_dequeue?
     ==>
-    var k := s.s.threads[tid2].top.dequeue'k;
-    var v := s.s.threads[tid2].top.dequeue'v;
+    var k := s.s.threads[tid2].top.dequeue.k;
+    var v := s.s.threads[tid2].top.dequeue.v;
     && k in s.s.mem.heap.tree && s.s.mem.heap.tree[k].field_of_parent.Armada_FieldNone?
     && v in s.s.mem.heap.tree && s.s.mem.heap.tree[v].field_of_parent.Armada_FieldNone?
 
@@ -217,7 +217,7 @@ predicate {:verify false} TmpIntProperties(s:LPlusState)
            ==>
             var f := s.s.threads[tid2].top;
             var locv := Armada_GetThreadLocalView(s.s, tid2);
-            &&  f.dequeue'tmp_int == GetQbssElement(locv, f.dequeue'read_index as int % s.s.mem.globals.queue.number_elements as int).key
+            &&  f.dequeue.tmp_int == GetQbssElement(locv, f.dequeue.read_index as int % s.s.mem.globals.queue.number_elements as int).key
        )
 
     && (forall tid2 :: tid2 in s.s.threads
@@ -228,7 +228,7 @@ predicate {:verify false} TmpIntProperties(s:LPlusState)
            ==>
             var f := s.s.threads[tid2].top;
             var locv := Armada_GetThreadLocalView(s.s, tid2);
-            &&  f.dequeue'tmp_int == GetQbssElement(locv, f.dequeue'read_index as int % s.s.mem.globals.queue.number_elements as int).value
+            &&  f.dequeue.tmp_int == GetQbssElement(locv, f.dequeue.read_index as int % s.s.mem.globals.queue.number_elements as int).value
        )
 }
 
@@ -254,7 +254,7 @@ predicate {:verify false} EnqueueEIsEltArrayPlusWriteIndex(s:LPlusState)
            PCToInstructionCount_L(Armada_PC_enqueue_write_index_update)
         ==> 
         var f := s.s.threads[tid1].top;
-        && f.enqueue'e == GetPointerToQbssElement(s.s.mem, f.enqueue'write_index as int)
+        && f.enqueue.e == GetPointerToQbssElement(s.s.mem, f.enqueue.write_index as int)
         )
 }
 
@@ -273,7 +273,7 @@ predicate {:verify false} DequeueEisEltArrayPlusReadIndex(s:LPlusState)
         ==> 
         var f := s.s.threads[tid2].top;
 
-        && f.dequeue'e == GetPointerToQbssElement(s.s.mem, f.dequeue'read_index as int % s.s.mem.globals.queue.number_elements as int)
+        && f.dequeue.e == GetPointerToQbssElement(s.s.mem, f.dequeue.read_index as int % s.s.mem.globals.queue.number_elements as int)
         )
 }
 
@@ -331,8 +331,8 @@ predicate {:verify false} MainIfGuard(s:LPlusState)
      || s.s.threads[tid].pc == Armada_PC_main_BeforeDequeueCreate)
      ==>
      s.s.mem.globals.queue.element_array != 0
-     && s.s.threads[tid].top.main'k != 0
-     && s.s.threads[tid].top.main'v != 0
+     && s.s.threads[tid].top.main.k != 0
+     && s.s.threads[tid].top.main.v != 0
     )
 }
 
@@ -359,7 +359,7 @@ predicate {:verify false} ConditionalMemorySafetyElementInMainAfterCalloc(s:LPlu
     && s.s.threads[tid].top.Armada_StackFrame_main?
     && PCToInstructionCount_L(s.s.threads[tid].pc) > PCToInstructionCount_L(Armada_PC_main_k_alloc)
     ==>
-    &&  var k := s.s.threads[tid].top.main'k;
+    &&  var k := s.s.threads[tid].top.main.k;
     (k != 0 ==> k in s.s.mem.heap.tree && s.s.mem.heap.tree[k].field_of_parent.Armada_FieldNone?)
     )
 
@@ -367,7 +367,7 @@ predicate {:verify false} ConditionalMemorySafetyElementInMainAfterCalloc(s:LPlu
     && s.s.threads[tid].top.Armada_StackFrame_main?
     && PCToInstructionCount_L(s.s.threads[tid].pc) > PCToInstructionCount_L(Armada_PC_main_v_alloc)
     ==>
-    &&  var v := s.s.threads[tid].top.main'v;
+    &&  var v := s.s.threads[tid].top.main.v;
     (v != 0 ==> v in s.s.mem.heap.tree && s.s.mem.heap.tree[v].field_of_parent.Armada_FieldNone?)
     )
 
@@ -432,7 +432,7 @@ predicate {:verify false} LocalIndicesOfDequeueAlwaysWithinBounds(s:LPlusState)
     && PCToInstructionCount_L(s.s.threads[tid2].pc) > PCToInstructionCount_L(Armada_PC_dequeue_read_index_init)
     ==>
     var f := s.s.threads[tid2].top;
-    0 <= f.dequeue'read_index as int < s.s.mem.globals.queue.number_elements as int
+    0 <= f.dequeue.read_index as int < s.s.mem.globals.queue.number_elements as int
 }
 // Relies on EnqGlobalAndLocalViewOfIndicesAlwaysWithinBounds
 predicate {:verify false} LocalIndicesOfEnqueueAlwaysWithinBounds(s:LPlusState)
@@ -442,7 +442,7 @@ predicate {:verify false} LocalIndicesOfEnqueueAlwaysWithinBounds(s:LPlusState)
     && PCToInstructionCount_L(s.s.threads[tid1].pc) > PCToInstructionCount_L(Armada_PC_enqueue_write_index_init)
     ==>
     var f := s.s.threads[tid1].top;
-    0 <= f.enqueue'write_index as int < s.s.mem.globals.queue.number_elements as int
+    0 <= f.enqueue.write_index as int < s.s.mem.globals.queue.number_elements as int
 }
 
 predicate {:verify false} IndicesAlwaysWithinBounds(s:LPlusState)
@@ -462,7 +462,7 @@ predicate {:verify false} DeqLocalReadIndexMatchesLocalViewAfterInit(s:LPlusStat
     PCToInstructionCount_L(Armada_PC_dequeue_read_index_update)
     ==>
   var locv := Armada_GetThreadLocalView(s.s, tid2);
-  && s.s.threads[tid2].top.dequeue'read_index == locv.globals.queue.read_index
+  && s.s.threads[tid2].top.dequeue.read_index == locv.globals.queue.read_index
 }
 
 predicate {:verify false} EnqLocalWriteIndexMatchesLocalViewAfterInit(s:LPlusState)
@@ -475,7 +475,7 @@ predicate {:verify false} EnqLocalWriteIndexMatchesLocalViewAfterInit(s:LPlusSta
     PCToInstructionCount_L(Armada_PC_enqueue_write_index_update)
     ==>
   var locv := Armada_GetThreadLocalView(s.s, tid1);
-  && s.s.threads[tid1].top.enqueue'write_index == locv.globals.queue.write_index
+  && s.s.threads[tid1].top.enqueue.write_index == locv.globals.queue.write_index
 }
 
 /*
@@ -544,7 +544,7 @@ predicate {:verify false} DequeueLocalSpaceImpliesGlobalSpace(s:LPlusState)
           PCToInstructionCount_L(L.Armada_PC_dequeue_read_index_update))
           ==>
           var locv := Armada_GetThreadLocalView(s.s, tid2);
-      (s.s.threads[tid2].top.dequeue'read_index != s.s.threads[tid2].top.dequeue'write_index ==> locv.globals.queue.read_index != locv.globals.queue.write_index)
+      (s.s.threads[tid2].top.dequeue.read_index != s.s.threads[tid2].top.dequeue.write_index ==> locv.globals.queue.read_index != locv.globals.queue.write_index)
   )
 }
 
@@ -555,7 +555,7 @@ predicate {:verify false} DequeueIfProperties(s:LPlusState)
     && PCToInstructionCount_L(Armada_PC_dequeue_inside_if_start) <= PCToInstructionCount_L(s.s.threads[tid2].pc)
     <= PCToInstructionCount_L(Armada_PC_dequeue_read_index_update)
     ==>
-    s.s.threads[tid2].top.dequeue'read_index != s.s.threads[tid2].top.dequeue'write_index
+    s.s.threads[tid2].top.dequeue.read_index != s.s.threads[tid2].top.dequeue.write_index
     )
 
   && (forall tid2 :: tid2 in s.s.threads
@@ -635,12 +635,12 @@ predicate {:verify false} EnqueueInitInvariant(s:LPlusState)
     (
       && (
       PCToInstructionCount_L(Armada_PC_enqueue_tmp_write_index_init) < PCToInstructionCount_L(pc)
-      ==> f.enqueue'tmp_write_index == Armada_CastTo_uint64(f.enqueue'write_index as int + 1)
+      ==> f.enqueue.tmp_write_index == Armada_CastTo_uint64(f.enqueue.write_index as int + 1)
       )
 
       && (
       PCToInstructionCount_L(Armada_PC_enqueue_modulo_init) < PCToInstructionCount_L(pc)
-      ==> locv.globals.queue.number_elements as int > 0 && f.enqueue'modulo == Armada_CastTo_uint64((f.enqueue'tmp_write_index as int % locv.globals.queue.number_elements as int) as int)
+      ==> locv.globals.queue.number_elements as int > 0 && f.enqueue.modulo == Armada_CastTo_uint64((f.enqueue.tmp_write_index as int % locv.globals.queue.number_elements as int) as int)
       )
     )
 }
@@ -661,12 +661,12 @@ predicate {:verify false} DequeueReadIndexUpdateInvariant(s:LPlusState)
     (
       && (
       PCToInstructionCount_L(Armada_PC_dequeue_tmp_read_index_init) < PCToInstructionCount_L(pc)
-      ==> f.dequeue'tmp_read_index == Armada_CastTo_uint64(f.dequeue'read_index as int + 1)
+      ==> f.dequeue.tmp_read_index == Armada_CastTo_uint64(f.dequeue.read_index as int + 1)
       )
 
       && (
       PCToInstructionCount_L(Armada_PC_dequeue_modulo_init) < PCToInstructionCount_L(pc)
-      ==> locv.globals.queue.number_elements as int > 0 && f.dequeue'modulo == Armada_CastTo_uint64((f.dequeue'tmp_read_index as int % locv.globals.queue.number_elements as int) as int)
+      ==> locv.globals.queue.number_elements as int > 0 && f.dequeue.modulo == Armada_CastTo_uint64((f.dequeue.tmp_read_index as int % locv.globals.queue.number_elements as int) as int)
       )
     )
 }
@@ -695,7 +695,7 @@ predicate {:verify false} AbstractReadsMatchImplQueueValuesInDequeue(s:LPlusStat
         && WeakHeapInvariant(locv.heap)
         && MemorySafetyElementArray(locv)
         && s.s.mem.globals.queue.number_elements as int > 0
-        && QbssElement(f.dequeue'i_k, f.dequeue'i_v) == GetQbssElement(locv, f.dequeue'read_index as int % locv.globals.queue.number_elements as int))
+        && QbssElement(f.dequeue.i_k, f.dequeue.i_v) == GetQbssElement(locv, f.dequeue.read_index as int % locv.globals.queue.number_elements as int))
 }
 
 

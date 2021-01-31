@@ -74,55 +74,68 @@ namespace Microsoft.Armada
       pgp.AddLemma(str, "invariants");
     }
 
-    public virtual string GenerateSpecificNextLemma(ProofGenerationParams pgp, NextRoutine nextRoutine,
-                                                    IEnumerable<InvariantInfo> allInvariants)
+    public virtual string GenerateSpecificNextLemma(ProofGenerationParams pgp, AtomicPath atomicPath,
+                                                    IEnumerable<InvariantInfo> allInvariants, AtomicSpec atomicSpec,
+                                                    bool onlyNonstoppingPaths)
     {
-      string nameSuffix = nextRoutine.NameSuffix;
-      string nextLemmaName = $"lemma_InvariantPredicateMaintainedByNext_{Key}_{nameSuffix}";
+      string nameSuffix = atomicPath.Name;
+      string specificPathLemmaName = $"lemma_InvariantPredicateMaintainedByPath_{Key}_{nameSuffix}";
+      var pr = new PathPrinter(atomicSpec);
       string str = $@"
-        lemma {nextLemmaName}(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
+        lemma {specificPathLemmaName}(s: LPlusState, s': LPlusState, path: {atomicSpec.Prefix}_Path, tid: Armada_ThreadHandle)
           requires {Name}(s)
       ";
-      foreach (var dependency in Dependencies)
-      {
-        str += $"  requires {FindMatchingDependency(dependency, allInvariants)}(s);\n";
+      str += String.Concat(Dependencies.Select(dependency => $"  requires {FindMatchingDependency(dependency, allInvariants)}(s);\n"));
+      if (onlyNonstoppingPaths) {
+        str += $@"
+          requires s'.s.stop_reason.Armada_NotStopped?
+        ";
       }
       str += $@"
-          requires step.Armada_TraceEntry_{nameSuffix}?
-          requires LPlus_NextOneStep(s, s', step)
+          requires path.{atomicSpec.Prefix}_Path_{nameSuffix}?
+          requires {atomicSpec.Prefix}_ValidPath(s, path, tid)
+          requires s' == {atomicSpec.Prefix}_GetStateAfterPath(s, path, tid)
           ensures  {Name}(s')
         {{
-          {nextStepBody}
+          { pr.GetOpenValidPathInvocation(atomicPath) }
+          ProofCustomizationGoesHere();
+          { nextStepBody }
         }}
       ";
       pgp.AddLemma(str, "invariants");
 
-      return nextLemmaName;
+      return specificPathLemmaName;
     }
 
-    public virtual void GenerateNextLemma(ProofGenerationParams pgp, IEnumerable<InvariantInfo> allInvariants)
+    public virtual void GenerateAtomicNextLemma(ProofGenerationParams pgp, IEnumerable<InvariantInfo> allInvariants,
+                                                AtomicSpec atomicSpec, bool onlyNonstoppingPaths)
     {
       string finalCases = "";
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        string specificNext = GenerateSpecificNextLemma(pgp, nextRoutine, allInvariants);
-        var step_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"    case Armada_TraceEntry_{nextRoutine.NameSuffix}(_{step_params}) => {specificNext}(s, s', step);\n";
+      foreach (var atomicPath in atomicSpec.AtomicPaths) {
+        string specificPathLemma = GenerateSpecificNextLemma(pgp, atomicPath, allInvariants, atomicSpec, onlyNonstoppingPaths);
+        finalCases += $"    case {atomicSpec.Prefix}_Path_{atomicPath.Name}(_) => {specificPathLemma}(s, s', path, tid);\n";
       }
 
-      nextLemmaName = $"lemma_InvariantPredicateMaintainedByNext_{Key}";
+      nextLemmaName = $"lemma_InvariantPredicateMaintainedByPath_{Key}";
       string str = $@"
-        lemma {nextLemmaName}(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
+        lemma {nextLemmaName}(s: LPlusState, s': LPlusState, path: {atomicSpec.Prefix}_Path, tid: Armada_ThreadHandle)
           requires {Name}(s)
       ";
       foreach (var dependency in Dependencies)
       {
         str += $"  requires {FindMatchingDependency(dependency, allInvariants)}(s);\n";
       }
+      if (onlyNonstoppingPaths) {
+        str += @"
+          requires s'.s.stop_reason.Armada_NotStopped?
+        ";
+      }
       str += $@"
-          requires LPlus_NextOneStep(s, s', step)
+          requires {atomicSpec.Prefix}_ValidPath(s, path, tid)
+          requires s' == {atomicSpec.Prefix}_GetStateAfterPath(s, path, tid)
           ensures  {Name}(s')
         {{
-          match step {{
+          match path {{
             { finalCases }
           }}
         }}
@@ -130,10 +143,11 @@ namespace Microsoft.Armada
       pgp.AddLemma(str, "invariants");
     }
 
-    public virtual void GenerateProofs(ProofGenerationParams pgp, IEnumerable<InvariantInfo> allInvariants)
+    public virtual void GenerateProofs(ProofGenerationParams pgp, IEnumerable<InvariantInfo> allInvariants, AtomicSpec atomicSpec,
+                                       bool onlyNonstoppingPaths)
     {
       GenerateInitLemma(pgp);
-      GenerateNextLemma(pgp, allInvariants);
+      GenerateAtomicNextLemma(pgp, allInvariants, atomicSpec, onlyNonstoppingPaths);
     }
   }
 
@@ -146,7 +160,8 @@ namespace Microsoft.Armada
 
   public class InternalInvariantInfo : InvariantInfo
   {
-    public InternalInvariantInfo(string i_key, string i_name, List<string> i_dependencies, string nextStepBody="") : base(i_key, i_name, i_dependencies, nextStepBody)
+    public InternalInvariantInfo(string i_key, string i_name, List<string> i_dependencies, string nextStepBody="")
+      : base(i_key, i_name, i_dependencies, nextStepBody)
     {
     }
   }
@@ -154,49 +169,139 @@ namespace Microsoft.Armada
   public abstract class AbstractProofGenerator
   {
     protected ProofGenerationParams pgp;
+    protected bool stateDependentConvertStep;
     protected Dictionary<ArmadaPC, ArmadaPC> pcMap;
     protected Dictionary<NextRoutine, NextRoutine> nextRoutineMap;
     protected List<ImportFileArmadaProofDecl> importedFiles;
     protected List<ImportModuleArmadaProofDecl> importedModules;
     protected List<InvariantInfo> invariants;
     protected List<AuxiliaryInfo> auxiliaries;
+    protected AtomicSpec lAtomic, hAtomic;
+    protected Dictionary<AtomicPath, AtomicPath> pathMap;
 
     // To prevent duplicate lemmas when there are duplicate calls
     private bool calledGenerateAppendStoreBufferOtherWay = false;
 
-    public AbstractProofGenerator(ProofGenerationParams i_pgp)
+    public AbstractProofGenerator(ProofGenerationParams i_pgp, bool i_stateDependentConvertStep = false)
     {
       pgp = i_pgp;
-      nextRoutineMap = new Dictionary<NextRoutine, NextRoutine>();
+      stateDependentConvertStep = i_stateDependentConvertStep;
+      nextRoutineMap = null;
       importedFiles = new List<ImportFileArmadaProofDecl>();
       importedModules = new List<ImportModuleArmadaProofDecl>();
       invariants = new List<InvariantInfo>();
       auxiliaries = new List<AuxiliaryInfo>();
+      lAtomic = null;
+      hAtomic = null;
+      pathMap = null;
 
-      var specFile = pgp.proofFiles.CreateAuxiliaryProofFile("specs");
+      var revelationsFile = pgp.proofFiles.CreateAuxiliaryProofFile("revelations", false);
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("revelations");
+
+      var specFile = pgp.proofFiles.CreateAuxiliaryProofFile("specs", false);
       specFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
       specFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaLemmas.i.dfy");
       specFile.AddImport("GenericArmadaSpecModule");
       specFile.AddImport("GenericArmadaLemmasModule");
+      specFile.IncludeAndImportGeneratedFile("revelations");
       pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("specs");
+
+      var plusFile = pgp.proofFiles.CreateAuxiliaryProofFile("PlusLemmas");
+      plusFile.IncludeAndImportGeneratedFile("specs");
+      plusFile.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaPlus.i.dfy");
+      plusFile.AddImport("GenericArmadaPlusModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("PlusLemmas");
+
+      var effectFile = pgp.proofFiles.CreateAuxiliaryProofFile("pceffect");
+      effectFile.IncludeAndImportGeneratedFile("specs");
+      effectFile.IncludeAndImportGeneratedFile("revelations");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("pceffect");
+
+      var latomicFile = pgp.proofFiles.CreateAuxiliaryProofFile("latomic");
+      latomicFile.IncludeAndImportGeneratedFile("specs");
+      latomicFile.IncludeAndImportGeneratedFile("revelations");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("latomic");
+
+      var hatomicFile = pgp.proofFiles.CreateAuxiliaryProofFile("hatomic");
+      hatomicFile.IncludeAndImportGeneratedFile("specs");
+      hatomicFile.IncludeAndImportGeneratedFile("revelations");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("hatomic");
 
       var convertFile = pgp.proofFiles.CreateAuxiliaryProofFile("convert");
       convertFile.IncludeAndImportGeneratedFile("specs");
+      convertFile.IncludeAndImportGeneratedFile("pceffect");
+      convertFile.IncludeAndImportGeneratedFile("latomic");
+      convertFile.IncludeAndImportGeneratedFile("hatomic");
       convertFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
       convertFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
       pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("convert");
 
-      var invFile = pgp.proofFiles.CreateAuxiliaryProofFile("invariants");
-      invFile.IncludeAndImportGeneratedFile("specs");
-      invFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/invariants.i.dfy", "InvariantsModule");
-      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("invariants");
-      invFile.IncludeAndImportGeneratedFile("utility");
+      var defsFile = pgp.proofFiles.CreateAuxiliaryProofFile("defs");
+      defsFile.IncludeAndImportGeneratedFile("specs");
+      defsFile.IncludeAndImportGeneratedFile("convert");
+      defsFile.IncludeAndImportGeneratedFile("latomic");
+      defsFile.IncludeAndImportGeneratedFile("hatomic");
+      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/option.s.dfy", "util_option_s");
+      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy", "util_collections_maps_i");
+      defsFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy", "util_collections_seqs_i");
+      defsFile.AddImport("util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("defs");
 
       var utilityFile = pgp.proofFiles.CreateAuxiliaryProofFile("utility");
       utilityFile.IncludeAndImportGeneratedFile("specs");
       utilityFile.IncludeAndImportGeneratedFile("convert");
-      utilityFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy", "util_collections_seqs_s");
+      utilityFile.IncludeAndImportGeneratedFile("defs");
+      utilityFile.IncludeAndImportGeneratedFile("latomic");
+      utilityFile.IncludeAndImportGeneratedFile("hatomic");
+      utilityFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy",
+                                   "util_collections_seqs_s");
+      utilityFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.i.dfy",
+                                   "util_collections_seqs_i");
       pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("utility");
+
+      var invFile = pgp.proofFiles.CreateAuxiliaryProofFile("invariants");
+      invFile.IncludeAndImportGeneratedFile("specs");
+      invFile.IncludeAndImportGeneratedFile("convert");
+      invFile.IncludeAndImportGeneratedFile("revelations");
+      invFile.IncludeAndImportGeneratedFile("utility");
+      invFile.IncludeAndImportGeneratedFile("defs");
+      invFile.IncludeAndImportGeneratedFile("latomic");
+      invFile.IncludeAndImportGeneratedFile("hatomic");
+      invFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/invariants.i.dfy", "InvariantsModule");
+      invFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaSpec.i.dfy",
+                               "GenericArmadaSpecModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("invariants");
+
+      var liftFile = pgp.proofFiles.CreateAuxiliaryProofFile("lift");
+      liftFile.IncludeAndImportGeneratedFile("specs");
+      liftFile.IncludeAndImportGeneratedFile("convert");
+      liftFile.IncludeAndImportGeneratedFile("defs");
+      liftFile.IncludeAndImportGeneratedFile("invariants");
+      liftFile.IncludeAndImportGeneratedFile("utility");
+      liftFile.IncludeAndImportGeneratedFile("latomic");
+      liftFile.IncludeAndImportGeneratedFile("hatomic");
+      liftFile.IncludeAndImportGeneratedFile("revelations");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/LiftAtomicToAtomic.i.dfy",
+                                "LiftAtomicToAtomicModule");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaAtomic.i.dfy",
+                                "GenericArmadaAtomicModule");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy",
+                                "util_collections_seqs_s");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("lift");
+
+      var str = @"
+        predicate InductiveInvBasic(s: LPlusState)
+        {
+          0 !in s.s.threads
+        }
+      ";
+      pgp.AddPredicate(str, "defs");
+      AddInvariant(new InternalInvariantInfo("InductiveInvBasic", "InductiveInvBasic", new List<string>()));
+
+      var atomicModulePath = ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/GenericArmadaAtomic.i.dfy";
+      convertFile.AddIncludeImport(atomicModulePath, "GenericArmadaAtomicModule");
+      invFile.AddIncludeImport(atomicModulePath, "GenericArmadaAtomicModule");
+      pgp.proofFiles.MainProof.AddIncludeImport(atomicModulePath, "GenericArmadaAtomicModule");
     }
 
     public abstract void GenerateProof();
@@ -346,12 +451,108 @@ namespace Microsoft.Armada
         if (!CheckVariableNameListEquivalence(s_l.OutputVariableNames, s_h.OutputVariableNames, s_l, s_h, methodName, "output")) {
           return false;
         }
-        if (!CheckVariableNameListEquivalence(s_l.AllVariableNamesInOrder, s_h.AllVariableNamesInOrder, s_l, s_h, methodName, "any")) {
+        if (!CheckVariableNameListEquivalence(s_l.AllVariableNamesInOrder, s_h.AllVariableNamesInOrder, s_l, s_h, methodName, "")) {
           return false;
         }
       }
 
       return true;
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// Generate PC-effect elements
+    ////////////////////////////////////////////////////////////////////////
+
+    protected void GeneratePCEffectLemmas()
+    {
+      GeneratePCEffectLemmas("L", pgp.symbolsLow);
+      GeneratePCEffectLemmas("H", pgp.symbolsHigh);
+    }
+
+    protected void GeneratePCEffectLemmas(string m, ArmadaSymbolTable symbols)
+    {
+      string str;
+
+      var pr = new ModuleStepPrinter(m);
+      foreach (var nextRoutine in symbols.NextRoutines)
+      {
+        str = $@"
+          lemma lemma_PCEffectOfStep_{m}_{nextRoutine.NameSuffix}(
+            s: {m}.Armada_TotalState,
+            step: {m}.Armada_Step,
+            tid: Armada_ThreadHandle
+            )
+            requires {m}.Armada_ValidStep(s, step, tid)
+            requires step.Armada_Step_{nextRoutine.NameSuffix}?
+        ";
+
+        if (nextRoutine.Tau) {
+          str += $@"
+            ensures  var s' := {m}.Armada_GetNextState(s, step, tid);
+                     s'.stop_reason.Armada_NotStopped? && tid in s'.threads && s'.threads[tid].pc == s.threads[tid].pc";
+        }
+        else {
+          str += $"ensures  s.threads[tid].pc.{nextRoutine.startPC}?\n";
+          if (nextRoutine.Stopping) {
+            str += $"ensures var s' := {m}.Armada_GetNextState(s, step, tid); !s'.stop_reason.Armada_NotStopped?\n";
+          }
+          else if (nextRoutine.endPC == null) {
+            str += $"ensures var s' := {m}.Armada_GetNextState(s, step, tid); s'.stop_reason.Armada_NotStopped? && tid !in s'.threads\n";
+          }
+          else {
+            str += $@"
+            ensures  var s' := {m}.Armada_GetNextState(s, step, tid);
+                     s'.stop_reason.Armada_NotStopped? && tid in s'.threads && s'.threads[tid].pc.{nextRoutine.endPC}?
+            ";
+          }
+        }
+
+        str += $@"
+          {{
+            { pr.GetOpenValidStepInvocation(nextRoutine) }
+          }}
+        ";
+
+        pgp.AddLemma(str, "pceffect");
+      }
+
+      var pcToNextRoutines = new Dictionary<ArmadaPC, List<NextRoutine>>();
+
+      foreach (var nextRoutine in symbols.NextRoutines.Where(r => !r.Tau))
+      {
+        if (pcToNextRoutines.ContainsKey(nextRoutine.startPC)) {
+          pcToNextRoutines[nextRoutine.startPC].Add(nextRoutine);
+        }
+        else {
+          pcToNextRoutines[nextRoutine.startPC] = new List<NextRoutine>{ nextRoutine };
+        }
+      }
+
+      var pcs = new List<ArmadaPC>();
+      symbols.AllMethods.AppendAllPCs(pcs);
+      foreach (var pc in pcs)
+      {
+        str = $@"
+          lemma lemma_PossibleStepsFromPC_{m}_{pc}(s: {m}.Armada_TotalState, step: {m}.Armada_Step, tid: Armada_ThreadHandle)
+            requires {m}.Armada_ValidStep(s, step, tid)
+            requires tid in s.threads
+            requires s.threads[tid].pc.{pc}?
+            ensures  step.Armada_Step_Tau?";
+        var nextRoutines = pcToNextRoutines.ContainsKey(pc) ? pcToNextRoutines[pc] : new List<NextRoutine>();
+        str += String.Concat(nextRoutines.Select(r => $" || step.Armada_Step_{r.NameSuffix}?"));
+        str += @"
+          {
+            match step {
+        ";
+        foreach (var nextRoutine in symbols.NextRoutines) {
+          str += $"{pr.CaseEntry(nextRoutine)} =>\n";
+          if (!nextRoutine.Tau && !nextRoutine.startPC.Equals(pc)) {
+            str += $"lemma_PCEffectOfStep_{m}_{nextRoutine.NameSuffix}(s, step, tid);\n";
+          }
+        }
+        str += "} }";
+        pgp.AddLemma(str, "pceffect");
+      }
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -404,12 +605,14 @@ namespace Microsoft.Armada
 
     protected virtual void GenerateNextRoutineMap(bool warnOnMissingRoutines = true)
     {
-      var hmap = new Dictionary<Tuple<ArmadaPC, ArmadaPC>, NextRoutine>();
+      nextRoutineMap = new Dictionary<NextRoutine, NextRoutine>();
+      var hmap = new Dictionary<Tuple<ArmadaPC, ArmadaPC, bool, bool>, NextRoutine>();
       foreach (var nextRoutine in pgp.symbolsHigh.NextRoutines) {
-        var t = new Tuple<ArmadaPC, ArmadaPC>(nextRoutine.pc, nextRoutine.endPC);
+        var t = new Tuple<ArmadaPC, ArmadaPC, bool, bool>(nextRoutine.startPC, nextRoutine.endPC, nextRoutine.UndefinedBehavior,
+                                                          nextRoutine.BranchOutcome);
         if (hmap.ContainsKey(t)) {
           AH.PrintError(pgp.prog,
-                        $"More than one next routine from PC {nextRoutine.pc} to {nextRoutine.endPC} in level {pgp.mLow.Name}");
+                        $"More than one next routine from PC {nextRoutine.startPC} to {nextRoutine.endPC} in level {pgp.mHigh.Name}");
           hmap.Remove(t);
         }
         else {
@@ -418,9 +621,9 @@ namespace Microsoft.Armada
       }
 
       foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        var startPC = LiftPC(nextRoutine.pc);
+        var startPC = LiftPC(nextRoutine.startPC);
         var endPC = LiftPC(nextRoutine.endPC);
-        var t = new Tuple<ArmadaPC, ArmadaPC>(startPC, endPC);
+        var t = new Tuple<ArmadaPC, ArmadaPC, bool, bool>(startPC, endPC, nextRoutine.UndefinedBehavior, nextRoutine.BranchOutcome);
         if (hmap.ContainsKey(t)) {
           nextRoutineMap[nextRoutine] = hmap[t];
         }
@@ -430,14 +633,18 @@ namespace Microsoft.Armada
       }
     }
 
-    protected virtual NextRoutine LiftNextRoutine(NextRoutine nextRoutine)
+    protected virtual NextRoutine LiftNextRoutine(NextRoutine lNextRoutine)
     {
-      if (nextRoutineMap.ContainsKey(nextRoutine)) {
-        return nextRoutineMap[nextRoutine];
-      }
-      else {
-        return null;
-      }
+      NextRoutine hNextRoutine;
+      nextRoutineMap.TryGetValue(lNextRoutine, out hNextRoutine);
+      return hNextRoutine;
+    }
+
+    protected virtual AtomicPath LiftAtomicPath(AtomicPath lPath)
+    {
+      AtomicPath hPath = null;
+      pathMap.TryGetValue(lPath, out hPath);
+      return hPath;
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -454,10 +661,14 @@ namespace Microsoft.Armada
         str = $@"
           predicate {invName}(s:LPlusState)
           {{
+            var threads := s.s.threads;
+            var globals := s.s.mem.globals;
+            var ghosts := s.s.ghosts;
+            var tid_init := s.config.tid_init;
             { d.Code }
           }}
         ";
-        pgp.AddPredicate(str, "invariants");
+        pgp.AddPredicate(str, "defs");
       }
       else if (userInvariants.ContainsKey(invKey)) {
         var inv = userInvariants[invKey];
@@ -468,7 +679,7 @@ namespace Microsoft.Armada
             L.{inv.TranslatedName}(splus.s)
           }}
         ";
-        pgp.AddPredicate(str, "invariants");
+        pgp.AddPredicate(str, "defs");
       }
       else {
         AH.PrintError(pgp.prog, d.tok, $"No invariant named {invKey} found among the invariants");
@@ -521,7 +732,7 @@ namespace Microsoft.Armada
           string str;
           string auxInitName = $"AuxInit_{iad.FieldName}";
           str = $@"
-            function {auxInitName}(s:LState, config:LConfig) : {iad.TypeName}
+            function {auxInitName}(s:LState, config:Armada_Config) : {iad.TypeName}
             {{
               {iad.InitCode}
             }}
@@ -530,7 +741,7 @@ namespace Microsoft.Armada
 
           string auxNextName = $"AuxNext_{iad.FieldName}";
           str = $@"
-            function {auxNextName}(s:LPlusState, s':LState, step:L.Armada_TraceEntry) : {iad.TypeName}
+            function {auxNextName}(s: LPlusState, s': LState, step: L.Armada_Step, tid: Armada_ThreadHandle) : {iad.TypeName}
             {{
               {iad.NextCode}
             }}
@@ -546,6 +757,485 @@ namespace Microsoft.Armada
     protected virtual void AddIncludesAndImports()
     {
       ParseImports();
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// Revelations
+    ////////////////////////////////////////////////////////////////////////
+
+    protected void GenerateRevelationLemmas()
+    {
+      GenerateRevelationLemmas("L", pgp.symbolsLow);
+      GenerateRevelationLemmas("H", pgp.symbolsHigh);
+    }
+
+    protected void GenerateRevelationLemmas(string moduleName, ArmadaSymbolTable symbols)
+    {
+      string str;
+
+      var pr = new ModuleStepPrinter(moduleName);
+
+      foreach (var nextRoutine in symbols.NextRoutines)
+      {
+        str = $@"
+          lemma lemma_OpenStep_{moduleName}_{nextRoutine.NameSuffix}(
+            s: {moduleName}.Armada_TotalState,
+            step: {moduleName}.Armada_Step,
+            tid: Armada_ThreadHandle
+            )
+            requires step.Armada_Step_{nextRoutine.NameSuffix}?
+            ensures  {moduleName}.Armada_ValidStep(s, step, tid) <==>
+                       tid in s.threads && s.stop_reason.Armada_NotStopped? && {pr.ValidStepInvocation(nextRoutine)}
+            ensures  {moduleName}.Armada_ValidStep(s, step, tid) ==>
+                       {moduleName}.Armada_GetNextState(s, step, tid) == {pr.GetNextStateInvocation(nextRoutine)}
+          {{
+            reveal {moduleName}.Armada_ValidStepCases();
+            reveal {moduleName}.Armada_GetNextState();
+          }}
+        ";
+        pgp.AddLemma(str, "revelations");
+      }
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// Atomic specs
+    ////////////////////////////////////////////////////////////////////////
+
+    protected void GenerateAtomicSpecs(bool avoidFinalUnmappedStoppingStep = true,
+                                       HashSet<ArmadaPC> lExtraRecurrentPCs = null,
+                                       HashSet<ArmadaPC> hExtraRecurrentPCs = null)
+    {
+      GeneratePCEffectLemmas();
+
+      lAtomic = new AtomicSpec(pgp, pgp.symbolsLow, "latomic", "LAtomic", true, "L", "LPlusState",
+                               "LPlus_GetSpecFunctions()", "GetLPlusSpec()",
+                               "LPlus_ValidStep", "LPlus_GetNextState");
+      lAtomic.MakeSpec(lExtraRecurrentPCs);
+
+      GenerateLiftToAtomicLemma();
+
+      hAtomic = new AtomicSpec(pgp, pgp.symbolsHigh, "hatomic", "HAtomic", false, "H", "HState",
+                               "H.Armada_GetSpecFunctions()", "GetHSpec()", "H.Armada_ValidStep",
+                               "H.Armada_GetNextState");
+      hAtomic.MakeSpec(hExtraRecurrentPCs);
+
+      GenerateLiftFromAtomicLemma();
+
+      if (nextRoutineMap == null) {
+        pathMap = lAtomic.CreatePathMap(hAtomic);
+      }
+      else {
+        pathMap = lAtomic.CreatePathMap(hAtomic, nextRoutineMap, avoidFinalUnmappedStoppingStep);
+      }
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// LiftToAtomic
+    ////////////////////////////////////////////////////////////////////////
+
+    public void GenerateLiftToAtomicSimpleRequirementsLemma()
+    {
+      string str = @"
+        lemma lemma_LiftToAtomicSimpleRequirements()
+          ensures var lasf := LPlus_GetSpecFunctions();
+                  var hasf := LAtomic_GetSpecFunctions();
+                  && LInitImpliesHInit(lasf, hasf)
+                  && StateOKsMatch(lasf, hasf)
+                  && NonyieldingPCsMatch(lasf, hasf)
+                  && ThreadPCsMatch(lasf, hasf)
+        {
+        }
+      ";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    public void GenerateTausLiftableLemma()
+    {
+      var stepPr = new LPlusStepPrinter();
+      stepPr.Step = "lstep";
+
+      var pathPr = new PathPrinter(lAtomic);
+      pathPr.State = "s";
+      pathPr.States = "hstates";
+      pathPr.Steps = "hsteps";
+      pathPr.Path = "hpath";
+
+      string str = $@"
+        lemma lemma_TausLiftable()
+          ensures var lasf := LPlus_GetSpecFunctions();
+                  var hasf := LAtomic_GetSpecFunctions();
+                  TausLiftable(lasf, hasf)
+        {{
+          reveal_LAtomic_ValidPath();
+          reveal_LAtomic_GetStateAfterPath();
+          var lasf := LPlus_GetSpecFunctions();
+          var hasf := LAtomic_GetSpecFunctions();
+          forall s, s', lstep, tid {{:trigger TausLiftableConditions(lasf, s, s', lstep, tid)}}
+            | TausLiftableConditions(lasf, s, s', lstep, tid)
+            ensures exists hpath :: && hasf.path_valid(s, hpath, tid)
+                              && hasf.path_type(hpath).AtomicPathType_Tau? 
+                              && s' == hasf.path_next(s, hpath, tid)
+          {{
+            { stepPr.GetOpenValidStepInvocation(pgp.symbolsLow.TauNextRoutine) }
+            var hpath := LAtomic_Path_Tau(LAtomic_PathSteps_Tau(lstep));
+            { pathPr.GetOpenPathInvocation(lAtomic.TauPath) }
+            ProofCustomizationGoesHere();
+            assert && hasf.path_valid(s, hpath, tid)
+                   && hasf.path_type(hpath).AtomicPathType_Tau? 
+                   && s' == hasf.path_next(s, hpath, tid);
+          }}
+        }}
+      ";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    public string GenerateCompressStepSequenceBodyForPathPrefix(AtomicPathPrefix pathPrefix)
+    {
+      var pos = pathPrefix.NumNextRoutines - 1;
+      var nextRoutine = pathPrefix.LastNextRoutine;
+      string str = "";
+      var stepsRemaining = (pos == 0) ? "steps" : $"steps[{pos}..]";
+      str += $@"
+          if steps[{pos}].Armada_Step_{nextRoutine.NameSuffix}? {{
+            var s{pos + 1} := asf.step_next(s{pos}, steps[{pos}], tid);
+            assert steps[{pos+1}..] == {stepsRemaining}[1..];
+            assert StepsStartNonyieldingNonrecurrent(asf, LAtomic_IsRecurrentPC, s{pos + 1}, s', steps[{pos + 1}..], tid);
+            assert |steps[{pos + 1}..]| == 0 <==> ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s{pos + 1}, tid);
+            lemma_PCEffectOfStep_L_{nextRoutine.NameSuffix}(s{pos}.s, steps[{pos}], tid);
+      ";
+      if (pathPrefix.EndType is PCAtomicType.Nonyielding) {
+        str += $@"
+            assert !ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s{pos + 1}, tid);
+            assert steps[{pos+1}] == steps[{pos + 1}..][0];
+            lemma_PossibleStepsFromPC_L_{nextRoutine.endPC}(s{pos + 1}.s, steps[{pos + 1}], tid);
+        ";
+        foreach (var descendant in pathPrefix.Extensions)
+        {
+          str += GenerateCompressStepSequenceBodyForPathPrefix(descendant);
+        }
+        str += @"
+             assert false;
+           }
+        ";
+      }
+      else {
+        var path = pathPrefix.PathVal;
+        var pr = new PathPrinter(lAtomic);
+        str += $@"
+            assert ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s{pos + 1}, tid);
+            assert s' == s{pos + 1};
+            path := LAtomic_Path_{path.Name}(LAtomic_PathSteps_{path.Name}(
+        ";
+        str += String.Join(", ", Enumerable.Range(0, pos + 1).Select(i => $"steps[{i}]"));
+        str += $@"));
+            { pr.GetOpenPathInvocation(path) }
+            return;
+          }}
+        ";
+      }
+      return str;
+    }
+
+    public void GenerateCompressStepSequenceIntoPathStartingAt(ArmadaPC startPC)
+    {
+      string str;
+
+      str = $@"
+        lemma lemma_CompressStepSequenceIntoPathStartingAt_{startPC}(
+          asf: Armada_SpecFunctions<LPlusState, L.Armada_Step, L.Armada_PC>,
+          s: LPlusState,
+          s': LPlusState,
+          steps: seq<L.Armada_Step>,
+          tid: Armada_ThreadHandle
+          ) returns (
+          path: LAtomic_Path
+          )
+          requires asf == LPlus_GetSpecFunctions()
+          requires |steps| > 0
+          requires !steps[0].Armada_Step_Tau?
+          requires LPlus_ValidStep(s, steps[0], tid)
+          requires ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s, tid)
+          requires ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s', tid)
+          requires StepsStartNonyieldingNonrecurrent(asf, LAtomic_IsRecurrentPC, asf.step_next(s, steps[0], tid), s', steps[1..], tid)
+          requires s.s.threads[tid].pc.{startPC}?
+          ensures  LAtomic_ValidPath(s, path, tid)
+          ensures  s' == LAtomic_GetStateAfterPath(s, path, tid)
+          ensures  !LAtomic_GetPathType(path).AtomicPathType_Tau?
+          ensures  AtomicPathTypeMatchesPCTypes(LAtomic_GetSpecFunctions(), s, path, tid)
+        {{
+          var s0 := s;
+          lemma_PossibleStepsFromPC_L_{startPC}(s.s, steps[0], tid);
+      ";
+      foreach (var pathPrefix in lAtomic.RootPathPrefixesByPC(startPC))
+      {
+        str += GenerateCompressStepSequenceBodyForPathPrefix(pathPrefix);
+      }
+      str += @"
+          assert false;
+        }}
+      ";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    public void GenerateCompressStepSequenceLemmas()
+    {
+      string str;
+
+      str = @"
+        lemma lemma_CompressStepSequenceIntoPath(
+          asf: Armada_SpecFunctions<LPlusState, L.Armada_Step, L.Armada_PC>,
+          s: LPlusState,
+          s': LPlusState,
+          steps: seq<L.Armada_Step>,
+          tid: Armada_ThreadHandle
+          ) returns (
+          path: LAtomic_Path
+          )
+          requires asf == LPlus_GetSpecFunctions()
+          requires |steps| > 0
+          requires !steps[0].Armada_Step_Tau?
+          requires LPlus_ValidStep(s, steps[0], tid)
+          requires ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s, tid)
+          requires ThreadYieldingOrRecurrent(asf, LAtomic_IsRecurrentPC, s', tid)
+          requires StepsStartNonyieldingNonrecurrent(asf, LAtomic_IsRecurrentPC, asf.step_next(s, steps[0], tid), s', steps[1..], tid)
+          ensures  LAtomic_ValidPath(s, path, tid)
+          ensures  s' == LAtomic_GetStateAfterPath(s, path, tid)
+          ensures  !LAtomic_GetPathType(path).AtomicPathType_Tau?
+          ensures  AtomicPathTypeMatchesPCTypes(LAtomic_GetSpecFunctions(), s, path, tid)
+        {
+          var pc := s.s.threads[tid].pc;
+          assert L.Armada_IsNonyieldingPC(pc) ==> LAtomic_IsRecurrentPC(pc);
+          match pc {
+      ";
+      foreach (var pc in lAtomic.AllPCs)
+      {
+        str += $"    case {pc} =>\n";
+        if (pgp.symbolsLow.IsNonyieldingPC(pc) && !lAtomic.RecurrentPCs.Contains(pc)) {
+          str += "     assert false;\n";
+        }
+        else {
+          GenerateCompressStepSequenceIntoPathStartingAt(pc);
+          str += $"    path := lemma_CompressStepSequenceIntoPathStartingAt_{pc}(asf, s, s', steps, tid);\n";
+        }
+      }
+      str += "}\n}\n";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    public void GenerateSequencesCompressibleLemma()
+    {
+      string str = @"
+        lemma lemma_SequencesCompressible()
+          ensures SequencesCompressible(LPlus_GetSpecFunctions(), LAtomic_GetSpecFunctions(), LAtomic_IsRecurrentPC)
+        {
+          var lasf := LPlus_GetSpecFunctions();
+          var hasf := LAtomic_GetSpecFunctions();
+          forall s, s', lsteps, tid {:trigger SequencesCompressibleConditions(lasf, LAtomic_IsRecurrentPC, s, s', lsteps, tid)}
+            | SequencesCompressibleConditions(lasf, LAtomic_IsRecurrentPC, s, s', lsteps, tid)
+            ensures exists hpath :: SequencesCompressibleConclusions(hasf, s, s', tid, hpath)
+          {
+            var hpath := lemma_CompressStepSequenceIntoPath(lasf, s, s', lsteps, tid);
+            assert SequencesCompressibleConclusions(hasf, s, s', tid, hpath);
+          }
+        }
+      ";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    public void GenerateLiftToAtomicLemma()
+    {
+      var liftFile = pgp.proofFiles.CreateAuxiliaryProofFile("LiftToAtomic");
+      liftFile.IncludeAndImportGeneratedFile("specs");
+      liftFile.IncludeAndImportGeneratedFile("pceffect");
+      liftFile.IncludeAndImportGeneratedFile("revelations");
+      liftFile.IncludeAndImportGeneratedFile("latomic");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy", "util_collections_seqs_s");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/LiftToAtomic.i.dfy",
+                                "LiftToAtomicModule");
+      liftFile.AddImport("GenericArmadaAtomicModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("LiftToAtomic");
+
+      GenerateLiftToAtomicSimpleRequirementsLemma();
+      GenerateTausLiftableLemma();
+      GenerateCompressStepSequenceLemmas();
+      GenerateSequencesCompressibleLemma();
+
+      string str = $@"
+        lemma lemma_LiftToAtomic() returns (refinement_relation:RefinementRelation<LPlusState, LPlusState>)
+          ensures SpecRefinesSpec(Armada_SpecFunctionsToSpec(LPlus_GetSpecFunctions()), AtomicSpec(LAtomic_GetSpecFunctions()),
+                                  refinement_relation)
+          ensures refinement_relation == iset s: LPlusState | true :: RefinementPair(s, s)
+        {{
+          lemma_LiftToAtomicSimpleRequirements();
+          lemma_TausLiftable();
+          lemma_SequencesCompressible();
+          refinement_relation := lemma_SpecRefinesAtomicSpec(LPlus_GetSpecFunctions(), LAtomic_GetSpecFunctions(), LAtomic_IsRecurrentPC);
+        }}
+      ";
+      pgp.AddLemma(str, "LiftToAtomic");
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    /// LiftFromAtomic
+    ////////////////////////////////////////////////////////////////////////
+
+    private void GenerateLiftTauPathFromAtomicLemma(AtomicPath atomicPath)
+    {
+      var pr = new PathPrinter(hAtomic);
+      var str = $@"
+        lemma lemma_HAtomic_LiftFromAtomic_Tau(
+          lasf: AtomicSpecFunctions<H.Armada_TotalState, HAtomic_Path, H.Armada_PC>,
+          hasf: Armada_SpecFunctions<H.Armada_TotalState, H.Armada_Step, H.Armada_PC>,
+          s: H.Armada_TotalState,
+          s': H.Armada_TotalState,
+          path: HAtomic_Path,
+          tid: Armada_ThreadHandle
+          ) returns (
+          hsteps: seq<H.Armada_Step>
+          )
+          requires lasf == HAtomic_GetSpecFunctions()
+          requires hasf == H.Armada_GetSpecFunctions()
+          requires lasf.path_type(path).AtomicPathType_Tau?
+          requires AtomicLiftPathFromAtomicPossible(lasf, s, s', path, tid)
+          ensures  AtomicLiftPathFromAtomicSuccessful(lasf, hasf, s, s', path, tid, hsteps)
+        {{
+          { pr.GetOpenPathInvocation(hAtomic.TauPath) }
+          ProofCustomizationGoesHere();
+          hsteps := [steps.step0];
+          lemma_PCEffectOfStep_H_Tau(s, steps.step0, tid);
+        }}
+      ";
+      pgp.AddLemma(str, "LiftFromAtomic");
+    }
+
+    private void GenerateSpecificLiftPathFromAtomicLemma(AtomicPath atomicPath)
+    {
+      if (atomicPath.Tau) {
+        GenerateLiftTauPathFromAtomicLemma(atomicPath);
+        return;
+      }
+
+      var n = atomicPath.NumNextRoutines;
+      var pr = new PathPrinter(hAtomic);
+
+      var str = $@"
+        lemma lemma_HAtomic_LiftFromAtomic_{atomicPath.Name}(
+          lasf: AtomicSpecFunctions<H.Armada_TotalState, HAtomic_Path, H.Armada_PC>,
+          hasf: Armada_SpecFunctions<H.Armada_TotalState, H.Armada_Step, H.Armada_PC>,
+          s: H.Armada_TotalState,
+          s': H.Armada_TotalState,
+          path: HAtomic_Path,
+          tid: Armada_ThreadHandle
+          ) returns (
+          hsteps: seq<H.Armada_Step>
+          )
+          requires lasf == HAtomic_GetSpecFunctions()
+          requires hasf == H.Armada_GetSpecFunctions()
+          requires path.HAtomic_Path_{atomicPath.Name}?
+          requires AtomicLiftPathFromAtomicPossible(lasf, s, s', path, tid)
+          ensures  AtomicLiftPathFromAtomicSuccessful(lasf, hasf, s, s', path, tid, hsteps)
+        {{
+          { pr.GetOpenValidPathInvocation(atomicPath) }
+      ";
+      str += "hsteps := [";
+      str += String.Join(", ", Enumerable.Range(0, n).Select(i => $"steps.step{i}"));
+      str += "];\n";
+      str += String.Concat(Enumerable.Range(0, n).Select(
+        i => $@"
+          lemma_PCEffectOfStep_H_{atomicPath.NextRoutines[i].NameSuffix}(states.s{i}, steps.step{i}, tid);
+        "
+      ));
+      str += String.Concat(Enumerable.Range(0, n).Select(
+        i => $@"                                                                                                            
+          assert Armada_NextMultipleSteps(hasf, states.s{n - i}, s', hsteps[{n-i}..], tid);
+          assert hsteps[{n-i-1}..][1..] == hsteps[{n-i}..];
+        "
+      ));
+      str += String.Concat(Enumerable.Range(1, n - 1).Select(
+        i => $@"                                                                                                            
+          assert Armada_StepsStartNonyielding(hasf, states.s{n - i}, s', hsteps[{n-i}..], tid);
+        "
+      ));
+      if (atomicPath.EndType == PCAtomicType.Yielding) {
+        str += $@"
+          assert Armada_ThreadYielding(hasf, s', tid);
+        ";
+      }
+      str += $@"
+          assert hsteps == hsteps[0..];
+          assert {atomicPath.OptionalNotForOK}hasf.state_ok(states.s{n});
+          assert Armada_NextMultipleSteps(hasf, s, s', hsteps, tid);
+        }}
+      ";
+      pgp.AddLemma(str, "LiftFromAtomic");
+    }
+
+    private void GenerateLiftPathFromAtomicLemma()
+    {
+      foreach (var atomicPath in hAtomic.AtomicPaths)
+      {
+        GenerateSpecificLiftPathFromAtomicLemma(atomicPath);
+      }
+
+      var str = $@"
+        lemma lemma_LiftPathFromAtomic(
+          lasf: AtomicSpecFunctions<H.Armada_TotalState, HAtomic_Path, H.Armada_PC>,
+          hasf: Armada_SpecFunctions<H.Armada_TotalState, H.Armada_Step, H.Armada_PC>,
+          s: H.Armada_TotalState,
+          s': H.Armada_TotalState,
+          path: HAtomic_Path,
+          tid: Armada_ThreadHandle
+          ) returns (
+          hsteps: seq<H.Armada_Step>
+          )
+          requires lasf == HAtomic_GetSpecFunctions()
+          requires hasf == H.Armada_GetSpecFunctions()
+          requires AtomicLiftPathFromAtomicPossible(lasf, s, s', path, tid)
+          ensures  AtomicLiftPathFromAtomicSuccessful(lasf, hasf, s, s', path, tid, hsteps)
+       {{
+         match path {{
+      ";
+      str += String.Concat(hAtomic.AtomicPaths.Select(p => $@"
+          case HAtomic_Path_{p.Name}(_) =>
+            hsteps := lemma_HAtomic_LiftFromAtomic_{p.Name}(lasf, hasf, s, s', path, tid);
+            return;
+      "));
+      str += "}\n }\n";
+      pgp.AddLemma(str, "LiftFromAtomic");
+    }
+
+    public void GenerateLiftFromAtomicLemma()
+    {
+      var liftFile = pgp.proofFiles.CreateAuxiliaryProofFile("LiftFromAtomic");
+      liftFile.IncludeAndImportGeneratedFile("specs");
+      liftFile.IncludeAndImportGeneratedFile("pceffect");
+      liftFile.IncludeAndImportGeneratedFile("revelations");
+      liftFile.IncludeAndImportGeneratedFile("hatomic");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/seqs.s.dfy", "util_collections_seqs_s");
+      liftFile.AddIncludeImport(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/LiftFromAtomic.i.dfy",
+                                "LiftFromAtomicModule");
+      liftFile.AddImport("GenericArmadaAtomicModule");
+      pgp.proofFiles.MainProof.IncludeAndImportGeneratedFile("LiftFromAtomic");
+
+      GenerateLiftPathFromAtomicLemma();
+
+      string str = $@"
+        lemma lemma_LiftFromAtomic() returns (refinement_relation: RefinementRelation<H.Armada_TotalState, H.Armada_TotalState>)
+          ensures SpecRefinesSpec(AtomicSpec(HAtomic_GetSpecFunctions()), Armada_SpecFunctionsToSpec(H.Armada_GetSpecFunctions()),
+                                  refinement_relation)
+          ensures refinement_relation == iset s: H.Armada_TotalState | true :: RefinementPair(s, s)
+        {{
+          var lasf := HAtomic_GetSpecFunctions();
+          var hasf := H.Armada_GetSpecFunctions();
+          forall ls, ls', path, tid | AtomicLiftPathFromAtomicPossible(lasf, ls, ls', path, tid)
+            ensures exists hsteps :: AtomicLiftPathFromAtomicSuccessful(lasf, hasf, ls, ls', path, tid, hsteps)
+          {{
+            var hsteps := lemma_LiftPathFromAtomic(lasf, hasf, ls, ls', path, tid);
+          }}
+          refinement_relation := lemma_AtomicSpecRefinesSpec(lasf, hasf);
+        }}
+      ";
+      pgp.AddLemma(str, "LiftFromAtomic");
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -609,115 +1299,120 @@ namespace Microsoft.Armada
 
     protected virtual void GenerateConvertPC_LH()
     {
-      var cases = new List<MatchCaseExpr>();
+      var caseBodies = String.Concat(pcMap.Select(mapping => $"case {mapping.Key.ToString()} => H.{mapping.Value}\n"));
+      var fn = $@"
+        function ConvertPC_LH(pc: L.Armada_PC) : H.Armada_PC
+        {{
+          match pc
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
+    }
 
-      foreach (var mapping in pcMap) {
-        var case_body = AH.MakeNameSegment($"H.{mapping.Value}", "H.Armada_PC");
-        cases.Add(AH.MakeMatchCaseExpr(mapping.Key.ToString(), case_body));
-      }
-
-      var source = AH.MakeNameSegment("pc", "L.Armada_PC");
-      var body = AH.MakeMatchExpr(source, cases, "H.Armada_PC");
-      var formals = new List<Formal> { AH.MakeFormal("pc", "L.Armada_PC") };
-      var fn = AH.MakeFunction("ConvertPC_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+    protected virtual void GenerateConvertStackVars_LH(string methodName)
+    {
+      var smst = pgp.symbolsLow.GetMethodSymbolTable(methodName);
+      var ps = smst.AllVariablesInOrder.Select(v => $"vs.{v.FieldName}");
+      var fn = $@"
+        function ConvertStackVars_LH_{methodName}(vs: L.Armada_StackVars_{methodName}) : H.Armada_StackVars_{methodName}
+        {{
+          H.Armada_StackVars_{methodName}({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertStackFrame_LH()
     {
-      var cases = new List<MatchCaseExpr>();
       var methodNames = pgp.symbolsLow.MethodNames;
       foreach (var methodName in methodNames) {
-        var smst = pgp.symbolsLow.GetMethodSymbolTable(methodName);
-        var ps = new List<Expression>();
-        var bvs = new List<BoundVar>();
-        foreach (var v in smst.AllVariablesInOrder) {
-          var ty = (v is AddressableArmadaVariable) ? AH.ReferToType("Armada_Pointer") : v.ty;
-          var e = AH.MakeNameSegment(v.FieldName, ty);
-          ps.Add(e);
-          var bv = AH.MakeBoundVar(v.FieldName, v.GetFlattenedType(pgp.symbolsLow));
-          bvs.Add(bv);
-        }
-        var case_body = AH.MakeApplyN($"H.Armada_StackFrame_{methodName}", ps, "H.Armada_StackFrame");
-        cases.Add(AH.MakeMatchCaseExpr($"Armada_StackFrame_{methodName}", bvs, case_body));
+        GenerateConvertStackVars_LH(methodName);
       }
-
-      var source = AH.MakeNameSegment("frame", "L.Armada_StackFrame");
-      var body = AH.MakeMatchExpr(source, cases, "H.Armada_StackFrame");
-      var formals = new List<Formal> { AH.MakeFormal("frame", "L.Armada_StackFrame") };
-      var fn = AH.MakeFunction("ConvertStackFrame_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var caseBodies = String.Concat(methodNames.Select(methodName =>
+        $@"case Armada_StackFrame_{methodName}(vs) => H.Armada_StackFrame_{methodName}(ConvertStackVars_LH_{methodName}(vs))"
+      ));
+      var fn = $@"
+        function ConvertStackFrame_LH(frame: L.Armada_StackFrame) : H.Armada_StackFrame
+        {{
+          match frame
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGlobals_LH()
     {
-      var g = AH.MakeNameSegment("globals", "L.Armada_Globals");
-      var ps = new List<Expression>();
+      var ps = new List<string>();
       foreach (var varName in pgp.symbolsLow.Globals.VariableNames) {
         var v = pgp.symbolsLow.Globals.Lookup(varName);
         if (v is GlobalUnaddressableArmadaVariable) {
-          var p = AH.MakeExprDotName(g, v.FieldName, v.ty);
-          ps.Add(p);
+          ps.Add($"globals.{v.FieldName}");
         }
       }
-      var body = AH.MakeApplyN("H.Armada_Globals", ps, "H.Armada_Globals");
-      var formals = new List<Formal> { AH.MakeFormal("globals", "L.Armada_Globals") };
-      var fn = AH.MakeFunction("ConvertGlobals_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertGlobals_LH(globals: L.Armada_Globals) : H.Armada_Globals
+        {{
+          H.Armada_Globals({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGhosts_LH()
     {
-      var ghosts = AH.MakeNameSegment("ghosts", "L.Armada_Ghosts");
-      var ps = new List<Expression>();
+      var ps = new List<string>();
       foreach (var varName in pgp.symbolsLow.Globals.VariableNames) {
         var v = pgp.symbolsLow.Globals.Lookup(varName);
         if (v is GlobalGhostArmadaVariable) {
-          var p = AH.MakeExprDotName(ghosts, v.FieldName, v.ty);
-          ps.Add(p);
+          ps.Add($"ghosts.{v.FieldName}");
         }
       }
-      var body = AH.MakeApplyN("H.Armada_Ghosts", ps, "H.Armada_Ghosts");
-      var formals = new List<Formal> { AH.MakeFormal("ghosts", "L.Armada_Ghosts") };
-      var fn = AH.MakeFunction("ConvertGhosts_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertGhosts_LH(ghosts: L.Armada_Ghosts) : H.Armada_Ghosts
+        {{
+          H.Armada_Ghosts({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertAddrs_LH()
     {
-      var addrs = AH.MakeNameSegment("addrs", "L.Armada_Addrs");
-      var ps = new List<Expression>();
+      var ps = new List<string>();
       foreach (var varName in pgp.symbolsLow.Globals.VariableNames) {
         var v = pgp.symbolsLow.Globals.Lookup(varName);
         if (v is GlobalAddressableArmadaVariable) {
-          var p = AH.MakeExprDotName(addrs, v.FieldName, "Armada_Pointer");
-          ps.Add(p);
+          ps.Add($"addrs.{v.FieldName}");
         }
       }
-      var body = AH.MakeApplyN("H.Armada_Addrs", ps, "H.Armada_Addrs");
-      var formals = new List<Formal> { AH.MakeFormal("addrs", "L.Armada_Addrs") };
-      var fn = AH.MakeFunction("ConvertAddrs_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertAddrs_LH(addrs: L.Armada_Addrs) : H.Armada_Addrs
+        {{
+          H.Armada_Addrs({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGlobalStaticVar_LH()
     {
-      var cases = new List<MatchCaseExpr>();
-      var case_body = AH.MakeNameSegment("H.Armada_GlobalStaticVarNone", "H.Armada_GlobalStaticVar");
-      cases.Add(AH.MakeMatchCaseExpr("Armada_GlobalStaticVarNone", case_body));
+      var caseBodies = "case Armada_GlobalStaticVarNone => H.Armada_GlobalStaticVarNone\n";
       foreach (var varName in pgp.symbolsLow.Globals.VariableNames) {
         var gv = pgp.symbolsLow.Globals.Lookup(varName);
         if (gv is GlobalUnaddressableArmadaVariable) {
-          case_body = AH.MakeNameSegment($"H.Armada_GlobalStaticVar_{varName}", "H.Armada_GlobalStaticVar");
-          cases.Add(AH.MakeMatchCaseExpr($"Armada_GlobalStaticVar_{varName}", case_body));
+          caseBodies += $"case Armada_GlobalStaticVar_{varName} => H.Armada_GlobalStaticVar_{varName}\n";
         }
       }
-
-      var v = AH.MakeNameSegment("v", "L.Armada_GlobalStaticVar");
-      var body = AH.MakeMatchExpr(v, cases, "H.Armada_GlobalStaticVar");
-      var formals = new List<Formal> { AH.MakeFormal("v", "L.Armada_GlobalStaticVar") };
-      var fn = AH.MakeFunction("ConvertGlobalStaticVar_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertGlobalStaticVar_LH(v: L.Armada_GlobalStaticVar) : H.Armada_GlobalStaticVar
+        {{
+          match v
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertSharedMemory_LH()
@@ -751,7 +1446,7 @@ namespace Microsoft.Armada
       string str = @"
         function ConvertStoreBufferEntry_LH(entry:L.Armada_StoreBufferEntry) : H.Armada_StoreBufferEntry
         {
-          H.Armada_StoreBufferEntry(ConvertStoreBufferLocation_LH(entry.loc), entry.value)
+          H.Armada_StoreBufferEntry(ConvertStoreBufferLocation_LH(entry.loc), entry.value, ConvertPC_LH(entry.pc))
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -819,7 +1514,7 @@ namespace Microsoft.Armada
         function ConvertTotalState_LH(s:L.Armada_TotalState) : H.Armada_TotalState
         {
           H.Armada_TotalState(s.stop_reason, ConvertThreads_LH(s.threads), ConvertSharedMemory_LH(s.mem), ConvertGhosts_LH(s.ghosts),
-                              ConvertAddrs_LH(s.addrs))
+                              ConvertAddrs_LH(s.addrs), s.joinable_tids)
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -836,9 +1531,9 @@ namespace Microsoft.Armada
     protected virtual void GenerateConvertConfig_LH()
     {
       string str = @"
-        function ConvertConfig_LH(config:L.Armada_Config) : H.Armada_Config
+        function ConvertConfig_LH(config:Armada_Config) : Armada_Config
         {
-          H.Armada_Config(config.tid_init, config.new_ptrs)
+          config
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -865,102 +1560,149 @@ namespace Microsoft.Armada
     }
 
     ////////////////////////////////////////////////////////////////////////
-    /// Next-state functions
-    ////////////////////////////////////////////////////////////////////////
-
-    protected void GenerateNextState_H() {
-      string str;
-
-      str = @"
-        function ApplySteps_H(s: HState, steps: seq<H.Armada_TraceEntry>) : HState
-          decreases |steps|
-        {
-          if |steps| == 0 then
-            s
-          else
-            var s_next := H.Armada_GetNextStateAlways(s, steps[0]);
-            ApplySteps_H(s_next, steps[1..])
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = @"
-        function NextState_H(s: HState, entry: HStep): HState
-        {
-          ApplySteps_H(s, entry.steps)
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-    }
-
-    ////////////////////////////////////////////////////////////////////////
     /// Step abstraction functions
     ////////////////////////////////////////////////////////////////////////
 
-    protected virtual MatchCaseExpr GetTraceEntryCaseForSuppressedNextRoutine_LH(NextRoutine nextRoutine)
+    protected virtual string GetStepCaseForSuppressedNextRoutine_LH(NextRoutine nextRoutine)
     {
       string nextRoutineName = nextRoutine.NameSuffix;
 
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
       // This is the case where the next routine doesn't have a corresponding next routine in the high layer,
       // e.g., because it's an assignment to a hidden variable.  In this case, just arbitrarily map it to
-      // something we know to exist, namely H.Armada_TraceEntry_Tau.
+      // something we know to exist, namely H.Armada_Step_Tau.
 
-      var tid = AH.MakeNameSegment("tid", "Armada_ThreadHandle");
-      var case_body = AH.MakeApply1("H.Armada_TraceEntry_Tau", tid, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutineName}", bvs, case_body);
-      return case0;
+      var bvs = nextRoutine.HasFormals ? "_" : "";
+      return $"case Armada_Step_{nextRoutine.NameSuffix}({bvs}) => H.Armada_Step_Tau\n";
     }
 
-    protected virtual MatchCaseExpr GetTraceEntryCaseForNormalNextRoutine_LH(NextRoutine nextRoutine)
+    protected virtual string GetStepCaseForNormalNextRoutine_LH(NextRoutine nextRoutine)
     {
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      var ps = new List<Expression> { AH.MakeNameSegment("tid", "Armada_ThreadHandle") };
-      string hname;
-
+      string nextRoutineName = nextRoutine.NameSuffix;
       var hNextRoutine = LiftNextRoutine(nextRoutine);
-      if (hNextRoutine != null) {
-        bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-        ps.AddRange(nextRoutine.Formals.Select(f => AH.MakeNameSegment(f.LocalVarName, f.VarType)));
-        hname = hNextRoutine.NameSuffix;
+      string hname = (hNextRoutine != null) ? hNextRoutine.NameSuffix : "Tau";
+
+      var bvs = nextRoutine.HasFormals ? "params" : "";
+
+      string caseBody;
+      if (hNextRoutine == null) {
+        caseBody = "H.Armada_Step_Tau";
+      }
+      else if (hNextRoutine.HasFormals) {
+        var ps = nextRoutine.Formals.Select(f => $"params.{f.LocalVarName}");
+        caseBody = $"H.Armada_Step_{hname}(H.Armada_StepParams_{hname}({AH.CombineStringsWithCommas(ps)}))";
       }
       else {
-        hname = "Tau";
+        caseBody = $"H.Armada_Step_{hname}";
       }
 
-      var case_body = AH.MakeApplyN($"H.Armada_TraceEntry_{hname}", ps, "H.Armada_TraceEntry");
-      var case0 = AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutine.NameSuffix}", bvs, case_body);
-      return case0;
+      return $"case Armada_Step_{nextRoutineName}({bvs}) => {caseBody}\n";
     }
 
-    protected virtual MatchCaseExpr GetTraceEntryCaseForNextRoutine_LH(NextRoutine nextRoutine)
+    protected virtual string GetStepCaseForNextRoutine_LH(NextRoutine nextRoutine)
     {
-      return GetTraceEntryCaseForNormalNextRoutine_LH(nextRoutine);
+      return GetStepCaseForNormalNextRoutine_LH(nextRoutine);
     }
 
-    protected virtual void GenerateConvertTraceEntry_LH()
+    protected virtual void GenerateConvertStep_LH()
     {
-      var cases = new List<MatchCaseExpr>();
+      var caseBodies = String.Concat(pgp.symbolsLow.NextRoutines.Select(nextRoutine => GetStepCaseForNextRoutine_LH(nextRoutine)));
+      var fn = $@"
+        function ConvertStep_LH(step: L.Armada_Step) : H.Armada_Step
+        {{
+          match step
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
+    }
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        cases.Add(GetTraceEntryCaseForNextRoutine_LH(nextRoutine));
+    protected virtual void GenerateConvertAtomicPathStateDependent_LH()
+    {
+      string str = @"
+        function ConvertAtomicPath_LH(ls: LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle) : HAtomic_Path
+          requires LAtomic_ValidPath(ls, lpath, tid)
+        {
+          reveal LAtomic_ValidPath();
+          reveal LAtomic_GetStateAfterPath();
+          match lpath
+      ";
+
+      var pr = new PathPrinter(lAtomic);
+
+      foreach (var lpath in lAtomic.AtomicPaths)
+      {
+        if (pathMap.ContainsKey(lpath)) {
+          var hpath = pathMap[lpath];
+          str += $@"
+            case LAtomic_Path_{lpath.Name}(steps) =>
+              var states := LAtomic_GetPathStates_{lpath.Name}(ls, tid, steps);
+          ";
+          str += $"HAtomic_Path_{hpath.Name}(HAtomic_PathSteps_{hpath.Name}(";
+          str += String.Join(", ", Enumerable.Range(0, lpath.NextRoutines.Count)
+                                             .Where(i => nextRoutineMap.ContainsKey(lpath.NextRoutines[i]))
+                                             .Select(i => $"ConvertStep_LH(states.s{i}, steps.step{i}, tid)"));
+          str += "))\n";
+        }
+        else {
+          str += $"case LAtomic_Path_{lpath.Name}(_) => HAtomic_Path_Tau(HAtomic_PathSteps_Tau(H.Armada_Step_Tau()))\n";
+        }
       }
+      str += "}";
+      pgp.AddFunction(str, "convert");
+    }
 
-      var source = AH.MakeNameSegment("entry", "L.Armada_TraceEntry");
-      var body = AH.MakeMatchExpr(source, cases, "H.Armada_TraceEntry");
-      var formals = new List<Formal> { AH.MakeFormal("entry", "L.Armada_TraceEntry") };
-      var fn = AH.MakeFunction("ConvertTraceEntry_LH", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+    protected virtual void GenerateConvertAtomicPath_LH()
+    {
+      if (stateDependentConvertStep) {
+        GenerateConvertAtomicPathStateDependent_LH();
+        return;
+      }
 
       string str = @"
-        function ConvertMultistep_LH(entry: LStep) : HStep
+        function ConvertAtomicPath_LH(lpath: LAtomic_Path) : HAtomic_Path
         {
-          Armada_Multistep(MapSeqToSeq(entry.steps, ConvertTraceEntry_LH), entry.tid, entry.tau)
-        }
+          match lpath
       ";
+      foreach (var lpath in lAtomic.AtomicPaths)
+      {
+        if (pathMap.ContainsKey(lpath) && pathMap[lpath] != null) {
+          var hpath = pathMap[lpath];
+          str += $"case LAtomic_Path_{lpath.Name}(steps) => HAtomic_Path_{hpath.Name}(HAtomic_PathSteps_{hpath.Name}(";
+          str += String.Join(", ", Enumerable.Range(0, lpath.NextRoutines.Count)
+                                             .Where(i => nextRoutineMap.ContainsKey(lpath.NextRoutines[i]))
+                                             .Select(i => $"ConvertStep_LH(steps.step{i})"));
+          str += "))\n";
+        }
+        else {
+          str += $"case LAtomic_Path_{lpath.Name}(_) => HAtomic_Path_Tau(HAtomic_PathSteps_Tau(H.Armada_Step_Tau()))\n";
+        }
+      }
+      str += "}";
       pgp.AddFunction(str, "convert");
+    }
+
+    protected virtual void GenerateConvertAtomicTraceEntry_LH()
+    {
+      string str;
+      if (stateDependentConvertStep) {
+        str = @"
+          function ConvertAtomicTraceEntry_LH(ls: LPlusState, lentry: AtomicTraceEntry<LAtomic_Path>): AtomicTraceEntry<HAtomic_Path>
+            requires AtomicValidStep(LAtomic_GetSpecFunctions(), ls, lentry)
+          {
+            GenericAtomicLiftTraceEntryStateDependent(LAtomic_GetSpecFunctions(), ls, lentry, ConvertAtomicPath_LH)
+          }
+        ";
+        pgp.AddFunction(str, "convert");
+      }
+      else {
+        str = @"
+          function ConvertAtomicTraceEntry_LH(lentry:AtomicTraceEntry<LAtomic_Path>) : AtomicTraceEntry<HAtomic_Path>
+          {
+            GenericAtomicLiftTraceEntry(lentry, ConvertAtomicPath_LH)
+          }
+        ";
+        pgp.AddFunction(str, "convert");
+      }
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -969,118 +1711,114 @@ namespace Microsoft.Armada
 
     protected virtual void GenerateConvertPC_HL(Dictionary<ArmadaPC, ArmadaPC> reversePCMap)
     {
-      var cases = new List<MatchCaseExpr>();
+      var caseBodies = String.Concat(reversePCMap.Select(mapping => $"case {mapping.Key} => L.{mapping.Value}\n"));
+      var fn = $@"
+        function ConvertPC_HL(pc: H.Armada_PC) : L.Armada_PC
+        {{
+          match pc
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
+    }
 
-      foreach (var mapping in reversePCMap) {
-        var case_body = AH.MakeNameSegment($"L.{mapping.Value}", "L.Armada_PC");
-        cases.Add(AH.MakeMatchCaseExpr(mapping.Key.ToString(), case_body));
-      }
-
-      var source = AH.MakeNameSegment("pc", "H.Armada_PC");
-      var body = AH.MakeMatchExpr(source, cases, "L.Armada_PC");
-      var formals = new List<Formal> { AH.MakeFormal("pc", "H.Armada_PC") };
-      var fn = AH.MakeFunction("ConvertPC_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+    protected virtual void GenerateConvertStackVars_HL(string methodName)
+    {
+      var smst = pgp.symbolsHigh.GetMethodSymbolTable(methodName);
+      var ps = smst.AllVariablesInOrder.Select(v => $"vs.{v.FieldName}");
+      var fn = $@"
+        function ConvertStackVars_HL_{methodName}(vs: H.Armada_StackVars_{methodName}) : L.Armada_StackVars_{methodName}
+        {{
+          L.Armada_StackVars_{methodName}({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertStackFrame_HL()
     {
-      var cases = new List<MatchCaseExpr>();
-      var methodNames = pgp.symbolsHigh.MethodNames;
-      foreach (var methodName in methodNames) {
-        var smst = pgp.symbolsHigh.GetMethodSymbolTable(methodName);
-        var ps = new List<Expression>();
-        var bvs = new List<BoundVar>();
-        foreach (var v in smst.AllVariablesInOrder) {
-          var ty = (v is AddressableArmadaVariable) ? AH.ReferToType("Armada_Pointer") : v.ty;
-          var e = AH.MakeNameSegment(v.FieldName, ty);
-          ps.Add(e);
-          var bv = AH.MakeBoundVar(v.FieldName, v.GetFlattenedType(pgp.symbolsHigh));
-          bvs.Add(bv);
-        }
-        var case_body = AH.MakeApplyN($"L.Armada_StackFrame_{methodName}", ps, "L.Armada_StackFrame");
-        cases.Add(AH.MakeMatchCaseExpr($"Armada_StackFrame_{methodName}", bvs, case_body));
+      var caseBodies = "";
+      foreach (var methodName in pgp.symbolsHigh.MethodNames) {
+        GenerateConvertStackVars_HL(methodName);
+        caseBodies += $"case Armada_StackFrame_{methodName}(vs) => L.Armada_StackFrame_{methodName}(ConvertStackVars_HL_{methodName}(vs))\n";
       }
 
-      var source = AH.MakeNameSegment("frame", "H.Armada_StackFrame");
-      var body = AH.MakeMatchExpr(source, cases, "L.Armada_StackFrame");
-      var formals = new List<Formal> { AH.MakeFormal("frame", "H.Armada_StackFrame") };
-      var fn = AH.MakeFunction("ConvertStackFrame_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertStackFrame_HL(frame: H.Armada_StackFrame) : L.Armada_StackFrame
+        {{
+          match frame
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGlobals_HL()
     {
-      var g = AH.MakeNameSegment("globals", "H.Armada_Globals");
-      var ps = new List<Expression>();
-      foreach (var varName in pgp.symbolsHigh.Globals.VariableNames) {
-        var v = pgp.symbolsHigh.Globals.Lookup(varName);
-        if (v is AddressableArmadaVariable) {
-          var p = AH.MakeExprDotName(g, v.FieldName, "Armada_Pointer");
-          ps.Add(p);
-        }
-        else {
-          var p = AH.MakeExprDotName(g, v.FieldName, v.ty);
-          ps.Add(p);
-        }
-      }
-      var body = AH.MakeApplyN("L.Armada_Globals", ps, "L.Armada_Globals");
-      var formals = new List<Formal> { AH.MakeFormal("globals", "H.Armada_Globals") };
-      var fn = AH.MakeFunction("ConvertGlobals_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var g = pgp.symbolsHigh.Globals;
+      var ps = pgp.symbolsHigh.Globals.VariableNames.Select(varName => $"globals.{g.Lookup(varName).FieldName}");
+      var fn = $@"
+        function ConvertGlobals_HL(globals: H.Armada_Globals) : L.Armada_Globals
+        {{
+          L.Armada_Globals({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGhosts_HL()
     {
-      var g = AH.MakeNameSegment("ghosts", "H.Armada_Ghosts");
-      var ps = new List<Expression>();
+      var ps = new List<string>();
       foreach (var varName in pgp.symbolsHigh.Globals.VariableNames) {
         var v = pgp.symbolsHigh.Globals.Lookup(varName);
         if (v is GlobalGhostArmadaVariable) {
-          var p = AH.MakeExprDotName(g, v.FieldName, v.ty);
-          ps.Add(p);
+          ps.Add($"ghosts.{v.FieldName}");
         }
       }
-      var body = AH.MakeApplyN("L.Armada_Ghosts", ps, "L.Armada_Ghosts");
-      var formals = new List<Formal> { AH.MakeFormal("ghosts", "H.Armada_Ghosts") };
-      var fn = AH.MakeFunction("ConvertGhosts_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertGhosts_HL(ghosts: H.Armada_Ghosts) : L.Armada_Ghosts
+        {{
+          L.Armada_Ghosts({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertAddrs_HL()
     {
-      var addrs = AH.MakeNameSegment("addrs", "H.Armada_Addrs");
-      var ps = new List<Expression>();
+      var ps = new List<string>();
       foreach (var varName in pgp.symbolsHigh.Globals.VariableNames) {
         var v = pgp.symbolsHigh.Globals.Lookup(varName);
         if (v is GlobalAddressableArmadaVariable) {
-          var p = AH.MakeExprDotName(addrs, v.FieldName, "Armada_Pointer");
-          ps.Add(p);
+          ps.Add($"addrs.{v.FieldName}");
         }
       }
-      var body = AH.MakeApplyN("L.Armada_Addrs", ps, "L.Armada_Addrs");
-      var formals = new List<Formal> { AH.MakeFormal("addrs", "H.Armada_Addrs") };
-      var fn = AH.MakeFunction("ConvertAddrs_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertAddrs_HL(addrs: H.Armada_Addrs) : L.Armada_Addrs
+        {{
+          L.Armada_Addrs({AH.CombineStringsWithCommas(ps)})
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertGlobalStaticVar_HL()
     {
-      var cases = new List<MatchCaseExpr>();
-      var case_body = AH.MakeNameSegment("L.Armada_GlobalStaticVarNone", "L.Armada_GlobalStaticVar");
-      cases.Add(AH.MakeMatchCaseExpr("Armada_GlobalStaticVarNone", case_body));
+      var caseBodies = $"case Armada_GlobalStaticVarNone => L.Armada_GlobalStaticVarNone\n";
       foreach (var varName in pgp.symbolsHigh.Globals.VariableNames) {
         var gv = pgp.symbolsHigh.Globals.Lookup(varName);
         if (gv is UnaddressableArmadaVariable && !gv.NoTSO()) {
-          case_body = AH.MakeNameSegment($"L.Armada_GlobalStaticVar_{varName}", "L.Armada_GlobalStaticVar");
-          cases.Add(AH.MakeMatchCaseExpr($"Armada_GlobalStaticVar_{varName}", case_body));
+          caseBodies += $"case Armada_GlobalStaticVar_{varName} => L.Armada_GlobalStaticVar_{varName}\n";
         }
       }
-      var v = AH.MakeNameSegment("v", "H.Armada_GlobalStaticVar");
-      var body = AH.MakeMatchExpr(v, cases, "L.Armada_GlobalStaticVar");
-      var formals = new List<Formal> { AH.MakeFormal("v", "H.Armada_GlobalStaticVar") };
-      var fn = AH.MakeFunction("ConvertGlobalStaticVar_HL", formals, body);
-      pgp.AddDefaultClassDecl(fn, "convert");
+      var fn = $@"
+        function ConvertGlobalStaticVar_HL(v: H.Armada_GlobalStaticVar) : L.Armada_GlobalStaticVar
+        {{
+          match v
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "convert");
     }
 
     protected virtual void GenerateConvertSharedMemory_HL()
@@ -1100,10 +1838,10 @@ namespace Microsoft.Armada
         function ConvertStoreBufferLocation_HL(loc:H.Armada_StoreBufferLocation) : L.Armada_StoreBufferLocation
         {
           match loc
-            case Armada_StoreBufferLocation_Unaddressable(v, fields, value) =>
-              L.Armada_StoreBufferLocation_Unaddressable(ConvertGlobalStaticVar_HL(v), fields, value)
-            case Armada_StoreBufferLocation_Addressable(p, value) =>
-              L.Armada_StoreBufferLocation_Addressable(p, value)
+            case Armada_StoreBufferLocation_Unaddressable(v, fields) =>
+              L.Armada_StoreBufferLocation_Unaddressable(ConvertGlobalStaticVar_HL(v), fields)
+            case Armada_StoreBufferLocation_Addressable(p) =>
+              L.Armada_StoreBufferLocation_Addressable(p)
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -1114,7 +1852,7 @@ namespace Microsoft.Armada
       string str = @"
         function ConvertStoreBufferEntry_HL(entry:H.Armada_StoreBufferEntry) : L.Armada_StoreBufferEntry
         {
-          L.Armada_StoreBufferEntry(ConvertStoreBufferLocation_HL(entry.loc), entry.value)
+          L.Armada_StoreBufferEntry(ConvertStoreBufferLocation_HL(entry.loc), entry.value, ConvertPC_HL(entry.pc))
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -1182,7 +1920,7 @@ namespace Microsoft.Armada
         function ConvertTotalState_HL(s:H.Armada_TotalState) : L.Armada_TotalState
         {
           L.Armada_TotalState(s.stop_reason, ConvertThreads_HL(s.threads), ConvertSharedMemory_HL(s.mem), ConvertGhosts_HL(s.ghosts),
-                              ConvertAddrs_HL(s.addrs))
+                              ConvertAddrs_HL(s.addrs), s.joinable_tids)
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -1191,9 +1929,9 @@ namespace Microsoft.Armada
     protected virtual void GenerateConvertConfig_HL()
     {
       string str = @"
-        function ConvertConfig_HL(config:H.Armada_Config) : L.Armada_Config
+        function ConvertConfig_HL(config:Armada_Config) : Armada_Config
         {
-          L.Armada_Config(config.tid_init, config.new_ptrs)
+          config
         }
       ";
       pgp.AddFunction(str, "convert");
@@ -1231,8 +1969,11 @@ namespace Microsoft.Armada
       if (pgp.symbolsLow.StructsModuleName != null) {
         proof.AddInclude($"{pgp.symbolsLow.StructsModuleName}.dfy");
       }
-      foreach (var importedFile in importedFiles) {
-        proof.AddInclude(importedFile);
+
+      if (proof.IncludeImportedFiles) {
+        foreach (var importedFile in importedFiles) {
+          proof.AddInclude(importedFile);
+        }
       }
 
       proof.AddImport(pgp.mLow.Name, "L");
@@ -1241,52 +1982,37 @@ namespace Microsoft.Armada
       if (pgp.symbolsLow.StructsModuleName != null) {
         proof.AddImport(pgp.symbolsLow.StructsModuleName);
       }
-      foreach (var importedModule in importedModules) {
-        proof.AddImport(importedModule);
+
+      if (proof.IncludeImportedFiles) {
+        foreach (var importedModule in importedModules) {
+          proof.AddImport(importedModule);
+        }
       }
     }
 
     protected void GenerateProofHeader()
     {
-      pgp.proofFiles.AssociateProofGenerator(this);
       GenerateSpecsFile();
+      GenerateRevelationLemmas();
+      pgp.proofFiles.AssociateProofGenerator(this);
     }
 
     protected void GenerateSpecsFile()
     {
       pgp.AddImport("util_collections_seqs_s", null, "specs");
 
-      var lstate = AH.ReferToType("L.Armada_TotalState");
-      pgp.AddTypeSynonymDecl("LState", lstate, "specs");
-      lstate = AH.ReferToType("LState");
-      var hstate = AH.ReferToType("H.Armada_TotalState");
-      pgp.AddTypeSynonymDecl("HState", hstate, "specs");
-      hstate = AH.ReferToType("HState");
-      var lstep = AH.ReferToType("Armada_Multistep<L.Armada_TraceEntry>");
-      pgp.AddTypeSynonymDecl("LStep", lstep, "specs");
-      lstep = AH.ReferToType("LStep");
-      var hstep = AH.ReferToType("Armada_Multistep<H.Armada_TraceEntry>");
-      pgp.AddTypeSynonymDecl("HStep", hstep, "specs");
-      hstep = AH.ReferToType("HStep");
-      var lconfig = AH.ReferToType("L.Armada_Config");
-
-      var lspec = AH.MakeGenericTypeSpecific("AnnotatedBehaviorSpec", new List<Type>{ lstate, lstep });
-      pgp.AddTypeSynonymDecl("LSpec", lspec, "specs");
-      var hspec = AH.MakeGenericTypeSpecific("AnnotatedBehaviorSpec", new List<Type>{ hstate, hstep });
-      pgp.AddTypeSynonymDecl("HSpec", hspec, "specs");
-
-      pgp.AddTypeSynonymDecl("LConfig", lconfig, "specs");
-
-      var lplusstate = AH.ReferToType("LPlusState");
-      var lplusspec = AH.MakeGenericTypeSpecific("AnnotatedBehaviorSpec", new List<Type>{ lplusstate, lstep });
-      pgp.AddTypeSynonymDecl("LPlusSpec", lplusspec, "specs");
+      pgp.AddTypeSynonym("type LState = L.Armada_TotalState", "specs");
+      pgp.AddTypeSynonym("type HState = H.Armada_TotalState", "specs");
+      pgp.AddTypeSynonym("type LSpec = AnnotatedBehaviorSpec<LState, Armada_Multistep<L.Armada_Step>>", "specs");
+      pgp.AddTypeSynonym("type HSpec = AnnotatedBehaviorSpec<HState, Armada_Multistep<H.Armada_Step>>", "specs");
+      pgp.AddTypeSynonym("type LPlusSpec = AnnotatedBehaviorSpec<LPlusState, Armada_Multistep<L.Armada_Step>>", "specs");
 
       string str;
 
       str = @"
         function GetLSpec() : LSpec
         {
-          SpecFunctionsToSpec(L.Armada_GetSpecFunctions())
+          SpecFunctionsToAnnotatedSpec(L.Armada_GetSpecFunctions())
         }
       ";
       pgp.AddFunction(str, "specs");
@@ -1294,7 +2020,7 @@ namespace Microsoft.Armada
       str = @"
         function GetHSpec() : HSpec
         {
-          SpecFunctionsToSpec(H.Armada_GetSpecFunctions())
+          SpecFunctionsToAnnotatedSpec(H.Armada_GetSpecFunctions())
         }
       ";
       pgp.AddFunction(str, "specs");
@@ -1302,7 +2028,7 @@ namespace Microsoft.Armada
       str = @"
         function GetLPlusSpec() : LPlusSpec
         {
-          SpecFunctionsToSpec(LPlus_GetSpecFunctions())
+          SpecFunctionsToAnnotatedSpec(LPlus_GetSpecFunctions())
         }
       ";
       pgp.AddFunction(str, "specs");
@@ -1322,6 +2048,9 @@ namespace Microsoft.Armada
         }
       ";
       pgp.AddFunction(str, "specs");
+
+      var auxiliaryParams = String.Concat(auxiliaries.Select(aux => $", {aux.FieldName}: {aux.TypeName}"));
+      pgp.AddDatatype($"datatype LPlusState = LPlusState(s: LState, config: Armada_Config{auxiliaryParams})", "specs");
 
       str = @"
         predicate LPlusHStateRefinement(lplus:LPlusState, hs:HState)
@@ -1351,23 +2080,11 @@ namespace Microsoft.Armada
       pgp.AddPredicate(str, "specs");
 
       str = @"
-        predicate LPlus_ValidStep(s: LPlusState, step:L.Armada_TraceEntry)
+        predicate LPlus_ValidStep(s: LPlusState, step:L.Armada_Step, tid: Armada_ThreadHandle)
         {
-          L.Armada_ValidStep(s.s, step)
+          L.Armada_ValidStep(s.s, step, tid)
         }
       ";
-      pgp.AddPredicate(str, "specs");
-
-      str = @"
-        predicate LPlus_NextOneStep(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
-        {
-          && L.Armada_NextOneStep(s.s, s'.s, step)
-          && s'.config == s.config
-      ";
-      foreach (var aux in auxiliaries) {
-        str += $"  && s'.{aux.FieldName} == {aux.NextName}(s, s'.s, step)\n";
-      }
-      str += "}\n";
       pgp.AddPredicate(str, "specs");
 
       str = @"
@@ -1390,13 +2107,12 @@ namespace Microsoft.Armada
       pgp.AddFunction(str, "specs");
 
       str = @"
-        function LPlus_GetNextStateAlways(splus:LPlusState, step:L.Armada_TraceEntry) : (splus':LPlusState)
-          ensures  L.Armada_ValidStep(splus.s, step) ==> LPlus_NextOneStep(splus, splus', step)
+        function LPlus_GetNextState(splus: LPlusState, step: L.Armada_Step, tid: Armada_ThreadHandle) : (splus': LPlusState)
         {
-          var s' := L.Armada_GetNextStateAlways(splus.s, step);
+          var s' := L.Armada_GetNextState(splus.s, step, tid);
       ";
       foreach (var aux in auxiliaries) {
-        str += $"  var field_{aux.FieldName} := {aux.NextName}(splus, s', step);\n";
+        str += $"  var field_{aux.FieldName} := {aux.NextName}(splus, s', step, tid);\n";
       }
       str += "LPlusState(s', splus.config";
       foreach (var aux in auxiliaries) {
@@ -1407,224 +2123,56 @@ namespace Microsoft.Armada
       pgp.AddFunction(str, "specs");
 
       str = @"
-        function LPlus_GetSpecFunctions() : Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
+        function LPlus_GetSpecFunctions() : Armada_SpecFunctions<LPlusState, L.Armada_Step, L.Armada_PC>
         {
-          Armada_SpecFunctions(LPlus_Init, LPlus_ValidStep, LPlus_GetNextStateAlways,
-                              (step: L.Armada_TraceEntry) => step.tid,
-                              (step: L.Armada_TraceEntry) => step.Armada_TraceEntry_Tau?,
+          Armada_SpecFunctions(LPlus_Init, LPlus_ValidStep, LPlus_GetNextState,
+                              (step: L.Armada_Step) => step.Armada_Step_Tau?,
                               (s: LPlusState) => s.s.stop_reason.Armada_NotStopped?,
-                              (s: LPlusState, tid: Armada_ThreadHandle) => if tid in s.s.threads then Some(s.s.threads[tid].pc) else None,
+                              (s: LPlusState, tid: Armada_ThreadHandle) =>
+                                if tid in s.s.threads then Some(s.s.threads[tid].pc) else None,
                               L.Armada_IsNonyieldingPC)
         }
       ";
       pgp.AddFunction(str, "specs");
 
       str = @"
-        lemma lemma_PropertiesOfGetStateSequence_LPlus(s: LPlusState, steps: seq<L.Armada_TraceEntry>, states: seq<LPlusState>)
-          requires states == Armada_GetStateSequence(LPlus_GetSpecFunctions(), s, steps)
-          ensures forall i {:trigger states[i], steps[i]} :: 0 <= i < |steps| ==>
-                                                             states[i + 1].s == L.Armada_GetNextStateAlways(states[i].s, steps[i])
-          ensures forall i :: 0 <= i < |states| ==> states[i].s == Armada_GetStateSequence(L.Armada_GetSpecFunctions(), s.s, steps)[i]
+        function ConvertTotalState_LPlusL(lps: LPlusState) : LState
         {
-          var asf := L.Armada_GetSpecFunctions();
-          forall i {:trigger states[i], steps[i]} | 0 <= i < |steps|
-            ensures states[i + 1].s == L.Armada_GetNextStateAlways(states[i].s, steps[i])
+          lps.s
+        }
+      ";
+      pgp.AddFunction(str, "PlusLemmas");
+
+      str = @"
+        lemma lemma_EstablishRequirementsForLSpecRefinesLPlusSpec()
+          ensures RequirementsForSpecRefinesPlusSpec(L.Armada_GetSpecFunctions(), LPlus_GetSpecFunctions(), ConvertTotalState_LPlusL)
+        {
+          var lasf := L.Armada_GetSpecFunctions();
+          var hasf := LPlus_GetSpecFunctions();
+          var convert := ConvertTotalState_LPlusL;
+          forall ls | lasf.init(ls)
+            ensures exists hs :: hasf.init(hs) && ls == convert(hs)
           {
-            lemma_ArmadaGetStateSequenceOnePos(LPlus_GetSpecFunctions(), s, steps, i);
-          }
-          var j := 1;
-          while j < |states|
-            invariant 1 <= j <= |states|
-            invariant forall i :: 0 <= i < j ==> states[i].s == Armada_GetStateSequence(asf, s.s, steps)[i]
-          {
-            var prev := j-1;
-            assert states[prev+1].s == L.Armada_GetNextStateAlways(states[prev].s, steps[prev]);
-            assert states[prev].s == Armada_GetStateSequence(asf, s.s, steps)[prev];
-            lemma_ArmadaGetStateSequenceOnePos(asf, s.s, steps, prev);
-            assert states[prev+1].s == Armada_GetStateSequence(asf, s.s, steps)[prev+1];
-
-            forall i | 0 <= i < j+1
-              ensures states[i].s == Armada_GetStateSequence(asf, s.s, steps)[i]
-            {
-              if i < j {
-                assert states[i].s == Armada_GetStateSequence(asf, s.s, steps)[i];
-              }
-              else {
-                assert i == j == prev + 1;
-                assert states[i].s == Armada_GetStateSequence(asf, s.s, steps)[i];
-              }
-            }
-
-            j := j + 1;
+            var hs := MakeLPlusInitialState(ls);
+            assert hasf.init(hs) && ls == convert(hs);
           }
         }
       ";
-      pgp.AddLemma(str, "specs");
+      pgp.AddLemma(str, "PlusLemmas");
 
       str = @"
-        predicate LPlus_Next(s: LPlusState, s': LPlusState, entry: LStep)
+        lemma lemma_LSpecRefinesLPlusSpec() returns (refinement_relation:RefinementRelation<LState, LPlusState>)
+          ensures SpecRefinesSpec(Armada_SpecFunctionsToSpec(L.Armada_GetSpecFunctions()),
+                                  Armada_SpecFunctionsToSpec(LPlus_GetSpecFunctions()),
+                                  refinement_relation)
+          ensures  refinement_relation == iset ls: LState, lps: LPlusState | ls == lps.s :: RefinementPair(ls, lps)
         {
-          Armada_NextMultistep(LPlus_GetSpecFunctions(), s, s', entry.steps, entry.tid, entry.tau)
+          lemma_EstablishRequirementsForLSpecRefinesLPlusSpec();
+          refinement_relation :=
+            lemma_SpecRefinesPlusSpec(L.Armada_GetSpecFunctions(), LPlus_GetSpecFunctions(), ConvertTotalState_LPlusL);
         }
       ";
-      pgp.AddPredicate(str, "specs");
-
-      str = @"
-        function MakeLPlusNextMultipleSteps(splus: LPlusState, s': LState, steps: seq<L.Armada_TraceEntry>): (splus': LPlusState)
-          requires Armada_NextMultipleSteps(L.Armada_GetSpecFunctions(), splus.s, s', steps)
-          ensures  splus'.s == s'
-          ensures  Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), splus, splus', steps)
-          decreases |steps|
-        {
-          if |steps| == 0 then
-            splus
-          else
-            var splus1 := LPlus_GetNextStateAlways(splus, steps[0]);
-            MakeLPlusNextMultipleSteps(splus1, s', steps[1..])
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = @"
-        function MakeLPlusNextState(splus: LPlusState, s': LState, entry: LStep): (splus': LPlusState)
-          requires L.Armada_Next(splus.s, s', entry)
-          ensures  splus'.s == s'
-          ensures  LPlus_Next(splus, splus', entry)
-        {
-          lemma_PropertiesOfGetStateSequence_LPlus(splus, entry.steps,
-                                                       Armada_GetStateSequence(LPlus_GetSpecFunctions(), splus, entry.steps));
-          MakeLPlusNextMultipleSteps(splus, s', entry.steps)
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = @"
-        lemma lemma_LPlusNextMultipleStepsImpliesLNextMultipleSteps(
-          ls: LPlusState,
-          ls': LPlusState,
-          lsteps: seq<L.Armada_TraceEntry>
-          )
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), ls, ls', lsteps)
-          ensures  Armada_NextMultipleSteps(L.Armada_GetSpecFunctions(), ls.s, ls'.s, lsteps)
-          decreases |lsteps|
-        {
-          if |lsteps| > 0 {
-            var ls_next := LPlus_GetNextStateAlways(ls, lsteps[0]);
-            lemma_LPlusNextMultipleStepsImpliesLNextMultipleSteps(ls_next, ls', lsteps[1..]);
-          }
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_GetLAnnotatedBehavior(lb:seq<L.Armada_TotalState>) returns (alb:AnnotatedBehavior<LState, LStep>)
-            requires BehaviorSatisfiesSpec(lb, L.Armada_Spec())
-            ensures  AnnotatedBehaviorSatisfiesSpec(alb, GetLSpec())
-            ensures  alb.states == lb
-        {
-            if |lb| == 1 {
-                return AnnotatedBehavior(lb, []);
-            }
-
-            var pos := |lb|-2;
-            var alb_prev := lemma_GetLAnnotatedBehavior(all_but_last(lb));
-            assert 0 <= pos < |lb|-1;
-            assert StatePair(lb[pos], lb[pos+1]) in L.Armada_Spec().next;
-            var entry :| L.Armada_Next(lb[pos], lb[pos+1], entry);
-            alb := AnnotatedBehavior(lb, alb_prev.trace + [entry]);
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes(hb:AnnotatedBehavior<HState, HStep>)
-            requires AnnotatedBehaviorSatisfiesSpec(hb, GetHSpec())
-            ensures  BehaviorSatisfiesSpec(hb.states, H.Armada_Spec())
-        {
-            var b := hb.states;
-
-            forall i | 0 <= i < |b|-1
-                ensures StatePair(b[i], b[i+1]) in H.Armada_Spec().next
-            {
-              var s := hb.states[i];
-              var s' := hb.states[i+1];
-              var entry := hb.trace[i];
-              assert ActionTuple(s, s', entry) in GetHSpec().next;
-              assert Armada_NextMultistep(H.Armada_GetSpecFunctions(), s, s', entry.steps, entry.tid, entry.tau);
-              assert H.Armada_Next(s, s', entry);
-              assert StatePair(s, s') in H.Armada_Spec().next;
-            }
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      var formals = new List<Formal>();
-      formals.Add(AH.MakeFormal("s", "LState"));
-      formals.Add(AH.MakeFormal("config", "LConfig"));
-      foreach (var aux in auxiliaries) {
-        formals.Add(AH.MakeFormal(aux.FieldName, aux.TypeName));
-      }
-      pgp.AddDatatypeDecl("LPlusState", new List<DatatypeCtor> { AH.MakeDatatypeCtor("LPlusState", formals) }, "specs");
-
-      str = @"
-        lemma lemma_GetLPlusAnnotatedBehavior(lb:seq<LState>) returns (alb:AnnotatedBehavior<LPlusState, LStep>)
-          requires BehaviorSatisfiesSpec(lb, L.Armada_Spec())
-          ensures  AnnotatedBehaviorSatisfiesSpec(alb, GetLPlusSpec())
-          ensures  |alb.states| == |lb|
-          ensures  forall i :: 0 <= i < |lb| ==> alb.states[i].s == lb[i]
-        {
-          var spec := L.Armada_Spec();
-
-          var splus0 := MakeLPlusInitialState(lb[0]);
-          var states:seq<LPlusState> := [splus0];
-          var trace:seq<LStep> := [];
-
-          while |states| < |lb|
-            invariant |states| == |trace| + 1
-            invariant 1 <= |states| <= |lb|
-            invariant LPlus_Init(states[0])
-            invariant forall i :: 0 <= i < |states|-1 ==> LPlus_Next(states[i], states[i+1], trace[i])
-            invariant forall i :: 0 <= i < |states| ==> states[i].s == lb[i]
-          {
-            var pos := |states|-1;
-            var s := lb[pos];
-            var s' := lb[pos+1];
-            assert states[pos].s == s;
-            assert 0 <= pos < |lb|-1;
-            assert StatePair(lb[pos], lb[pos + 1]) in L.Armada_Spec().next;
-            var step :| L.Armada_Next(lb[pos], lb[pos + 1], step);
-            var splus := states[pos];
-            var splus' := MakeLPlusNextState(splus, s', step);
-            states := states + [splus'];
-            trace := trace + [step];
-          }
-
-          alb := AnnotatedBehavior(states, trace);
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_IfLPlusBehaviorRefinesBehaviorThenLBehaviorDoes(lb:seq<LState>, lplusb:seq<LPlusState>, hb:seq<HState>)
-          requires |lb| == |lplusb|
-          requires forall i :: 0 <= i < |lb| ==> lplusb[i].s == lb[i]
-          requires BehaviorRefinesBehavior(lplusb, hb, GetLPlusHRefinementRelation())
-          ensures  BehaviorRefinesBehavior(lb, hb, GetLHRefinementRelation())
-        {
-          var lplush_relation := GetLPlusHRefinementRelation();
-          var lh_relation := GetLHRefinementRelation();
-          var lh_map:RefinementMap :| BehaviorRefinesBehaviorUsingRefinementMap(lplusb, hb, lplush_relation, lh_map);
-          forall i, j {:trigger RefinementPair(lb[i], hb[j]) in lh_relation} | 0 <= i < |lb| && lh_map[i].first <= j <= lh_map[i].last
-            ensures RefinementPair(lb[i], hb[j]) in lh_relation;
-          {
-            assert RefinementPair(lplusb[i], hb[j]) in lplush_relation;
-            assert RefinementPair(lplusb[i].s, hb[j]) in lh_relation;
-            assert RefinementPair(lb[i], hb[j]) in lh_relation;
-          }
-          assert BehaviorRefinesBehaviorUsingRefinementMap(lb, hb, GetLHRefinementRelation(), lh_map);
-        }
-      ";
-      pgp.AddLemma(str, "specs");
+      pgp.AddLemma(str, "PlusLemmas");
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -1636,62 +2184,59 @@ namespace Microsoft.Armada
       pgp.AuxiliaryProof("specs").AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/util/collections/maps.i.dfy");
       pgp.AuxiliaryProof("specs").AddImport("util_collections_maps_i");
 
-      string str = "";
-      var predBuilder = new PredicateBuilder(pgp.prog);
       var abstractAddresses = new List<string>();
+      var preds = new List<string>();
       foreach (var globalVarName in pgp.symbolsLow.Globals.VariableNames) {
         var globalVar = pgp.symbolsLow.Globals.Lookup(globalVarName);
         if (globalVar is GlobalAddressableArmadaVariable) {
           string globalAddress = $"s.s.addrs.{globalVarName}";
-          predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", $"Armada_TriggerPointer({globalAddress})"));
-          predBuilder.AddConjunct(AH.GetInvocationOfValidPointer(AH.MakeNameSegment("s.s.mem.heap", "Armada_Heap"), AH.MakeNameSegment($"s.s.addrs.{globalVarName}", "Armada_Pointer"), globalVar.ty));
-          var allocatedByExpr = AH.GetInvocationOfAllocatedBy(AH.MakeNameSegment("s.s.mem.heap", "Armada_Heap"), AH.MakeNameSegment($"s.s.addrs.{globalVarName}", "Armada_Pointer"), globalVar.ty);
-          str  = $@"
-            (forall p {{:trigger Armada_TriggerPointer(p)}}
-              :: p in {Printer.ExprToString(allocatedByExpr)} && Armada_TriggerPointer(p) ==>
-              p in s.addr_map && s.addr_map[p] == GlobalAbstractAddress_{globalVarName})
-          ";
+          preds.Add(AH.GetInvocationOfValidPointer("s.s.mem.heap", $"s.s.addrs.{globalVarName}", globalVar.ty));
+          var descendants = AH.GetInvocationOfDescendants("s.s.mem.heap", $"s.s.addrs.{globalVarName}", globalVar.ty);
+          preds.Add($@"
+            forall p {{:trigger Armada_TriggerPointer(p)}} :: Armada_TriggerPointer(p) in {descendants} ==>
+              p in s.addr_map && s.addr_map[p] == GlobalAbstractAddress_{globalVarName}
+          ");
           abstractAddresses.Add($"GlobalAbstractAddress_{globalVarName}");
-          predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
         }
       }
 
-      str =  $@"
-      predicate AddressableInvariant_Globals(s: LPlusState)
-      {{
-        {Printer.ExprToString(predBuilder.Extract())}
-      }}";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, $"AddressableInvariant_Globals", str), "invariants");
+      var str = $@"
+        predicate AddressableInvariant_Globals(s: LPlusState)
+        {{
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(str, "defs");
       return abstractAddresses;
     }
 
     protected virtual List<string> GenerateAddressableInvariant_StackFrame(string methodName)
     {
       var methodSymbols = pgp.symbolsLow.GetMethodSymbolTable(methodName);
-      var predBuilder = new PredicateBuilder(pgp.prog);
-      string str;
       var abstractAddresses = new List<string>();
+      var preds = new List<string>();
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
         string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
-        predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", $"Armada_TriggerPointer(frame.{varStackFrameFieldName})"));
-        predBuilder.AddConjunct(AH.GetInvocationOfValidPointer(AH.MakeNameSegment("heap", "Armada_Heap"), AH.MakeNameSegment($"frame.{varStackFrameFieldName}", "Armada_Pointer"), localVar.ty));
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(AH.MakeNameSegment("heap", "Armada_Heap"), AH.MakeNameSegment($"frame.{varStackFrameFieldName}", "Armada_Pointer"), localVar.ty);
-        str  = $@"
-          && (forall p {{:trigger Armada_TriggerPointer(p)}}
-            :: p in {Printer.ExprToString(allocatedByExpr)} && Armada_TriggerPointer(p) ==>
-            p in addr_map && addr_map[p] == LocalAbstractAddress_{methodName.Replace("_", "__")}_{varStackFrameFieldName.Replace("_", "__")}(tid, h))
-        ";
-        abstractAddresses.Add($"LocalAbstractAddress_{methodName.Replace("_", "__")}_{varStackFrameFieldName.Replace("_", "__")}(tid:Armada_ThreadHandle, h:int)");
-        predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+        preds.Add(AH.GetInvocationOfValidPointer("heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty));
+        var descendants = AH.GetInvocationOfDescendants("heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty);
+        preds.Add($@"
+          forall p {{:trigger Armada_TriggerPointer(p)}} :: Armada_TriggerPointer(p) in ({descendants}) ==>
+            p in addr_map &&
+            addr_map[p] == LocalAbstractAddress_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(varStackFrameFieldName)}(tid, h)
+        ");
+        abstractAddresses.Add($"LocalAbstractAddress_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(varStackFrameFieldName)}(tid:Armada_ThreadHandle, h:int)");
       }
-      str =  $@"
-      predicate AddressableInvariant_StackFrame_{methodName}(addr_map:map<Armada_Pointer, AbstractAddress>,
-        frame: L.Armada_StackFrame, tid: Armada_ThreadHandle, h: int, heap: Armada_Heap)
-        requires frame.Armada_StackFrame_{methodName}?
-      {{
-        {Printer.ExprToString(predBuilder.Extract())}
-      }}";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, $"AddressableInvariant_StackFrame_{methodName}", str), "invariants");
+
+      var str = $@"
+        predicate AddressableInvariant_StackFrame_{methodName}(addr_map:map<Armada_Pointer, AbstractAddress>, frame: L.Armada_StackFrame,
+                                                               tid: Armada_ThreadHandle, h: int, heap: Armada_Heap)
+          requires frame.Armada_StackFrame_{methodName}?
+        {{
+          var frame_vars := frame.{methodName};
+          {AH.CombineStringsWithAnd(preds)}
+        }}
+      ";
+      pgp.AddPredicate(str, "defs");
       return abstractAddresses;
     }
 
@@ -1702,36 +2247,27 @@ namespace Microsoft.Armada
 
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
         string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
-        var localAddress = $"s.threads[config.tid_init].top.{varStackFrameFieldName}";
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-          AH.MakeNameSegment("s.mem.heap", "Armada_Heap"),
-          AH.MakeNameSegment(localAddress, "Armada_Pointer"),
-          localVar.ty
-        );
-        mapBuilder.Add(Printer.ExprToString(allocatedByExpr),
-          $"LocalAbstractAddress_main_{varStackFrameFieldName.Replace("_","__")}(config.tid_init, 0)");
+        var localAddress = $"s.threads[config.tid_init].top.main.{varStackFrameFieldName}";
+        var descendants = AH.GetInvocationOfDescendants("s.mem.heap", localAddress, localVar.ty);
+        mapBuilder.Add(descendants, $"LocalAbstractAddress_main_{AH.ExpandUnderscores(varStackFrameFieldName)}(config.tid_init, 0)");
       }
       foreach (var globalVarName in pgp.symbolsLow.Globals.VariableNames) {
         var globalVar = pgp.symbolsLow.Globals.Lookup(globalVarName);
         if (globalVar is GlobalAddressableArmadaVariable) {
           string globalAddress = $"s.addrs.{globalVarName}";
-          var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-            AH.MakeNameSegment("s.mem.heap", "Armada_Heap"),
-            AH.MakeNameSegment(globalAddress, "Armada_Pointer"),
-            globalVar.ty
-          );
-          mapBuilder.Add(Printer.ExprToString(allocatedByExpr), $"GlobalAbstractAddress_{globalVarName}");
+          var descendants = AH.GetInvocationOfDescendants("s.mem.heap", globalAddress, globalVar.ty);
+          mapBuilder.Add(descendants, $"GlobalAbstractAddress_{globalVarName}");
         }
       }
 
-      string str =$@"
-        function AddrMapInit(s: LState, config: LConfig): map<Armada_Pointer, AbstractAddress>
+      string str = $@"
+        function AddrMapInit(s: LState, config: Armada_Config): map<Armada_Pointer, AbstractAddress>
           requires L.Armada_InitConfig(s, config)
         {{
           {mapBuilder.Extract()}
         }}
-        ";
-      pgp.AddDefaultClassDecl((Function)AH.ParseTopLevelDecl(pgp.prog, "AddrMapInit", str), "specs");
+      ";
+      pgp.AddFunction(str, "specs");
     }
 
     protected virtual string GenerateAddressableMapNextCase_Call(NextRoutine nextRoutine)
@@ -1743,22 +2279,21 @@ namespace Microsoft.Armada
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
         string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
         var localAddress = $"new_frame.{varStackFrameFieldName}";
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-          AH.MakeNameSegment("s'.mem.heap", "Armada_Heap"),
-          AH.MakeNameSegment(localAddress, "Armada_Pointer"),
-          localVar.ty
-        );
-        mapBuilder.Add(Printer.ExprToString(allocatedByExpr),
-          $"LocalAbstractAddress_{methodName.Replace("_", "__")}_{varStackFrameFieldName.Replace("_", "__")}(step.tid, |s'.threads[step.tid].stack|)");
+        var descendants = AH.GetInvocationOfDescendants("s'.mem.heap", localAddress, localVar.ty);
+        mapBuilder.Add(descendants, $"LocalAbstractAddress_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(varStackFrameFieldName)}(tid, |s'.threads[tid].stack|)");
       }
+      var pr = new ModuleStepPrinter("L");
+      pr.State = "splus.s";
       string str = $@"
+        { pr.GetOpenStepInvocation(nextRoutine) }
         if s'.stop_reason.Armada_NotStopped? then
-          var new_frame := s'.threads[step.tid].top; {mapBuilder.Extract()}
+          var new_frame := s'.threads[tid].top.{methodName}; {mapBuilder.Extract()}
         else
           splus.addr_map
       ";
       return str;
     }
+
     protected virtual string GenerateAddressableMapNextCase_CreateThread(NextRoutine nextRoutine)
     {
       var armadaCreateThreadStmt = (ArmadaCreateThreadStatement)nextRoutine.armadaStatement;
@@ -1770,17 +2305,16 @@ namespace Microsoft.Armada
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
         string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
         var localAddress = $"new_frame.{varStackFrameFieldName}";
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-          AH.MakeNameSegment("s'.mem.heap", "Armada_Heap"),
-          AH.MakeNameSegment(localAddress, "Armada_Pointer"),
-          localVar.ty
-        );
-        mapBuilder.Add(Printer.ExprToString(allocatedByExpr),
-          $"LocalAbstractAddress_{methodName.Replace("_", "__")}_{varStackFrameFieldName.Replace("_", "__")}(newtid, 0)");
+        var descendants = AH.GetInvocationOfDescendants("s'.mem.heap", localAddress, localVar.ty);
+        mapBuilder.Add(descendants,
+          $"LocalAbstractAddress_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(varStackFrameFieldName)}(newtid, 0)");
       }
+      var pr = new ModuleStepPrinter("L");
+      pr.State = "splus.s";
       string str = $@"
+        { pr.GetOpenStepInvocation(nextRoutine) }
         if s'.stop_reason.Armada_NotStopped? then
-          var newtid := step.newtid_{armadaCreateThreadStmt.StartPC}; var new_frame := s'.threads[newtid].top; {mapBuilder.Extract()}
+          var newtid := params.newtid; var new_frame := s'.threads[newtid].top.{methodName}; {mapBuilder.Extract()}
         else
           splus.addr_map
       ";
@@ -1790,7 +2324,10 @@ namespace Microsoft.Armada
     protected virtual string GenerateAddressableMapNextCase(NextRoutine nextRoutine)
     {
       string caseBody = "";
-      if (nextRoutine.nextType == NextType.Call) {
+      if (nextRoutine.Stopping) {
+        caseBody = "splus.addr_map";
+      }
+      else if (nextRoutine.nextType == NextType.Call) {
         caseBody = GenerateAddressableMapNextCase_Call(nextRoutine);
       }
       else if (nextRoutine.nextType == NextType.CreateThread) {
@@ -1800,8 +2337,8 @@ namespace Microsoft.Armada
         caseBody = "splus.addr_map";
       }
 
-      string formalUnderscores = "_" + string.Join("", nextRoutine.Formals.Select(f => $", _"));
-      return $"case Armada_TraceEntry_{nextRoutine.NameSuffix}({formalUnderscores}) => {caseBody}";
+      var pr = new ModuleStepPrinter("L");
+      return $"{pr.CaseEntry(nextRoutine)} => {caseBody}";
     }
 
     protected virtual void GenerateAddressableMapNext()
@@ -1813,10 +2350,11 @@ namespace Microsoft.Armada
       }
 
       string str = $@"
-        function AddrMapNext(splus: LPlusState, s': LState, step: L.Armada_TraceEntry): map<Armada_Pointer, AbstractAddress>
-          requires s' == L.Armada_GetNextStateAlways(splus.s, step);
+        function AddrMapNext(splus: LPlusState, s': LState, step: L.Armada_Step, tid: Armada_ThreadHandle)
+          : map<Armada_Pointer, AbstractAddress>
+          requires s' == L.Armada_GetNextState(splus.s, step, tid)
         {{
-          if L.Armada_ValidStep(splus.s, step) then
+          if L.Armada_ValidStep(splus.s, step, tid) then
             match step
             {{
               {string.Join("\n", caseStrings)}
@@ -1825,7 +2363,7 @@ namespace Microsoft.Armada
             splus.addr_map
         }}
       ";
-      pgp.AddDefaultClassDecl((Function)AH.ParseTopLevelDecl(pgp.prog, "AddrMapNext", str), "specs");
+      pgp.AddFunction(str, "specs");
     }
 
     protected virtual void GenerateAddressableMapAux(List<string> abstractAddresses)
@@ -1858,7 +2396,8 @@ namespace Microsoft.Armada
             AddressableInvariant_StackFrame_{methodName}(s.addr_map, frame, tid, |s.s.threads[tid].stack|, heap)
           )
 
-          && (forall tid, h:: tid in s.s.threads && 0 <= h < |s.s.threads[tid].stack| &&  s.s.threads[tid].stack[h].frame.Armada_StackFrame_{methodName}?
+          && (forall tid, h ::
+              tid in s.s.threads && 0 <= h < |s.s.threads[tid].stack| && s.s.threads[tid].stack[h].frame.Armada_StackFrame_{methodName}?
               ==>
               var frame := s.s.threads[tid].stack[h].frame; var heap := s.s.mem.heap;
               AddressableInvariant_StackFrame_{methodName}(s.addr_map, frame, tid, |s.s.threads[tid].stack| - 1 - h, heap)
@@ -1876,72 +2415,72 @@ namespace Microsoft.Armada
           && (forall p :: p in s.addr_map ==> (p in s.s.mem.heap.valid || p in s.s.mem.heap.freed) )
         }}
       ";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "AddressableInvariant", predicateDecl), "invariants");
+      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "AddressableInvariant", predicateDecl), "defs");
 
       AddInvariant(new InternalInvariantInfo("AddressableInvariant", "AddressableInvariant", new List<string>()));
     }
 
     protected virtual void GenerateValidStackMethod(string methodName) {
       var methodSymbols = pgp.symbolsLow.GetMethodSymbolTable(methodName);
-      var predBuilder = new PredicateBuilder(pgp.prog);
-      string p_in_new_ptrs = "";
+      var preds = new List<string>();
+      var p_in_new_ptrs = new List<string>();
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
         string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
-        predBuilder.AddConjunct(AH.GetInvocationOfValidPointer(AH.MakeNameSegment("heap", "Armada_Heap"), AH.MakeNameSegment($"frame.{varStackFrameFieldName}", localVar.ty), localVar.ty));
-        string str = $@"
-            heap.tree[frame.{varStackFrameFieldName}].field_of_parent.Armada_FieldNone?
-            && heap.tree[frame.{varStackFrameFieldName}].field_of_parent.rt.Armada_RootTypeStack?";
-        predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
-        var allocatedByExpr = AH.GetInvocationOfAllocatedBy(
-          AH.MakeNameSegment("heap", "Armada_Heap"),
-          AH.MakeNameSegment($"frame.{varStackFrameFieldName}", "Armada_Pointer"),
-          localVar.ty
-        );
-        p_in_new_ptrs += $"|| p in {Printer.ExprToString(allocatedByExpr)}";
+        preds.Add(AH.GetInvocationOfValidPointer("heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty));
+        preds.Add($@"
+          heap.tree[frame_vars.{varStackFrameFieldName}].child_type.Armada_ChildTypeRoot?
+          && heap.tree[frame_vars.{varStackFrameFieldName}].child_type.rt.Armada_RootTypeStack?");
+        var descendants = AH.GetInvocationOfDescendants("heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty);
+        p_in_new_ptrs.Add($"p in ({descendants})");
       }
 
-      string newPtrsIsAllocatedAddresses;
-      if (p_in_new_ptrs.Length > 0) {
-        newPtrsIsAllocatedAddresses = $"forall p {{:trigger Armada_TriggerPointer(p)}}:: (Armada_TriggerPointer(p) && p in new_ptrs) <==> (Armada_TriggerPointer(p) && ({p_in_new_ptrs}))";
+      if (p_in_new_ptrs.Count > 0) {
+        preds.Add($@"
+          forall p {{:trigger Armada_TriggerPointer(p)}} ::
+            (Armada_TriggerPointer(p) in new_ptrs) <==> ({AH.CombineStringsWithOr(p_in_new_ptrs)})
+        ");
       } else {
-        newPtrsIsAllocatedAddresses = "new_ptrs == {}";
+        preds.Add("|new_ptrs| == 0");
       }
        
-      predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", newPtrsIsAllocatedAddresses));
       string predicateDecl = $@"
         predicate ValidStackFrame_{methodName}(frame: L.Armada_StackFrame, heap: Armada_Heap, new_ptrs: set<Armada_Pointer>) 
         requires frame.Armada_StackFrame_{methodName}?
         {{
-          {Printer.ExprToString(predBuilder.Extract())}
+          var frame_vars := frame.{methodName};
+          {AH.CombineStringsWithAnd(preds)}
         }}
       ";
-
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "ValidStackFrame_{methodName}", predicateDecl), "invariants");
+      pgp.AddPredicate(predicateDecl, "defs");
     }
 
     protected virtual void GenerateValidStackFramePredicate()
     {
-      string caseBody = "";
-      foreach (var methodName in pgp.symbolsLow.MethodNames) {
+      List<string> caseBodies = new List<string>();
+      foreach (var methodName in pgp.symbolsLow.MethodNames)
+      {
         GenerateValidStackMethod(methodName);
 
-        caseBody += $@"
-            && (forall tid :: tid in s.s.threads 
-              && s.s.threads[tid].top.Armada_StackFrame_{methodName}? ==>
-              var t := s.s.threads[tid]; ValidStackFrame_{methodName}(t.top, s.s.mem.heap, t.new_ptrs))
-            && (forall tid, h :: tid in s.s.threads && 0 <= h < |s.s.threads[tid].stack| && s.s.threads[tid].stack[h].frame.Armada_StackFrame_{methodName}? ==>
-                ValidStackFrame_{methodName}(s.s.threads[tid].stack[h].frame, s.s.mem.heap, s.s.threads[tid].stack[h].new_ptrs))
-        ";
-       }
+        caseBodies.Add($@"
+          forall tid :: tid in s.s.threads && s.s.threads[tid].top.Armada_StackFrame_{methodName}? ==>
+            var t := s.s.threads[tid];
+            ValidStackFrame_{methodName}(t.top, s.s.mem.heap, t.new_ptrs)
+        ");
+        caseBodies.Add($@"
+          forall tid, h ::
+            tid in s.s.threads && 0 <= h < |s.s.threads[tid].stack|
+            && s.s.threads[tid].stack[h].frame.Armada_StackFrame_{methodName}? ==>
+            ValidStackFrame_{methodName}(s.s.threads[tid].stack[h].frame, s.s.mem.heap, s.s.threads[tid].stack[h].new_ptrs)
+        ");
+      }
 
-       string str = $@"
+      string str = $@"
         predicate AllValidStackFrames(s: LPlusState)
         {{
-            {caseBody}
+          {AH.CombineStringsWithAnd(caseBodies)}
         }}
-       ";
-
-       pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "AllValidStackFrames", str), "invariants");
+      ";
+      pgp.AddPredicate(str, "defs");
     }
 
     public class RegionInfo
@@ -2028,12 +2567,12 @@ namespace Microsoft.Armada
         foreach (var localVar in methodSymbols.AllVariables) {
           var localVarName = localVar.name;
           if (localVar is MethodStackFrameAddressableLocalArmadaVariable) {
-            addrRegionTable[localVarName] = $"rap_{methodName.Replace("_", "__")}_{localVarName.Replace("_", "__")}";
-            r.regionIds.Add($"rap_{methodName.Replace("_", "__")}_{localVarName.Replace("_", "__")}");
+            addrRegionTable[localVarName] = $"rap_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(localVarName)}";
+            r.regionIds.Add($"rap_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(localVarName)}");
           }
           if (localVar.ty is PointerType) {
-            ptrRegionTable[localVarName] = $"rlp_{methodName.Replace("_", "__")}_{localVarName.Replace("_", "__")}";
-            r.regionIds.Add($"rlp_{methodName.Replace("_", "__")}_{localVarName.Replace("_", "__")}");
+            ptrRegionTable[localVarName] = $"rlp_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(localVarName)}";
+            r.regionIds.Add($"rlp_{AH.ExpandUnderscores(methodName)}_{AH.ExpandUnderscores(localVarName)}");
           }
           r.methodToAddrVarRegionTable[methodName] = addrRegionTable;
           r.methodToPtrVarRegionTable[methodName] = ptrRegionTable;
@@ -2080,6 +2619,9 @@ namespace Microsoft.Armada
 
       // Merge for all statements that force regions to be merged
       foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
+        if (nextRoutine.Stopping) {
+          continue;
+        }
         if (nextRoutine.nextType == NextType.Update) {
           var updateStmt = (UpdateStmt)nextRoutine.stmt;
           var lhss = updateStmt.Lhss;
@@ -2213,12 +2755,13 @@ namespace Microsoft.Armada
       var methodSymbols = pgp.symbolsLow.GetMethodSymbolTable(methodName);
       List<string> mapUpdates = new List<string>();
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
-        string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
         string regionIdStr = regionInfo.GetRegionId(methodName, "&" + localVar.name);
-        mapUpdates.Add($"[newframe_{localVar.name} := {regionIdStr}]");
+        mapUpdates.Add($"[params.newframe_{localVar.name} := {regionIdStr}]");
       }
       string mapUpdateBody = string.Join("", mapUpdates);
+      var pr = new LPlusStepPrinter();
       string str = $@"
+        { pr.GetOpenStepInvocation(nextRoutine) }
         s.region_map{mapUpdateBody}
       ";
       return str;
@@ -2231,28 +2774,35 @@ namespace Microsoft.Armada
       var methodSymbols = pgp.symbolsLow.GetMethodSymbolTable(methodName);
       List<string> mapUpdates = new List<string>();
       foreach (var localVar in methodSymbols.AllVariablesInOrder.Where(v => v is MethodStackFrameAddressableLocalArmadaVariable)) {
-        string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
         string regionIdStr = regionInfo.GetRegionId(methodName, "&" + localVar.name);
-        mapUpdates.Add($"[newframe_{localVar.name} := {regionIdStr}]");
+        mapUpdates.Add($"[params.newframe_{localVar.name} := {regionIdStr}]");
       }
       string mapUpdateBody = string.Join("", mapUpdates);
+      var pr = new LPlusStepPrinter();
       string str = $@"
+        { pr.GetOpenStepInvocation(nextRoutine) }
         s.region_map{mapUpdateBody}
       ";
       return str;
     }
     
-    protected virtual MatchCaseExpr GenerateRegionMapNextCase(NextRoutine nextRoutine, RegionInfo regionInfo)
+    protected virtual string GenerateRegionMapNextCase(NextRoutine nextRoutine, RegionInfo regionInfo)
     {
-      string str = ""; // $"case Armada_TraceEntry_{nextRoutine.NameSuffix} => ";
-      if (nextRoutine.nextType == NextType.Malloc)
-      {
+      string str = ""; // $"case Armada_Step_{nextRoutine.NameSuffix} => ";
+      if (nextRoutine.Stopping) {
+        str = "s.region_map";
+      }
+      else if (nextRoutine.nextType == NextType.MallocSuccess) {
         var updateStmt = (UpdateStmt)nextRoutine.armadaStatement.Stmt;
         // Get the variable from the LHS and use that to determine the case 
         string methodName = nextRoutine.method.Name;
         string varName = Printer.ExprToString(updateStmt.Lhss[0]);
         var regionId = regionInfo.GetRegionId(methodName, varName);
-        str = $"if new_ptr != 0 then s.region_map[new_ptr := {regionId}] else s.region_map";
+        var pr = new LPlusStepPrinter();
+        str = $@"
+          { pr.GetOpenStepInvocation(nextRoutine) }
+          s.region_map[params.new_ptr := {regionId}]
+        ";
       }
       else if (nextRoutine.nextType == NextType.Call) {
         str = GenerateRegionMapNextCase_Call(nextRoutine, regionInfo);
@@ -2260,34 +2810,31 @@ namespace Microsoft.Armada
       else if (nextRoutine.nextType == NextType.CreateThread) {
         str = GenerateRegionMapNextCase_CreateThread(nextRoutine, regionInfo);
       }
-      else{
+      else {
         str = "s.region_map";
       }
 
-      var bvs = new List<BoundVar> { AH.MakeBoundVar("tid", "Armada_ThreadHandle") };
-      bvs.AddRange(nextRoutine.Formals.Select(f => AH.MakeBoundVar(f.LocalVarName, AddModuleNameToArmadaType(f.VarType, "L"))));
-
-      return AH.MakeMatchCaseExpr($"Armada_TraceEntry_{nextRoutine.NameSuffix}", bvs, AH.ParseExpression(pgp.prog, "", str));
+      var bvs = nextRoutine.HasFormals ? $"params: L.Armada_StepParams_{nextRoutine.NameSuffix}" : "";
+      return $"case Armada_Step_{nextRoutine.NameSuffix}({bvs}) => {str}\n";
     }
 
     protected virtual void GenerateRegionMapNext(RegionInfo regionInfo)
     {
-      var cases = new List<MatchCaseExpr>();
-
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        cases.Add(GenerateRegionMapNextCase(nextRoutine, regionInfo));
-      }
-
-      var source = AH.MakeNameSegment("step", "L.Armada_TraceEntry");
-      var body = AH.MakeMatchExpr(source, cases, "map<Armada_Pointer, RegionId>");
-      var formals = new List<Formal> { AH.MakeFormal("s", "LPlusState"), AH.MakeFormal("ls'", "LState"), AH.MakeFormal("step", "L.Armada_TraceEntry") };
-      var fn = AH.MakeFunction("RegionMapNext", formals, body);
-      pgp.AddDefaultClassDecl(fn, "specs");
+      var caseBodies =
+        String.Concat(pgp.symbolsLow.NextRoutines.Select(nextRoutine => GenerateRegionMapNextCase(nextRoutine, regionInfo)));
+      var fn = $@"
+        function RegionMapNext(s: LPlusState, ls': LState, step: L.Armada_Step, tid: Armada_ThreadHandle)
+          : map<Armada_Pointer, RegionId>
+        {{
+          match step
+            {caseBodies}
+        }}
+      ";
+      pgp.AddFunction(fn, "specs");
     }
 
     protected virtual void GenerateRegionMap(IEnumerable<string> regionIds)
     {
-      string auxNextName = $"RegionMapNext";
       var auxiliaryInfo = new AuxiliaryInfo("region_map", "map<Armada_Pointer, RegionId>", "RegionMapInit", "RegionMapNext");
       auxiliaries.Add(auxiliaryInfo);
     }
@@ -2301,15 +2848,7 @@ namespace Microsoft.Armada
       GenerateAppendStoreBufferOtherWay();
       var regionIds = new HashSet<string>();
 
-      var predBuilder = new PredicateBuilder(pgp.prog);
-      var plus_s = AH.MakeNameSegment("s", "LPlusState");
-      var s = AH.MakeExprDotName(plus_s, "s", "L.Armada_TotalState");
-      var addrs = AH.MakeExprDotName(s, "addrs", "L.Armada_Addrs");
-      var regionIdType = AH.ReferToType("RegionId");
-      var regionMap = AH.MakeExprDotName(plus_s, "region_map", AH.MakeMapType("Armada_Pointer", regionIdType));
-
-      string str;
-
+      var preds = new List<string>();
       List<string> regionMapInitUpdates = new List<string>();
 
       foreach (var globalVarName in pgp.symbolsLow.Globals.VariableNames) {
@@ -2318,12 +2857,9 @@ namespace Microsoft.Armada
         if (globalVar is GlobalAddressableArmadaVariable) {
           string regionNameStr = regionInfo.GetGlobalRegionId("&" + globalVarName);
 
-          var globalVarAddr = AH.MakeExprDotName(addrs, globalVar.name, globalVar.ty);
-          str = $"addrs.{globalVarName} in region_map";
-          predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+          preds.Add($"addrs.{globalVarName} in region_map");
 
-          str = $"region_map[addrs.{globalVarName}] == {regionNameStr}";
-          predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+          preds.Add($"region_map[addrs.{globalVarName}] == {regionNameStr}");
 
           regionMapInitUpdates.Add($"s.addrs.{globalVarName} := {regionNameStr}");
         }
@@ -2336,26 +2872,15 @@ namespace Microsoft.Armada
           if (globalVar is GlobalAddressableArmadaVariable) {
 
             // Need to ensure that the address stored in this pointer variable is in the correct region
-            var pointerValue = Printer.ExprToString(
-              AH.GetInvocationOfDereferencePointer(
-                            AH.MakeNameSegment("mem.heap", "Armada_Heap"),
-                            AH.MakeNameSegment($"addrs.{globalVarName}", "Armada_Pointer"), globalVar.ty
-            ));
-
-            var validPointer = Printer.ExprToString(
-              AH.GetInvocationOfValidPointer(
-                AH.MakeNameSegment("mem.heap", "Armada_Heap"),
-                AH.MakeNameSegment($"addrs.{globalVarName}", "Armada_Pointer"), globalVar.ty
-            ));
-
-            str = $"{validPointer} && ({pointerValue} == 0 || ({pointerValue} in region_map && region_map[{pointerValue}] == {regionNameStr}))";
-            predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+            var pointerValue = AH.GetInvocationOfDereferencePointer("mem.heap", $"addrs.{globalVarName}", globalVar.ty);
+            var validPointer = AH.GetInvocationOfValidPointer("mem.heap", $"addrs.{globalVarName}", globalVar.ty);
+            preds.Add(validPointer);
+            preds.Add($"({pointerValue}) == 0 || (({pointerValue}) in region_map && region_map[{pointerValue}] == {regionNameStr})");
           }
           // Global non-addressable pointer variable
           else 
           {
-            str = $"mem.globals.{globalVarName} == 0 || (mem.globals.{globalVarName} in region_map && region_map[mem.globals.{globalVarName}] == {regionNameStr})";
-            predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+            preds.Add($"mem.globals.{globalVarName} == 0 || (mem.globals.{globalVarName} in region_map && region_map[mem.globals.{globalVarName}] == {regionNameStr})");
           }
         }
       }
@@ -2369,119 +2894,102 @@ namespace Microsoft.Armada
             string regionIdStr = regionInfo.GetLocalRegionId(methodName, "&" + localVarName);
 
             if (methodName == "main") {
-              regionMapInitUpdates.Add($"s.threads[config.tid_init].top.{varStackFrameFieldName} := {regionIdStr}");
+              regionMapInitUpdates.Add($"s.threads[config.tid_init].top.{methodName}.{varStackFrameFieldName} := {regionIdStr}");
             }
 
-            str = $@"
+            preds.Add($@"
               forall tid, extended_frame ::
                 tid in threads
                 && extended_frame in threads[tid].stack
                 && extended_frame.frame.Armada_StackFrame_{methodName}?
-                  ==> var stack_frame := extended_frame.frame; 
+                  ==> var stack_frame := extended_frame.frame.{methodName};
                   (stack_frame.{varStackFrameFieldName} in region_map && region_map[stack_frame.{varStackFrameFieldName}] == {regionIdStr})
-            ";
-            predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "RegionInvariantStackVarExtendedFrameClause", str));
+            ");
 
-            str = $@"
+            preds.Add($@"
               forall tid ::
                 tid in threads
                 && threads[tid].top.Armada_StackFrame_{methodName}?
-                  ==> var stack_frame := threads[tid].top;
+                  ==> var stack_frame := threads[tid].top.{methodName};
                   (stack_frame.{varStackFrameFieldName} in region_map && region_map[stack_frame.{varStackFrameFieldName}] == {regionIdStr})
-            ";
-            predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "RegionInvariantStackVarTopClause", str));
+            ");
           }
           if (localVar.ty is PointerType) { // If the variable is a pointer type
             string regionIdStr = regionInfo.GetLocalRegionId(methodName, localVarName);
             string varStackFrameFieldName = methodSymbols.GetVariableStackFrameFieldName(localVar.name);
 
-            Expression validPointerExpr = AH.GetInvocationOfValidPointer(
-              AH.MakeNameSegment("mem.heap", "Armada_Heap"),
-              AH.MakeNameSegment($"frame.{varStackFrameFieldName}", localVar.ty), localVar.ty
-            );
-            string validPointerStr = Printer.ExprToString(validPointerExpr);
-
-            Expression pointerValueExpr = AH.GetInvocationOfDereferencePointer(
-              AH.MakeNameSegment("mem.heap", "Armada_Heap"),
-              AH.MakeNameSegment($"frame.{varStackFrameFieldName}", localVar.ty), localVar.ty
-            );
-            string pointerValueStr = Printer.ExprToString(pointerValueExpr);
+            var validPointerStr = AH.GetInvocationOfValidPointer("mem.heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty);
+            var pointerValueStr = AH.GetInvocationOfDereferencePointer("mem.heap", $"frame_vars.{varStackFrameFieldName}", localVar.ty);
 
             // Local addressable pointer
             if (localVar is MethodStackFrameAddressableLocalArmadaVariable) {
-              str = $@"
-              forall tid :: tid in threads && threads[tid].top.Armada_StackFrame_{methodName}?
-              ==> var frame := threads[tid].top;
+              preds.Add($@"
+                forall tid :: tid in threads && threads[tid].top.Armada_StackFrame_{methodName}?
+                ==> var frame_vars := threads[tid].top.{methodName};
                     {validPointerStr}
                     && ({pointerValueStr} == 0 ||
                         ({pointerValueStr} in region_map 
                          && region_map[{pointerValueStr}] == {regionIdStr}
                          )
-                      )
-              ";
-              predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
+                        )
+              ");
 
-              str = $@"
-              forall tid, extended_frame ::
-                  tid in threads
-                  && extended_frame in threads[tid].stack
-                  && extended_frame.frame.Armada_StackFrame_{methodName}?
-                    ==> var frame := extended_frame.frame;
-                    {validPointerStr}
-                    && ({pointerValueStr} == 0 ||
-                        ({pointerValueStr} in region_map 
-                         && region_map[{pointerValueStr}] == {regionIdStr}
-                         )
-                      )
-              ";
-              predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "", str));
-            }
-            // Local non-addressable pointer
-            else {
-              str = $@"
+              preds.Add($@"
                 forall tid, extended_frame ::
                   tid in threads
                   && extended_frame in threads[tid].stack
                   && extended_frame.frame.Armada_StackFrame_{methodName}?
-                    ==> var stack_frame := extended_frame.frame; 
-                    stack_frame.{varStackFrameFieldName} == 0 || (stack_frame.{varStackFrameFieldName} in region_map && region_map[stack_frame.{varStackFrameFieldName}] == {regionIdStr})
-              ";
-              predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "RegionInvariantStackVarExtendedFrameClause", str));
+                    ==> var frame_vars := extended_frame.frame.{methodName};
+                    {validPointerStr}
+                    && ({pointerValueStr} == 0 ||
+                        ({pointerValueStr} in region_map 
+                         && region_map[{pointerValueStr}] == {regionIdStr}
+                         )
+                      )
+              ");
+            }
+            // Local non-addressable pointer
+            else {
+              preds.Add($@"
+                forall tid, extended_frame ::
+                  tid in threads
+                  && extended_frame in threads[tid].stack
+                  && extended_frame.frame.Armada_StackFrame_{methodName}?
+                    ==> var stack_frame_vars := extended_frame.frame.{methodName};
+                    stack_frame_vars.{varStackFrameFieldName} == 0 || (stack_frame_vars.{varStackFrameFieldName} in region_map && region_map[stack_frame_vars.{varStackFrameFieldName}] == {regionIdStr})
+              ");
 
-              str = $@"
+              preds.Add($@"
                 forall tid ::
                   tid in threads
                   && threads[tid].top.Armada_StackFrame_{methodName}?
-                    ==> var stack_frame := threads[tid].top;
-                    stack_frame.{varStackFrameFieldName} == 0 || (stack_frame.{varStackFrameFieldName} in region_map && region_map[stack_frame.{varStackFrameFieldName}] == {regionIdStr})
-              ";
-              predBuilder.AddConjunct(AH.ParseExpression(pgp.prog, "RegionInvariantStackVarTopClause", str));
+                    ==> var stack_frame_vars := threads[tid].top.{methodName};
+                    stack_frame_vars.{varStackFrameFieldName} == 0 || (stack_frame_vars.{varStackFrameFieldName} in region_map && region_map[stack_frame_vars.{varStackFrameFieldName}] == {regionIdStr})
+              ");
             }
           }
         }
       }
 
-      string mapUpdate = String.Join(", ", regionMapInitUpdates);
-      str = $@"
-        function RegionMapInit(s:LState, config:LConfig) : map<Armada_Pointer, RegionId>
+      var str = $@"
+        function RegionMapInit(s: LState, config: Armada_Config) : map<Armada_Pointer, RegionId>
            requires L.Armada_InitConfig(s, config)
         {{
-          map[{mapUpdate}]
+          map[{AH.CombineStringsWithCommas(regionMapInitUpdates)}]
         }}
       ";
-      pgp.AddDefaultClassDecl((Function)AH.ParseTopLevelDecl(pgp.prog, "RegionMapInit", str), "specs");
+      pgp.AddFunction(str, "specs");
 
       GenerateRegionMapNext(regionInfo);
 
-      var body = predBuilder.Extract();
       str = $@"
         predicate RegionInvariant_mem(threads: map<Armada_ThreadHandle, L.Armada_Thread>, addrs: L.Armada_Addrs,
-        mem: L.Armada_SharedMemory, region_map: map<Armada_Pointer, RegionId>)
+                                      mem: L.Armada_SharedMemory, region_map: map<Armada_Pointer, RegionId>)
         {{
-          {Printer.ExprToString(body)}
+          {AH.CombineStringsWithAnd(preds)}
         }}
       ";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "RegionInvariant_mem", str), "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = @"
         predicate RegionMapOnlyContainsValidOrFreedPointers(s: LPlusState)
@@ -2489,20 +2997,21 @@ namespace Microsoft.Armada
           forall k :: k in s.region_map ==> k in s.s.mem.heap.valid || k in s.s.mem.heap.freed
         }
       ";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "RegionMapOnlyContainsValidOrFreedPointers", str), "invariants");
+      pgp.AddPredicate(str, "defs");
 
       str = $@"
         predicate RegionInvariant(s: LPlusState)
         {{
             RegionMapOnlyContainsValidOrFreedPointers(s)
             && RegionInvariant_mem(s.s.threads, s.s.addrs, s.s.mem, s.region_map)
-            && (forall tid, storeBufferEntry, threads, addrs, mem, region_map :: tid in s.s.threads && storeBufferEntry in s.s.threads[tid].storeBuffer
-                && (forall p :: p in s.region_map ==> p in region_map && region_map[p] == s.region_map[p]) 
-                && RegionInvariant_mem(threads, addrs, mem, region_map) ==>
-                RegionInvariant_mem(threads, addrs, L.Armada_ApplyStoreBufferEntry(mem, storeBufferEntry), region_map))
+            && (forall tid, storeBufferEntry, threads, addrs, mem, region_map ::
+                 tid in s.s.threads && storeBufferEntry in s.s.threads[tid].storeBuffer
+                 && (forall p :: p in s.region_map ==> p in region_map && region_map[p] == s.region_map[p]) 
+                 && RegionInvariant_mem(threads, addrs, mem, region_map) ==>
+                 RegionInvariant_mem(threads, addrs, L.Armada_ApplyStoreBufferEntry(mem, storeBufferEntry), region_map))
         }}
       ";
-      pgp.AddDefaultClassDecl((Predicate)AH.ParseTopLevelDecl(pgp.prog, "RegionInvariant", str), "invariants");
+      pgp.AddPredicate(str, "defs");
 
       GenerateRegionMap(regionIds);
       AddInvariant(new InternalInvariantInfo("RegionInvariant", "RegionInvariant", new List<string>(){"AddressableInvariant"}, "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView();"));
@@ -2530,7 +3039,7 @@ namespace Microsoft.Armada
           }
         }
       ";
-      pgp.AddDefaultClassDecl((Lemma)AH.ParseTopLevelDecl(pgp.prog, "lemma_RegionInvariantOnGlobalViewImpliesRegionInvariantOnLocalView", str), "invariants");
+      pgp.AddLemma(str, "invariants");
 
       str = @"
         lemma lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView()
@@ -2548,7 +3057,7 @@ namespace Microsoft.Armada
           }
         }
       ";
-      pgp.AddDefaultClassDecl((Lemma)AH.ParseTopLevelDecl(pgp.prog, "lemma_RegionInvariantOnGlobalViewAlwaysImpliesRegionInvariantOnLocalView", str), "invariants");
+      pgp.AddLemma(str, "invariants");
     }
 
     ////////////////////////////////////////////////////////////////////////
@@ -2593,7 +3102,7 @@ namespace Microsoft.Armada
       pgp.AddLemma(str);
 
       str = @"
-        lemma lemma_ConvertTotalStatePreservesInit(ls:LState, hs:HState, lconfig:L.Armada_Config, hconfig:H.Armada_Config)
+        lemma lemma_ConvertTotalStatePreservesInit(ls: LState, hs: HState, lconfig: Armada_Config, hconfig: Armada_Config)
           requires L.Armada_InitConfig(ls, lconfig)
           requires hs == ConvertTotalState_LH(ls)
           requires hconfig == ConvertConfig_LH(lconfig)
@@ -2616,7 +3125,7 @@ namespace Microsoft.Armada
 
       str = @"
         lemma lemma_ApplyStoreBufferEntryUnaddressableCommutesWithConvert(
-          lglobals:L.Armada_Globals, lv:L.Armada_GlobalStaticVar, fields:seq<Armada_Field>, value:Armada_PrimitiveValue,
+          lglobals:L.Armada_Globals, lv:L.Armada_GlobalStaticVar, fields:seq<int>, value:Armada_PrimitiveValue,
           hv:H.Armada_GlobalStaticVar, hglobals1:H.Armada_Globals, hglobals2:H.Armada_Globals)
           requires hv == ConvertGlobalStaticVar_LH(lv)
           requires hglobals1 == ConvertGlobals_LH(L.Armada_ApplyTauUnaddressable(lglobals, lv, fields, value))
@@ -2693,7 +3202,6 @@ namespace Microsoft.Armada
         lemma lemma_GetThreadLocalViewAlwaysCommutesWithConvert()
           ensures forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle
                     {:trigger H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)}
-                    {:trigger ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid))}
                     :: tid in ls.threads ==>
                     ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid)) == H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)
         {
@@ -2995,22 +3503,23 @@ namespace Microsoft.Armada
       invariants.Add(inv);
     }
 
-    private void GenerateInductiveInv(ProofGenerationParams pgp)
+    private void GenerateInductiveInv(ProofGenerationParams pgp, bool onlyNonstoppingPaths)
     {
       var invNames = invariants.Select(x => x.Name).ToList();
 
+      var conjuncts = new List<string>();
+      if (onlyNonstoppingPaths) {
+        conjuncts.Add("s.s.stop_reason.Armada_NotStopped?");
+      }
+      conjuncts.AddRange(invariants.Select(inv => $"{inv.Name}(s)"));
+      
       string str = $@"
         predicate InductiveInv(s:LPlusState)
         {{
+          { AH.CombineStringsWithAnd(conjuncts) }
+        }}
       ";
-      foreach (var inv in invariants) {
-        str += $"    && {inv.Name}(s)\n";
-      }
-      if (!invariants.Any()) {
-        str += "    true\n";
-      }
-      str += "}\n";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
     }
 
     private void GenerateInitImpliesInductiveInvLemma(ProofGenerationParams pgp)
@@ -3021,390 +3530,554 @@ namespace Microsoft.Armada
           ensures  InductiveInv(s)
         {
       ";
-      foreach (var inv in invariants) {
-        str += $"    {inv.InitLemmaName}(s);\n";
-      }
+      str += String.Concat(invariants.Select(inv => $"{inv.InitLemmaName}(s);\n"));
       str += "  }\n";
       pgp.AddLemma(str, "invariants");
     }
 
-    private void GenerateNextMaintainsInductiveInvLemma(ProofGenerationParams pgp)
+    private void GenerateAtomicPathMaintainsInductiveInvLemma(ProofGenerationParams pgp)
     {
       string str = @"
-        lemma lemma_NextOneStepMaintainsInductiveInv(s:LPlusState, s':LPlusState, step:L.Armada_TraceEntry)
+        lemma lemma_AtomicPathMaintainsInductiveInv(s: LPlusState, s': LPlusState, path: LAtomic_Path, tid: Armada_ThreadHandle)
           requires InductiveInv(s)
-          requires LPlus_NextOneStep(s, s', step)
+          requires LAtomic_ValidPath(s, path, tid)
+          requires s' == LAtomic_GetStateAfterPath(s, path, tid)
           ensures  InductiveInv(s')
         {
       ";
-      foreach (var inv in invariants) {
-        str += $"    {inv.NextLemmaName}(s, s', step);\n";
-      }
-      str += "  }\n";
+      str += String.Concat(invariants.Select(inv => $"{inv.NextLemmaName}(s, s', path, tid);\n"));
+      str += "}\n";
       pgp.AddLemma(str, "invariants");
     }
 
-    private void GenerateInductiveInvInductiveLemma(ProofGenerationParams pgp)
+    public void GenerateInvariantProof(ProofGenerationParams pgp, bool onlyNonstoppingPaths = false)
     {
-      string str;
-
-      str = @"
-        lemma lemma_NextMultipleStepsMaintainsInductiveInv(s: LPlusState, s': LPlusState, steps: seq<L.Armada_TraceEntry>)
-          requires InductiveInv(s)
-          requires Armada_NextMultipleSteps(LPlus_GetSpecFunctions(), s, s', steps)
-          ensures InductiveInv(s')
-          decreases |steps|
-        {
-          if |steps| == 0 {
-            return;
-          }
-
-          var splus1 := LPlus_GetNextStateAlways(s, steps[0]);
-          lemma_NextOneStepMaintainsInductiveInv(s, splus1, steps[0]);
-          assert InductiveInv(splus1);
-          lemma_NextMultipleStepsMaintainsInductiveInv(splus1, s', steps[1..]);
-        }
-      ";
-      pgp.AddLemma(str, "invariants");
-
-      str = @"
-        lemma lemma_InductiveInvIsInvariant()
-          ensures  IsInvariantPredicateOfSpec(InductiveInv, GetLPlusSpec())
-        {
-          var spec := GetLPlusSpec();
-
-          forall s | s in spec.init
-            ensures InductiveInv(s);
-          {
-            lemma_InitImpliesInductiveInv(s);
-          }
-
-          forall s, s', step | InductiveInv(s) && ActionTuple(s, s', step) in spec.next
-            ensures InductiveInv(s')
-          {
-            lemma_NextMultipleStepsMaintainsInductiveInv(s, s', step.steps);
-          }
-
-          lemma_EstablishInvariantPredicatePure(InductiveInv, spec);
-        }
-      ";
-      pgp.AddLemma(str, "invariants");
-    }
-
-    public void GenerateInvariantProof(ProofGenerationParams pgp)
-    {
-      foreach (var inv in invariants) {
-        inv.GenerateProofs(pgp, invariants);
+      if (lAtomic == null) {
+        AH.PrintError(pgp.prog, "Internal error:  Must call GenerateProofHeader before calling GenerateInvariantProof");
       }
 
-      GenerateInductiveInv(pgp);
+      foreach (var inv in invariants) {
+        inv.GenerateProofs(pgp, invariants, lAtomic, onlyNonstoppingPaths);
+      }
+
+      GenerateInductiveInv(pgp, onlyNonstoppingPaths);
       GenerateInitImpliesInductiveInvLemma(pgp);
-      GenerateNextMaintainsInductiveInvLemma(pgp);
-      GenerateInductiveInvInductiveLemma(pgp);
+      GenerateAtomicPathMaintainsInductiveInvLemma(pgp);
     }
 
     ////////////////////////////////////////////////////////////////////////
-    /// One-step specs
+    /// Lemmas about path lifting
     ////////////////////////////////////////////////////////////////////////
 
-    public void GenerateLOneStepSpec(bool plus)
+    protected virtual void GenerateLiftAtomicPathLemmaForNormalPath(AtomicPath atomicPath,
+                                                                    string typeComparison = "HAtomic_GetPathType(hpath) == ty",
+                                                                    string extraSignatureLines = "",
+                                                                    string extraProof = "")
     {
-      string str;
-
-      var state = plus ? "LPlusState" : "LState";
-      var nextOneStep = plus ? "LPlus_NextOneStep" : "L.Armada_NextOneStep";
-      var getSpec = plus ? "GetLPlusSpec" : "GetLSpec";
-      var getState = plus ? ".s" : "";
-      var specFunctions = plus ? "LPlus_GetSpecFunctions()" : "L.Armada_GetSpecFunctions()";
-      var makeNext = plus ? "LPlus_GetNextStateAlways" : "L.Armada_GetNextStateAlways";
-
-      str = $@"
-        type LOneStepSpec = AnnotatedBehaviorSpec<{state}, L.Armada_TraceEntry>
-      ";
-      pgp.AddTopLevelDecl((TypeSynonymDecl)AH.ParseTopLevelDecl(pgp.prog, "LOneStepSpec", str), "specs");
-
-      str = $@"
-        predicate LOneStep_Next(s: {state}, s': {state}, step: L.Armada_TraceEntry)
-        {{
-          && {nextOneStep}(s, s', step)
-          && (forall tid :: tid in s{getState}.threads && L.Armada_IsNonyieldingPC(s{getState}.threads[tid].pc) ==> !step.Armada_TraceEntry_Tau? && step.tid == tid)
-        }}
-      ";
-      pgp.AddPredicate(str, "specs");
-
-      str = $@"
-        function GetLOneStepSpec() : LOneStepSpec
-        {{
-          AnnotatedBehaviorSpec(iset s | s in {getSpec}().init,
-                                (iset s, s', step | LOneStep_Next(s, s', step) :: ActionTuple(s, s', step)))
-        }}
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = $@"
-        lemma lemma_EstablishLOneStepNext(
-          tau: bool,
-          tid: Armada_ThreadHandle,
-          s: {state},
-          s': {state},
-          step: L.Armada_TraceEntry
-          )
-          requires forall any_tid :: any_tid in s{getState}.threads && (any_tid != tid || tau) ==> !L.Armada_IsNonyieldingPC(s{getState}.threads[any_tid].pc)
-          requires {nextOneStep}(s, s', step)
-          requires step.tid == tid
-          requires step.Armada_TraceEntry_Tau? == tau
-          ensures  LOneStep_Next(s, s', step)
-          ensures  forall any_tid :: any_tid in s'{getState}.threads && (any_tid != tid || tau) ==> !L.Armada_IsNonyieldingPC(s'{getState}.threads[any_tid].pc)
-        {{
-        }}
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = $@"
-        lemma lemma_UnrollBehavior(
-          lb:AnnotatedBehavior<{state}, LStep>,
-          pos:int
-          ) returns (
-          ub:AnnotatedBehavior<{state}, L.Armada_TraceEntry>
-          )
-          requires AnnotatedBehaviorSatisfiesSpec(lb, {getSpec}())
-          requires 0 <= pos < |lb.states|
-          ensures  AnnotatedBehaviorSatisfiesSpec(ub, GetLOneStepSpec())
-          ensures  last(ub.states) == lb.states[pos]
-          ensures  var s := last(ub.states){getState}; s.stop_reason.Armada_NotStopped? ==>
-                     (forall tid :: tid in s.threads ==> !L.Armada_IsNonyieldingPC(s.threads[tid].pc))
-          decreases pos
-        {{
-          if pos == 0 {{
-            ub := AnnotatedBehavior([lb.states[0]], []);
-            return;
-          }}
-
-          var prev_pos := pos-1;
-          ub := lemma_UnrollBehavior(lb, prev_pos);
-          var num_steps := 0;
-          var lstep := lb.trace[prev_pos];
-          var ls' := lb.states[pos];
-          assert ActionTuple(lb.states[prev_pos], lb.states[prev_pos+1], lb.trace[prev_pos]) in {getSpec}().next;
-
-          while num_steps < |lstep.steps|
-            invariant 0 <= num_steps <= |lstep.steps|
-            invariant AnnotatedBehaviorSatisfiesSpec(ub, GetLOneStepSpec())
-            invariant Armada_NextMultipleSteps({specFunctions}, last(ub.states), ls', lstep.steps[num_steps..])
-            invariant var s := last(ub.states){getState};
-                      s.stop_reason.Armada_NotStopped? ==>
-                      (forall tid :: tid in s.threads && (tid != lstep.tid || lstep.tau) ==> !L.Armada_IsNonyieldingPC(s.threads[tid].pc))
-          {{
-            var us := last(ub.states);
-            var ustep := lstep.steps[num_steps];
-            var us' := {makeNext}(us, ustep);
-            assert ustep in lstep.steps;
-            lemma_EstablishLOneStepNext(lstep.tau, lstep.tid, us, us', ustep);
-            ub := AnnotatedBehavior(ub.states + [us'], ub.trace + [ustep]);
-            num_steps := num_steps + 1;
-          }}
-        }}
-      ";
-      pgp.AddLemma(str, "specs");
-    }
-
-    public void GenerateHOneStepSpec()
-    {
-      string str;
-
-      str = @"
-        type HOneStepSpec = AnnotatedBehaviorSpec<HState, H.Armada_TraceEntry>
-      ";
-      pgp.AddTopLevelDecl((TypeSynonymDecl)AH.ParseTopLevelDecl(pgp.prog, "HOneStepSpec", str), "specs");
-
-      str = @"
-        predicate HOneStep_Next(s: HState, s': HState, step: H.Armada_TraceEntry)
-        {
-          && H.Armada_NextOneStep(s, s', step)
-          && (forall tid :: tid in s.threads && H.Armada_IsNonyieldingPC(s.threads[tid].pc) ==> !step.Armada_TraceEntry_Tau? && step.tid == tid)
-        }
-      ";
-      pgp.AddPredicate(str, "specs");
-
-      str = @"
-        function GetHOneStepSpec() : HOneStepSpec
-        {
-          AnnotatedBehaviorSpec(iset s | s in GetHSpec().init,
-                                (iset s, s', step | HOneStep_Next(s, s', step) :: ActionTuple(s, s', step)))
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = @"
-        lemma lemma_EstablishHOneStepNext(
-          tau: bool,
-          tid: Armada_ThreadHandle,
-          s: HState,
-          s': HState,
-          step: H.Armada_TraceEntry
-          )
-          requires forall any_tid :: any_tid in s.threads && (any_tid != tid || tau) ==> !H.Armada_IsNonyieldingPC(s.threads[any_tid].pc)
-          requires H.Armada_NextOneStep(s, s', step)
-          requires step.tid == tid
-          requires step.Armada_TraceEntry_Tau? == tau
-          ensures  HOneStep_Next(s, s', step)
-          ensures  forall any_tid :: any_tid in s'.threads && (any_tid != tid || tau) ==> !H.Armada_IsNonyieldingPC(s'.threads[any_tid].pc)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-    }
-
-    public void GenerateValidStepLemmas()
-    {
-      string str;
-
-      str = @"
-        lemma lemma_NextMultipleStepsImpliesValidStep_H(s: HState, s': HState, steps: seq<H.Armada_TraceEntry>, pos:int)
-          requires Armada_NextMultipleSteps(H.Armada_GetSpecFunctions(), s, s', steps)
-          requires 0 <= pos < |steps|
-          ensures  H.Armada_ValidStep(Armada_GetStateSequence(H.Armada_GetSpecFunctions(), s, steps)[pos], steps[pos]);
-          decreases pos
-        {
-          if pos > 0 {
-            var s_next := H.Armada_GetNextStateAlways(s, steps[0]);
-            lemma_NextMultipleStepsImpliesValidStep_H(s_next, s', steps[1..], pos-1);
-          }
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    ////////////////////////////////////////////////////////////////////////
-    /// Lemmas about step lifting
-    ////////////////////////////////////////////////////////////////////////
-
-    protected virtual void GenerateLiftStepLemmaForNormalNextRoutine(NextRoutine nextRoutine)
-    {
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lstep.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", nextRoutine.Formals.Select(f => $", hstep.{TranslateFormalNameUsingPcMap(f, nextRoutine.pc, pcMap)}"));
-
-      var hNextRoutineName = LiftNextRoutine(nextRoutine).NameSuffix;
-
+      string convertParams = stateDependentConvertStep ? "ls, lpath, tid" : "lpath";
+      var hAtomicPath = pathMap[atomicPath];
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
+      var prioritizationAttrs = Prioritizer.GetPrioritizationAttributesForLiftAtomicPath(atomicPath, hAtomicPath);
       var str = $@"
-        lemma lemma_LiftStep_{nextRoutineName}(ls:LPlusState, lstep:L.Armada_TraceEntry)
+        lemma {prioritizationAttrs} lemma_LiftAtomicPath_{atomicPath.Name}(ls: LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle)
           requires InductiveInv(ls)
-          requires LPlus_ValidStep(ls, lstep)
-          requires lstep.Armada_TraceEntry_{nextRoutineName}?
-          ensures  var ls' := LPlus_GetNextStateAlways(ls, lstep);
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          requires lpath.LAtomic_Path_{atomicPath.Name}?
+          { extraSignatureLines }
+          ensures  var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
                    var hs := ConvertTotalState_LPlusH(ls);
-                   var hstep := ConvertTraceEntry_LH(lstep);
-                   && hstep.tid == lstep.tid
-                   && hstep.Armada_TraceEntry_Tau? == lstep.Armada_TraceEntry_Tau?
-                   && H.Armada_ValidStep(hs, hstep)
-                   && H.Armada_GetNextStateAlways(hs, hstep) == ConvertTotalState_LPlusH(ls')
+                   var hpath := ConvertAtomicPath_LH({convertParams});
+                   var hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+                   var ty := LAtomic_GetPathType(lpath);
+                   && {typeComparison}
+                   && HAtomic_ValidPath(hs, hpath, tid)
+                   && hs' == ConvertTotalState_LPlusH(ls')
+                   && {atomicPath.OptionalNotForOK}ls'.s.stop_reason.Armada_NotStopped?
+                   && {atomicPath.OptionalNotForOK}hs'.stop_reason.Armada_NotStopped?
         {{
-          var locv: H.Armada_SharedMemory := H.Armada_GetThreadLocalView(ConvertTotalState_LPlusH(ls), lstep.tid);
-          var tid := lstep.tid;
-          var ls' := LPlus_GetNextStateAlways(ls, lstep);
+          { lpr.GetOpenValidPathInvocation(atomicPath) }
+          var locv: H.Armada_SharedMemory := H.Armada_GetThreadLocalView(ConvertTotalState_LPlusH(ls), tid);
+          var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
           var hs := ConvertTotalState_LPlusH(ls);
+          var hpath := ConvertAtomicPath_LH({convertParams});
           var hs' := ConvertTotalState_LPlusH(ls');
-          var hstep := ConvertTraceEntry_LH(lstep);
+
+          { hpr.GetOpenPathInvocation(hAtomicPath) }
 
           lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
           lemma_StoreBufferAppendAlwaysCommutesWithConvert();
-          assert H.Armada_ValidStep_{hNextRoutineName}(hs, tid{hstep_params});
-          if L.Armada_UndefinedBehaviorAvoidance_{nextRoutineName}(ls.s, tid{lstep_params}) {{
-            assert H.Armada_UndefinedBehaviorAvoidance_{hNextRoutineName}(hs, tid{hstep_params});
-            var alt_hs' := H.Armada_GetNextState_{hNextRoutineName}(hs, tid{hstep_params});
-            assert hs'.stop_reason == alt_hs'.stop_reason;
-            if tid in hs'.threads {{
-              assert hs'.threads[tid] == alt_hs'.threads[tid];
-            }}
-            assert hs'.threads == alt_hs'.threads;
-            assert hs'.mem == alt_hs'.mem;
-            assert hs' == alt_hs';
-            assert H.Armada_Next_{hNextRoutineName}(hs, hs', tid{hstep_params});
-          }}
-          else {{
-            assert !H.Armada_UndefinedBehaviorAvoidance_{hNextRoutineName}(hs, tid{hstep_params});
-          }}
-        }}
+          { extraProof }
+          ProofCustomizationGoesHere();
       ";
-      pgp.AddLemma(str);
+      if (atomicPath.Stopping) {
+        str += "assert !hs'.stop_reason.Armada_NotStopped?;\n";
+      }
+      else {
+        str += @"
+          assert ls'.s.stop_reason.Armada_NotStopped?;
+          var alt_hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+          assert hs'.stop_reason == alt_hs'.stop_reason;
+        ";
+        if (atomicPath.LastNextRoutine.nextType == NextType.TerminateThread) {
+          str += @"
+            assert tid !in hs'.threads;
+            assert tid !in alt_hs'.threads;
+          ";
+        }
+        else {
+          str += "assert hs'.threads[tid] == alt_hs'.threads[tid];\n";
+        }
+        foreach (var tup in atomicPath.NextRoutinesWithIndices) {
+          var nextRoutine = tup.Item1;
+          if (nextRoutine.nextType == NextType.CreateThread) {
+            var i = tup.Item2;
+            str += $@"
+              assert  hs'.threads[lsteps.step{i}.params_{nextRoutine.NameSuffix}.newtid] ==
+                      alt_hs'.threads[lsteps.step{i}.params_{nextRoutine.NameSuffix}.newtid];
+            ";
+          }
+        }
+        str += @"
+          forall other_tid
+            ensures other_tid !in hs'.threads ==> other_tid !in alt_hs'.threads
+            ensures other_tid in hs'.threads ==> other_tid in alt_hs'.threads && hs'.threads[other_tid] == alt_hs'.threads[other_tid]
+          {
+          }
+          assert hs'.threads == alt_hs'.threads;
+          assert hs'.mem == alt_hs'.mem;
+          assert hs' == alt_hs';
+        ";
+      }
+//      str += hpr.GetAssertValidPathInvocation(hAtomicPath);
+      str += "}\n";
+      pgp.AddLemma(str, "lift");
     }
 
-    protected virtual void GenerateLiftStepLemmaForTauNextRoutine(NextRoutine nextRoutine)
+    protected virtual void GenerateLiftAtomicPathLemmaForTauPath(AtomicPath atomicPath,
+                                                                 string typeComparison = "HAtomic_GetPathType(hpath) == ty",
+                                                                 string extraSignatureLines = "")
     {
-      var nextRoutineName = nextRoutine.NameSuffix;
-
-      var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", lstep.{f.GloballyUniqueVarName}"));
-      var hstep_params = String.Join("", nextRoutine.Formals.Select(f => $", hstep.{f.GloballyUniqueVarName}"));
-
+      string convertParams = stateDependentConvertStep ? "ls, lpath, tid" : "lpath";
+      var hAtomicPath = pathMap[atomicPath];
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var hpr = new PrefixedVarsPathPrinter(hAtomic);
       var str = $@"
-        lemma lemma_LiftStep_{nextRoutineName}(ls:LPlusState, lstep:L.Armada_TraceEntry)
+        lemma lemma_LiftAtomicPath_Tau(ls: LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle)
           requires InductiveInv(ls)
-          requires LPlus_ValidStep(ls, lstep)
-          requires lstep.Armada_TraceEntry_{nextRoutineName}?
-          ensures  var ls' := LPlus_GetNextStateAlways(ls, lstep);
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          requires lpath.LAtomic_Path_{atomicPath.Name}?
+          { extraSignatureLines }
+          ensures  var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
                    var hs := ConvertTotalState_LPlusH(ls);
-                   var hstep := ConvertTraceEntry_LH(lstep);
-                   && hstep.tid == lstep.tid
-                   && hstep.Armada_TraceEntry_Tau? == lstep.Armada_TraceEntry_Tau?
-                   && H.Armada_ValidStep(hs, hstep)
-                   && H.Armada_GetNextStateAlways(hs, hstep) == ConvertTotalState_LPlusH(ls')
+                   var hpath := ConvertAtomicPath_LH({convertParams});
+                   var hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+                   var ty := LAtomic_GetPathType(lpath);
+                   && {typeComparison}
+                   && HAtomic_ValidPath(hs, hpath, tid)
+                   && hs' == ConvertTotalState_LPlusH(ls')
+                   && ls'.s.stop_reason.Armada_NotStopped? == hs'.stop_reason.Armada_NotStopped?
         {{
-          var tid := lstep.tid;
-          var ls' := LPlus_GetNextStateAlways(ls, lstep);
+          { lpr.GetOpenValidPathInvocation(atomicPath) }
+          var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
           var hs := ConvertTotalState_LPlusH(ls);
+          var hpath := ConvertAtomicPath_LH({convertParams});
           var hs' := ConvertTotalState_LPlusH(ls');
-          var hstep := ConvertTraceEntry_LH(lstep);
 
           var lentry := ls.s.threads[tid].storeBuffer[0];
-          assert H.Armada_ValidStep_{nextRoutineName}(hs, tid{hstep_params});
-          assert H.Armada_UndefinedBehaviorAvoidance_{nextRoutineName}(hs, tid{hstep_params});
           var hentry := hs.threads[tid].storeBuffer[0];
           var lmem := ls.s.mem;
           var hmem1 := ConvertSharedMemory_LH(L.Armada_ApplyStoreBufferEntry(lmem, lentry));
           var hmem2 := H.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_LH(lmem), hentry);
+
           lemma_ApplyStoreBufferEntryCommutesWithConvert(lmem, lentry, hentry, hmem1, hmem2);
 
-          var alt_hs' := H.Armada_GetNextState_{nextRoutineName}(hs, tid{hstep_params});
+          { hpr.GetOpenPathInvocation(hAtomicPath) }
+
+          var alt_hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+          ProofCustomizationGoesHere();
+
           assert hs'.threads[tid] == alt_hs'.threads[tid];
           assert hs'.threads == alt_hs'.threads;
           assert hs' == alt_hs';
-          assert H.Armada_Next_{nextRoutineName}(hs, hs', tid{hstep_params});
+
+          /* { hpr.GetAssertValidPathInvocation(hAtomicPath) } */
+        }}
+      ";
+      pgp.AddLemma(str, "lift");
+    }
+
+    protected virtual void GenerateLiftAtomicPathLemmaForUnmappedPath(AtomicPath atomicPath, string extraSignatureLines)
+    {
+      var lpr = new PrefixedVarsPathPrinter(lAtomic);
+      var str = $@"
+        lemma lemma_LiftAtomicPath_{atomicPath.Name}(ls: LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle)
+          requires InductiveInv(ls)
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          requires lpath.LAtomic_Path_{atomicPath.Name}?
+          { extraSignatureLines }
+          ensures  false
+        {{
+          { lpr.GetOpenValidPathInvocation(atomicPath) }
+          var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
+
+          lemma_GetThreadLocalViewAlwaysCommutesWithConvert();
+          lemma_StoreBufferAppendAlwaysCommutesWithConvert();
+          ProofCustomizationGoesHere();
+        }}
+      ";
+      pgp.AddLemma(str, "lift");
+    }
+
+    protected virtual void GenerateLiftAtomicPathLemmas(string typeComparison = "HAtomic_GetPathType(hpath) == ty",
+                                                        string extraSignatureLines = "", string extraProof = "")
+    {
+      var finalCases = "";
+
+      foreach (var atomicPath in lAtomic.AtomicPaths) {
+        if (atomicPath.Tau) {
+          GenerateLiftAtomicPathLemmaForTauPath(atomicPath, typeComparison, extraSignatureLines);
+        }
+        else if (pathMap.ContainsKey(atomicPath) && pathMap[atomicPath] != null) {
+          GenerateLiftAtomicPathLemmaForNormalPath(atomicPath, typeComparison, extraSignatureLines, extraProof);
+        }
+        else {
+          GenerateLiftAtomicPathLemmaForUnmappedPath(atomicPath, extraSignatureLines);
+        }
+        finalCases += $"case LAtomic_Path_{atomicPath.Name}(_) => lemma_LiftAtomicPath_{atomicPath.Name}(ls, lpath, tid);\n";
+      }
+
+      string convertParams = stateDependentConvertStep ? "ls, lpath, tid" : "lpath";
+      string str = $@"
+        lemma lemma_LiftAtomicPath(ls: LPlusState, lpath: LAtomic_Path, tid: Armada_ThreadHandle)
+          requires InductiveInv(ls)
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          { extraSignatureLines }
+          ensures  var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
+                   var hs := ConvertTotalState_LPlusH(ls);
+                   var hpath := ConvertAtomicPath_LH({convertParams});
+                   var hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);
+                   var ty := LAtomic_GetPathType(lpath);
+                   && {typeComparison}
+                   && HAtomic_ValidPath(hs, hpath, tid)
+                   && hs' == ConvertTotalState_LPlusH(ls')
+                   && ls'.s.stop_reason.Armada_NotStopped? == hs'.stop_reason.Armada_NotStopped?
+        {{
+          match lpath {{
+            {finalCases}
+          }}
+        }}
+      ";
+      pgp.AddLemma(str, "lift");
+    }
+
+    protected virtual void GenerateLiftingRelation()
+    {
+      string str = @"
+        predicate LiftingRelation(ls:LPlusState, hs:HState)
+        {
+          hs == ConvertTotalState_LPlusH(ls)
+        }
+      ";
+      pgp.AddPredicate(str, "defs");
+    }
+
+    protected virtual void GenerateEstablishAtomicPathLiftableLemma()
+    {
+      var convertParams = stateDependentConvertStep ? "ls, lpath, tid" : "lpath";
+      string str = $@"
+        lemma lemma_EstablishAtomicPathLiftable(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          ls: LPlusState,
+          lpath: LAtomic_Path,
+          tid: Armada_ThreadHandle,
+          hs: HState
+          ) returns (
+          hpath: HAtomic_Path
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires InductiveInv(ls)
+          requires LiftingRelation(ls, hs)
+          requires LAtomic_ValidPath(ls, lpath, tid)
+          ensures  LiftAtomicPathSuccessful(lasf, hasf, InductiveInv, LiftingRelation, ls, lpath, tid, hs, hpath)
+        {{
+          var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
+          lemma_AtomicPathMaintainsInductiveInv(ls, ls', lpath, tid);
+          assert InductiveInv(ls');
+          lemma_LiftAtomicPath(ls, lpath, tid);
+          hpath := ConvertAtomicPath_LH({convertParams});
+          assert LiftAtomicPathSuccessful(lasf, hasf, InductiveInv, LiftingRelation, ls, lpath, tid, hs, hpath);
         }}
       ";
       pgp.AddLemma(str);
     }
 
-    protected virtual void GenerateLiftStepLemmas()
+    protected virtual void GenerateEstablishAtomicPathsLiftableLemma(bool skippable, bool introducible)
     {
-      var finalCases = "";
+      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/generic/LiftAtomicToAtomic.i.dfy");
+      pgp.MainProof.AddImport("LiftAtomicToAtomicModule");
 
-      foreach (var nextRoutine in pgp.symbolsLow.NextRoutines) {
-        if (nextRoutine.nextType == NextType.Tau) {
-          GenerateLiftStepLemmaForTauNextRoutine(nextRoutine);
+      string str = @"
+        lemma lemma_EstablishAtomicPathsLiftable(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          inv:LPlusState->bool,
+          relation:(LPlusState, HState)->bool
+      ";
+      if (introducible) {
+        str += ", progress_measure:(HState, LAtomic_Path, Armada_ThreadHandle)->(int, int)";
+      }
+      str += @"
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires inv == InductiveInv
+          requires relation == LiftingRelation
+      ";
+      if (introducible) {
+        str += @"
+          requires progress_measure == ProgressMeasure
+        ";
+      }
+      str += @"
+          ensures forall ls, lpath, hs, tid ::
+                    inv(ls) && relation(ls, hs) && lasf.path_valid(ls, lpath, tid)
+      ";
+      if (skippable) {
+        str += " && !AtomicPathSkippable(lasf, inv, relation, ls, lpath, tid, hs)";
+      }
+      str += @"
+                    ==> exists hpath :: LiftAtomicPathSuccessful(lasf, hasf, inv, relation, ls, lpath, tid, hs, hpath)
+      ";
+      if (introducible) {
+        str += @"
+                                        || AtomicPathIntroduced(lasf, hasf, relation, progress_measure, ls, lpath, tid, hs, hpath)
+        ";
+      }
+      str += @"
+        {
+          forall ls, lpath, hs, tid
+            | inv(ls) && relation(ls, hs) && lasf.path_valid(ls, lpath, tid)
+      ";
+      if (skippable) {
+        str += " && !AtomicPathSkippable(lasf, inv, relation, ls, lpath, tid, hs)";
+      }
+      str += @"
+            ensures exists hpath :: LiftAtomicPathSuccessful(lasf, hasf, inv, relation, ls, lpath, tid, hs, hpath)
+      ";
+      if (introducible) {
+        str += @"
+                                    || AtomicPathIntroduced(lasf, hasf, relation, progress_measure, ls, lpath, tid, hs, hpath)
+        ";
+      }
+      str += @"
+          {
+            var hpath := lemma_EstablishAtomicPathLiftable(lasf, hasf, ls, lpath, tid, hs);
+          }
+        }
+      ";
+      pgp.AddLemma(str);
+    }
+
+    protected virtual void GenerateEstablishInitRequirementsLemma()
+    {
+      string str = @"
+        lemma lemma_EstablishInitRequirements(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          inv:LPlusState->bool,
+          relation:(LPlusState, HState)->bool
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires inv == InductiveInv
+          requires relation == LiftingRelation
+          ensures  AtomicInitImpliesInv(lasf, inv)
+          ensures  forall ls :: lasf.init(ls) ==> exists hs :: hasf.init(hs) && relation(ls, hs)
+        {
+          forall ls | lasf.init(ls)
+            ensures inv(ls)
+            ensures exists hs :: hasf.init(hs) && relation(ls, hs)
+          {
+            lemma_InitImpliesInductiveInv(ls);
+            var hs := ConvertTotalState_LPlusH(ls);
+            var hconfig := ConvertConfig_LH(ls.config);
+            assert H.Armada_InitConfig(hs, hconfig);
+            assert hasf.init(hs) && relation(ls, hs);
+          }
+        }
+      ";
+      pgp.AddLemma(str);
+    }
+
+    protected virtual void GenerateEstablishStateOKRequirementLemma()
+    {
+      string str = @"
+        lemma lemma_EstablishStateOKRequirement(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          relation:(LPlusState, HState)->bool
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires relation == LiftingRelation
+          ensures  forall ls, hs :: relation(ls, hs) ==> lasf.state_ok(ls) == hasf.state_ok(hs)
+        {
+        }
+      ";
+      pgp.AddLemma(str);
+    }
+
+    protected virtual void GenerateEstablishRelationRequirementLemma()
+    {
+      string str = @"
+        lemma lemma_EstablishRelationRequirement(
+          lasf:AtomicSpecFunctions<LPlusState, LAtomic_Path, L.Armada_PC>,
+          hasf:AtomicSpecFunctions<HState, HAtomic_Path, H.Armada_PC>,
+          inv:LPlusState->bool,
+          relation:(LPlusState, HState)->bool,
+          refinement_relation:RefinementRelation<LPlusState, HState>
+          )
+          requires lasf == LAtomic_GetSpecFunctions()
+          requires hasf == HAtomic_GetSpecFunctions()
+          requires inv == InductiveInv
+          requires relation == LiftingRelation
+          requires refinement_relation == GetLPlusHRefinementRelation()
+          ensures  forall ls, hs :: inv(ls) && relation(ls, hs) ==> RefinementPair(ls, hs) in refinement_relation
+        {
+          forall ls, hs | inv(ls) && relation(ls, hs)
+            ensures RefinementPair(ls, hs) in refinement_relation
+          {
+          }
+        }
+      ";
+      pgp.AddLemma(str);
+    }
+
+    protected virtual void GenerateLiftLAtomicToHAtomicLemma(bool skippable, bool introducible)
+    {
+      string str = @"
+        lemma lemma_LiftLAtomicToHAtomic() returns (refinement_relation:RefinementRelation<LPlusState, H.Armada_TotalState>)
+          ensures SpecRefinesSpec(AtomicSpec(LAtomic_GetSpecFunctions()), AtomicSpec(HAtomic_GetSpecFunctions()), refinement_relation)
+          ensures refinement_relation == GetLPlusHRefinementRelation()
+        {
+          var lasf := LAtomic_GetSpecFunctions();
+          var hasf := HAtomic_GetSpecFunctions();
+          var inv := InductiveInv;
+          var relation := LiftingRelation;
+          refinement_relation := GetLPlusHRefinementRelation();
+      ";
+      if (introducible) {
+        str += @"
+          var progress_measure := ProgressMeasure;
+          lemma_EstablishAtomicPathsLiftable(lasf, hasf, inv, relation, progress_measure);
+        ";
+      }
+      else {
+        str += @"
+          lemma_EstablishAtomicPathsLiftable(lasf, hasf, inv, relation);
+        ";
+      }
+      str += @"
+          lemma_EstablishInitRequirements(lasf, hasf, inv, relation);
+          lemma_EstablishStateOKRequirement(lasf, hasf, relation);
+          lemma_EstablishRelationRequirement(lasf, hasf, inv, relation, refinement_relation);
+      ";
+      if (skippable) {
+        if (introducible) {
+          str += @"
+          lemma_LiftAtomicToAtomicGivenAtomicPathsLiftableGeneral(lasf, hasf, inv, relation, progress_measure, refinement_relation);
+          ";
         }
         else {
-          GenerateLiftStepLemmaForNormalNextRoutine(nextRoutine);
+          str += @"
+          lemma_LiftAtomicToAtomicGivenAtomicPathsSkippablyLiftable(lasf, hasf, inv, relation, refinement_relation);
+          ";
         }
-        var nextRoutineName = nextRoutine.NameSuffix;
-        var lstep_params = String.Join("", nextRoutine.Formals.Select(f => $", _"));
-        finalCases += $"case Armada_TraceEntry_{nextRoutineName}(_{lstep_params}) => lemma_LiftStep_{nextRoutineName}(ls, lstep);";
       }
+      else if (introducible) {
+        str += @"
+          lemma_LiftAtomicToAtomicGivenAtomicPathsIntroduciblyLiftable(lasf, hasf, inv, relation, progress_measure, refinement_relation);
+        ";
+      }
+      else {
+        str += @"
+          lemma_LiftAtomicToAtomicGivenAtomicPathsLiftable(lasf, hasf, inv, relation, refinement_relation);
+        ";
+      }
+      str += "}\n";
+      pgp.AddLemma(str);
+    }
 
-      string str = $@"
-        lemma lemma_LiftStep(ls:LPlusState, lstep:L.Armada_TraceEntry)
-          requires InductiveInv(ls)
-          requires LPlus_ValidStep(ls, lstep)
-          ensures  var ls' := LPlus_GetNextStateAlways(ls, lstep);
-                   var hs := ConvertTotalState_LPlusH(ls);
-                   var hstep := ConvertTraceEntry_LH(lstep);
-                   H.Armada_ValidStep(hs, hstep) && H.Armada_GetNextStateAlways(hs, hstep) == ConvertTotalState_LPlusH(ls')
+    protected void GenerateGenericAtomicPropertyLemmas()
+    {
+      string str;
+
+      str = $@"
+        lemma lemma_LAtomic_AtomicInitImpliesOK()
+          ensures AtomicInitImpliesOK(LAtomic_GetSpecFunctions())
         {{
-          match lstep {{
-            {finalCases}
+        }}
+      ";
+      pgp.AddLemma(str);
+
+      str = $@"
+        lemma lemma_LAtomic_AtomicInitImpliesInv()
+          ensures AtomicInitImpliesInv(LAtomic_GetSpecFunctions(), InductiveInv)
+        {{
+          forall s | LAtomic_GetSpecFunctions().init(s)
+            ensures InductiveInv(s)
+          {{
+            lemma_InitImpliesInductiveInv(s);
           }}
         }}
+      ";
+      pgp.AddLemma(str);
+
+      str = $@"
+        lemma lemma_LAtomic_AtomicPathPreservesInv()
+          ensures AtomicPathPreservesInv(LAtomic_GetSpecFunctions(), InductiveInv)
+        {{
+          var asf := LAtomic_GetSpecFunctions();
+          forall s, path, tid | InductiveInv(s) && asf.path_valid(s, path, tid)
+            ensures InductiveInv(asf.path_next(s, path, tid))
+          {{
+            var s' := asf.path_next(s, path, tid);
+            lemma_AtomicPathMaintainsInductiveInv(s, s', path, tid);
+          }}
+        }}
+      ";
+      pgp.AddLemma(str);
+    }
+
+    protected virtual void GenerateFinalProof()
+    {
+      pgp.MainProof.AddInclude(ArmadaOptions.O.ArmadaCommonDefsPath + "/Armada/strategies/refinement/RefinementConvolution.i.dfy");
+      pgp.MainProof.AddImport("RefinementConvolutionModule");
+
+      string str = @"
+        lemma lemma_ProveRefinement()
+          ensures SpecRefinesSpec(L.Armada_Spec(), H.Armada_Spec(), GetLHRefinementRelation())
+        {
+          var rr1 := lemma_LSpecRefinesLPlusSpec();
+          var rr2 := lemma_LiftToAtomic();
+          var rr3 := lemma_LiftLAtomicToHAtomic();
+          var rr4 := lemma_LiftFromAtomic();
+          lemma_SpecRefinesSpecQuadrupleConvolution(
+            L.Armada_Spec(),
+            Armada_SpecFunctionsToSpec(LPlus_GetSpecFunctions()),
+            AtomicSpec(LAtomic_GetSpecFunctions()),
+            AtomicSpec(HAtomic_GetSpecFunctions()),
+            H.Armada_Spec(),
+            rr1,
+            rr2,
+            rr3,
+            rr4,
+            GetLHRefinementRelation()
+            );
+        }
       ";
       pgp.AddLemma(str);
     }
@@ -3413,48 +4086,60 @@ namespace Microsoft.Armada
     /// PC functions
     ////////////////////////////////////////////////////////////////////////
 
-    protected virtual void GeneratePCFunctions_L()
+    protected virtual void GeneratePCFunctions(bool low)
     {
-      var methodNames = pgp.symbolsLow.AllMethods.AllMethodNames;
+      var c = low ? "L" : "H";
+      var symbols = low ? pgp.symbolsLow : pgp.symbolsHigh;
+
+      var methodNames = symbols.AllMethods.AllMethodNames;
 
       string str;
 
-      str = "datatype LMethodName = " + String.Join(" | ", methodNames.Select(x => $"LMethodName_{x}"));
+      str = $"datatype {c}MethodName = " + String.Join(" | ", methodNames.Select(x => $"{c}MethodName_{x}"));
       pgp.AddDatatype(str, "specs");
 
-      str = @"
-        function MethodToInstructionCount_L(m:LMethodName) : (v:int)
+      str = $@"
+        function MethodToInstructionCount_{c}(m:{c}MethodName) : (v:int)
           ensures v >= 0
-        {
+        {{
           match m
       ";
       foreach (var methodName in methodNames)
       {
-        var methodInfo = pgp.symbolsLow.AllMethods.LookupMethod(methodName);
-        str += $"    case LMethodName_{methodName} => {methodInfo.NumPCs}\n";
+        var methodInfo = symbols.AllMethods.LookupMethod(methodName);
+        str += $"    case {c}MethodName_{methodName} => {methodInfo.NumPCs}\n";
       }
       str += "  }\n";
       pgp.AddFunction(str, "specs");
 
       var pcs = new List<ArmadaPC>();
-      pgp.symbolsLow.AllMethods.AppendAllPCs(pcs);
+      symbols.AllMethods.AppendAllPCs(pcs);
+      var maxInstructionCount = pcs.Select(pc => pc.instructionCount).Max();
 
-      str = @"
-        function PCToMethod_L(pc:L.Armada_PC) : LMethodName
-        {
+      str = $@"
+        function PCToMethod_{c}(pc:{c}.Armada_PC) : {c}MethodName
+        {{
           match pc
       ";
       foreach (var pc in pcs)
       {
-        str += $"    case {pc} => LMethodName_{pc.methodName}\n";
+        str += $"    case {pc} => {c}MethodName_{pc.methodName}\n";
       }
       str += "  }\n";
       pgp.AddFunction(str, "specs");
 
-      str = @"
-        function PCToInstructionCount_L(pc:L.Armada_PC) : (v:int)
-          ensures v >= 0
-        {
+      str = $@"
+        function MaxPCInstructionCount_{c}() : int
+        {{
+          { maxInstructionCount }
+        }}
+      ";
+      pgp.AddFunction(str, "specs");
+
+      str = $@"
+        function PCToInstructionCount_{c}(pc:{c}.Armada_PC) : (v:int)
+          ensures 0 <= v <= MaxPCInstructionCount_{c}()
+        {{
           match pc
       ";
       foreach (var pc in pcs)
@@ -3464,24 +4149,34 @@ namespace Microsoft.Armada
       str += "  }\n";
       pgp.AddFunction(str, "specs");
 
-      str = @"
-        lemma lemma_PCInstructionCountLessThanMethodInstructionCount_L(pc:L.Armada_PC)
-          ensures 0 <= PCToInstructionCount_L(pc) < MethodToInstructionCount_L(PCToMethod_L(pc))
-        {
-        }
+      str = $@"
+        lemma lemma_PCInstructionCountLessThanMethodInstructionCount_{c}(pc:{c}.Armada_PC)
+          ensures 0 <= PCToInstructionCount_{c}(pc) < MethodToInstructionCount_{c}(PCToMethod_{c}(pc))
+        {{
+        }}
       ";
       pgp.AddLemma(str, "specs");
 
-      str = @"
-        predicate StackMatchesMethod_L(frame:L.Armada_StackFrame, m:LMethodName)
-        {
+      str = $@"
+        predicate StackMatchesMethod_{c}(frame:{c}.Armada_StackFrame, m:{c}MethodName)
+        {{
           match m
       ";
       foreach (var methodName in methodNames) {
-        str += $"    case LMethodName_{methodName} => frame.Armada_StackFrame_{methodName}?\n";
+        str += $"    case {c}MethodName_{methodName} => frame.Armada_StackFrame_{methodName}?\n";
       }
       str += "  }\n";
       pgp.AddPredicate(str, "specs");
+    }
+
+    protected virtual void GeneratePCFunctions_L()
+    {
+      GeneratePCFunctions(true);
+    }
+
+    protected virtual void GeneratePCFunctions_H()
+    {
+      GeneratePCFunctions(false);
     }
 
     protected void AddStackMatchesMethodInvariant()
@@ -3496,166 +4191,11 @@ namespace Microsoft.Armada
             StackMatchesMethod_L(s.s.threads[tid].top, PCToMethod_L(pc))
         }
       ";
-      pgp.AddPredicate(str, "invariants");
+      pgp.AddPredicate(str, "defs");
 
       var inv = new InternalInvariantInfo("StackMatchesMethodInv", "StackMatchesMethodInv", new List<string>());
       invariants.Add(inv);
     }
-
-    ////////////////////////////////////////////////////////////////////////
-    /// Lemmas about NextStep
-    ////////////////////////////////////////////////////////////////////////
-
-    protected void GenerateLemmasAboutGetNextState()
-    {
-      string str;
-
-      str = @"
-        lemma lemma_NextOneStepImpliesGetNextState_L(ls: LState, ls': LState, lstep: L.Armada_TraceEntry)
-          requires L.Armada_NextOneStep(ls, ls', lstep)
-          ensures  ls' == L.Armada_GetNextStateAlways(ls, lstep)
-          ensures  L.Armada_ValidStep(ls, lstep)
-        {
-        }
-      ";
-      pgp.AddLemma(str);
-
-      str = @"
-        lemma lemma_NextOneStepImpliesGetNextState_H(hs: HState, hs': HState, hstep: H.Armada_TraceEntry)
-          requires H.Armada_NextOneStep(hs, hs', hstep)
-          ensures  hs' == H.Armada_GetNextStateAlways(hs, hstep)
-          ensures  H.Armada_ValidStep(hs, hstep)
-        {
-        }
-      ";
-      pgp.AddLemma(str);
-    }
-
-    ////////////////////////////////////////////////////////////////////////
-    /// GenericArmadaSpec
-    ////////////////////////////////////////////////////////////////////////
-
-    protected void CreateGenericArmadaSpec_L()
-    {
-      string str;
-
-      str = @"
-        lemma lemma_InitImpliesYielding_L(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures InitImpliesYielding(asf)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_InitImpliesOK_L(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures InitImpliesOK(asf)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_OneStepRequiresOK_L(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures OneStepRequiresOK(asf)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_SteppingThreadHasPC_L(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures SteppingThreadHasPC(asf)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_TauLeavesPCUnchanged_L(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures TauLeavesPCUnchanged(asf)
-        {
-        }
-      ";
-      pgp.AddLemma(str, "specs");
-
-      str = @"
-        lemma lemma_InductiveInvInvariantInLPlusSpec(
-          asf:Armada_SpecFunctions<LPlusState, L.Armada_TraceEntry, L.Armada_PC>
-          )
-          requires asf == LPlus_GetSpecFunctions()
-          ensures InitImpliesInv(asf, InductiveInv)
-          ensures OneStepPreservesInv(asf, InductiveInv)
-        {
-          forall s | asf.init(s)
-            ensures InductiveInv(s)
-          {
-            lemma_InitImpliesInductiveInv(s);
-          }
-
-          forall s, step | InductiveInv(s) && LPlus_ValidStep(s, step)
-            ensures InductiveInv(LPlus_GetNextStateAlways(s, step))
-          {
-            var s' := LPlus_GetNextStateAlways(s, step);
-            lemma_NextOneStepMaintainsInductiveInv(s, s', step);
-          }
-        }
-      ";
-      pgp.AddLemma(str, "invariants");
-    }
-
-    protected void CreateGenericArmadaSpec_H()
-    {
-      string str;
-
-      str = @"
-        function StepToThread_H(step:H.Armada_TraceEntry) : Armada_ThreadHandle
-        {
-          step.tid
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-
-      str = @"
-        predicate IsStepTau_H(step:H.Armada_TraceEntry)
-        {
-          step.Armada_TraceEntry_Tau?
-        }
-      ";
-      pgp.AddPredicate(str, "specs");
-
-      str = @"
-        predicate IsStateOK_H(s:HState)
-        {
-          s.stop_reason.Armada_NotStopped?
-        }
-      ";
-      pgp.AddPredicate(str, "specs");
-
-      str = @"
-        function GetThreadPC_H(s:HState, tid:Armada_ThreadHandle) : Option<H.Armada_PC>
-        {
-          if tid in s.threads then Some(s.threads[tid].pc) else None
-        }
-      ";
-      pgp.AddFunction(str, "specs");
-    }
-
   }
   
 }

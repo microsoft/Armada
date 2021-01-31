@@ -1,3 +1,4 @@
+# -*- python -*-
 import re
 import sys
 import os, os.path
@@ -12,7 +13,7 @@ Import("*")
 
 env = Environment()
 if sys.platform != 'win32' and sys.platform != 'cygwin':
-  env['MONO'] = 'mono'
+  env['DOTNET'] = 'dotnet'
 
 # Retrieve tool-specific command overrides passed in by the user
 # We don't really need --DAFNYPATH, but it's OK if the user
@@ -24,18 +25,10 @@ AddOption('--DAFNYPATH',
   action='store',
   help='Specify the path to Dafny tool binaries (not needed)')
 
-armada_exe = os.path.abspath('Binaries/Armada.exe')
-
-####################################################################
-#
-#   Describe the files needed for Mono
-#
-####################################################################
-
-if sys.platform == 'win32' or sys.platform == 'cygwin':
-  env['CSC'] = env.Detect('csc')
-else: # mono
-  env['CSC'] = env.Detect('dmcs')
+if sys.platform == "win32" or sys.platform == "cygwin":
+  armada_exe = os.path.abspath('Binaries/Armada.exe')
+else:
+  armada_exe = os.path.abspath('Binaries/Armada.dll')
 
 ####################################################################
 #
@@ -52,7 +45,7 @@ def generate_armada_actions(source, target, env, for_signature):
     armada_path = "../" * (num_slashes-1) + ".."
   else:
     armada_path = "."
-  return "cd %s; $MONO %s /armadaPath:%s %s" % (source_dir, armada_exe, armada_path, source_name)
+  return "cd %s; $DOTNET %s /armadaPath:%s %s" % (source_dir, armada_exe, armada_path, source_name)
 
 def add_armada(env):
   armada = Builder(generator=generate_armada_actions)
@@ -113,10 +106,10 @@ run_directory("combining", [
 ])
 
 run_directory("starweakening", [
-    ("test-1", ["SharedStructs", "A", "B", "AB"], ["AB"]),
-    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
-    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
-    ("test-4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
 ])
 
 run_directory("varhiding", [
@@ -124,50 +117,89 @@ run_directory("varhiding", [
     ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
     ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
     ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+    ("test5", ["SharedStructs5", "I", "J", "IJ"], ["IJ"]),
 ])
 
 run_directory("varintro", [
     ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
     ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
     ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
-    ("test4", ["SharedStructs4", "X", "Y", "XY"], ["XY"]),
+    ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
 ])
 
 run_directory("weakening", [
-    ("test-1", ["SharedStructs", "A", "B", "AB"], ["AB"]),
-    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
-    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+])
+
+run_directory("counter", [
+    ("SharedStructs", ["SharedStructs"], []),
+    ("A", ["A"], []),
+    ("B", ["B"], []),
+    ("C", ["C"], []),
+    ("D", ["D"], []),
+    ("E", ["E"], []),
+    ("F", ["F"], []),
+    ("G", ["G"], []),
+    ("I", ["I"], []),
+    ("J", ["J"], []),
+    ("AB", ["AB"], ["AB"]),
+    ("BC", ["BC"], ["BC"]),
+    ("CD", ["CD"], ["CD"]),
+    ("DE", ["DE"], ["DE"]),
+    ("EF", ["EF"], ["EF"]),
+    ("FG", ["FG"], ["FG"]),
+    ("GI", ["GI"], ["GI"]),
+    ("IJ", ["IJ"], ["IJ"]),
+])
+
+run_directory("bitvector", [
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
 ])
 
 run_directory("regions", [
-    ("test-1", ["SharedStructs1", "A", "B", "AB"], ["AB"]),
-    ("test-2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
-    ("test-3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
-    ("test-4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
-    ("pointers", ["SharedStructs", "level0", "level1"], ["level01proof"])
+    ("test", ["SharedStructs", "A", "B", "AB"], ["AB"]),
+    ("test2", ["SharedStructs2", "C", "D", "CD"], ["CD"]),
+    ("test3", ["SharedStructs3", "E", "F", "EF"], ["EF"]),
+    ("test4", ["SharedStructs4", "G", "H", "GH"], ["GH"]),
+    ("pointers", ["SharedStructsPointers", "level0", "level1", "level01proof"], ["level01proof"]),
 ])
 
 run_directory("armada-parser", [
-    ("test1", ["test1structs", "test1"], []),
-    ("test2", ["test2structs", "test2"], []),
-    ("test3", ["test3structs", "test3"], []),
-    ("test4", ["test4structs", "test4"], []),
-    ("test5", ["test5structs", "test5"], []),
-    ("test6", ["test6structs", "test6"], []),
+    ("test", ["SharedStructs", "A"], []),
+    ("test2", ["SharedStructs2", "B"], []),
+    ("test3", ["SharedStructs3", "C"], []),
+    ("test4", ["SharedStructs4", "D"], []),
+    ("test5", ["SharedStructs5", "E"], []),
+    ("test6", ["SharedStructs6", "F"], []),
 ])
 
 run_directory("mcslock", [
-    ("lock-array", ["MCSLock", "pseudo_impl", "L1", "L2", "L3", "L4", "L5", "L6"],
+    ("lock-array", ["MCSLock", "pseudo_impl", "L1", "L2", "L3", "L4", "L5", "L6", "pseudo_impl_L1", "L1_L2", "L2_L3", "L3_L4", "L4_L5", "L5_L6"],
      ["pseudo_impl_L1", "L1_L2", "L2_L3", "L3_L4", "L4_L5", "L5_L6"])
 ])
 
 run_directory("qbss", [
-    ("queue", ["SharedStructs", "QueueBSSNoTSO", "QueueBSSNoTSO_AbstractQueueIntroduced",
-               "QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue",
-               "QueueBSSNoTSO_WithAbstractQueue", "QueueBSSNoTSO_AbstractLogs",
-               "QueueBSSNoTSO_AbstractLogsStarweakened", "QueueBSSNoTSO_HiddenEnqLocals",
-               "QueueBSSNoTSO_HiddenEnqDeqLocals", "QueueBSSNoTSO_HiddenImpl"],
-     ["NoTSOIntroduceAbstractQueue", "CombineEnqueueAtomicAbstractQueue",
-      "CombineDequeueAtomicAbstractQueue", "NoTSOUseAbstractQueueForLog",
-      "NoTSOStarWeaken", "HideEnqueueLocals", "HideDequeueLocals", "HideGlobal"])
+    ("queue", [
+        "QueueBSSNoTSO",
+        "QueueBSSNoTSO_AbstractQueueIntroduced",
+        "QueueBSSNoTSO_AbstractQueueIntroduced_CombinedEnqueue",
+        "QueueBSSNoTSO_WithAbstractQueue",
+        "QueueBSSNoTSO_AbstractLogs",
+        "QueueBSSNoTSO_AbstractLogsStarweakened",
+        "QueueBSSNoTSO_HiddenEnqLocals",
+        "QueueBSSNoTSO_HiddenEnqDeqLocals",
+        "QueueBSSNoTSO_HiddenImpl",
+    ],
+    [
+        "NoTSOIntroduceAbstractQueue",
+        "CombineEnqueueAtomicAbstractQueue",
+        "CombineDequeueAtomicAbstractQueue",
+        "NoTSOUseAbstractQueueForLog",
+        "NoTSOStarWeaken",
+        "HideEnqueueLocals",
+        "HideDequeueLocals",
+        "HideGlobal",
+    ])
 ])

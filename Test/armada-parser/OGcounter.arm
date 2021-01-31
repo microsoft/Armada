@@ -3,9 +3,6 @@ include "../../Armada/ArmadaCommonDefinitions.dfy"
 include "../../Armada/util/option.s.dfy"
 
 level CounterLayer1 {
-	import opened ArmadaCommonDefinitions
-	import opened util_option_s
-
 	var x: int32;
 	var acquired: Option<uint64>;
 	// Error: Invalid type for static variable {f.Name}
@@ -48,8 +45,6 @@ level CounterLayer1 {
 
 // Hide the acquired/lock?
 level CounterLayer2 {
-	import opened ArmadaCommonDefinitions
-
 	var x: int32;
 	//var acquired: int32;
 
@@ -89,7 +84,6 @@ level CounterLayer2 {
 
 // Remove the thread?
 level CounterLayer3 {
-	import opened ArmadaCommonDefinitions
 	var x: int32;
 	method main()
 	{
@@ -104,7 +98,6 @@ level CounterLayer3 {
 
 // Hide the x?
 level CounterLayer4 {
-	import opened ArmadaCommonDefinitions
 	method main()
 	{
 		print(2);
@@ -113,7 +106,6 @@ level CounterLayer4 {
 
 
 /*proof level1to2refinement {
-    import opened ArmadaCommonDefinitions
 	refinement CounterLayer1 CounterLayer2
     // reduction 
 	//var_hiding acquired
@@ -121,7 +113,6 @@ level CounterLayer4 {
 }*/
 /*
 proof level3to4refinement {
-    import opened ArmadaCommonDefinitions
 	refinement CounterLayer3 CounterLayer4
     var_hiding x
 }*/

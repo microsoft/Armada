@@ -5,89 +5,64 @@ structs SharedStructs2 {
 }
 
 level C using SharedStructs2 {
-    noaddr var x:int32 := 0;
-    noaddr var y:int32 := 0;
-    noaddr var z:int32 := 0;
+  ghost var x:int := 0;
+  ghost var y:int := 0;
 
-    method main()
+  method Test()
+  {
+    y := y + 1;
+  }
+
+  method main()
+  {
+    y := 4;
+    Test();
+
+    x := 3;
+label myloop:
+    while x < 10
     {
-        x ::= 3;
-        label comparey4:
-        if y < 4 {
-            label assigny4:
-            y ::= 4;
-        }
-        label comparez:
-        if (z < 7) {
-            label assignz7:
-            z ::= 7;
-        }
-        else {
-            label assignz9:
-            z ::= 9;
-        }
-        label whilestart:
-        while z < 100
-        {
-            label comparey18:
-            if (y > 18) {
-                label y18continue:
-                continue;
-            }
-            label incx:
-            x ::= x + 1;
-            label inczfirst:
-            z ::= z + 1;
-            label comparex34:
-            if x > 34 {
-                label inczsecond:
-                z ::= z + 1;
-                label nowbreak:
-                break;
-            }
-            label zplus2:
-            z := z + 2;
-        }
-        label assignx4:
-        x ::= 4;
+      x := x + 1;
     }
+    y := 6;
+  }
 }
 
 level D using SharedStructs2 {
-    noaddr var x:int32 := 0;
-    noaddr var y:int32 := 0;
-    noaddr var z:int32 := 0;
+  ghost var x:int := 0;
+  ghost var y:int := 0;
 
-    method main()
+  method Test()
+  {
+    y := y + 1;
+  }
+
+  method main()
+  {
+    y := 4;
+    Test();
+
+    assume y == 5;
+    x := 3;
+label myloop:
+    while x < 10
     {
-        x ::= 3;
-        if y < 4 {
-            y ::= 4;
-        }
-        if (z < 7) {
-            z ::= 7;
-        }
-        else {
-            z ::= 9;
-        }
-        while z < 100
-        {
-            if (y > 18) {
-                continue;
-            }
-            x ::= x + 1;
-            z ::= z + 1;
-            if x > 34 {
-                z ::= z + 1;
-                break;
-            }
-            z := z + 2;
-        }
-        x ::= 4;
+      x := x + 1;
     }
+
+    assume x == 10;
+    y := 6;
+  }
 }
 
 proof CD {
-    refinement C D
-    assume_intro
+  refinement C D
+  assume_intro
+
+  chl_invariant only_one_thread "forall tid :: tid in threads ==> tid == tid_init"
+  chl_yield_pred {:excludeAll} ghosts_unchanged "ghosts' == ghosts"
+  chl_precondition Test y_is_four "ghosts.y == 4"
+  chl_postcondition Test y_is_five "ghosts'.y == 5"
+  chl_loop_modifies main_myloop x_between_3_and_10 "3 <= ghosts'.x <= 10"
+
 }
