@@ -197,7 +197,7 @@ namespace Microsoft.Armada {
       }
       else {
         t = ConcretizeType(t);
-        if (AH.IsPrimitiveType(t)) {
+        if (IsPrimitiveType(t)) {
           return $"{h}.values[{p}].n_{t}";
         }
         else if (t is UserDefinedType ut) {
@@ -220,7 +220,7 @@ namespace Microsoft.Armada {
       }
       else {
         var t = ConcretizeType(valueType);
-        if (AH.IsPrimitiveType(t)) {
+        if (IsPrimitiveType(t)) {
           return $"{{ ({p}, Armada_PrimitiveValue_{t}({value})) }}";
         }
         else if (t is UserDefinedType ut) {
@@ -234,8 +234,8 @@ namespace Microsoft.Armada {
 
     public static string GetInvocationOfUpdatePointer(string h, string p, string value, Type valueType)
     {
-      if (AH.IsPrimitiveType(valueType)) {
-        var t = AH.ConcretizeType(valueType);
+      if (IsPrimitiveType(valueType)) {
+        var t = ConcretizeType(valueType);
         return $"{h}.(values := Armada_UpdateHeapValuesWithPrimitiveValue({h}.values, {p}, Armada_PrimitiveValue_{t}({value})))";
       }
       else {
@@ -267,6 +267,62 @@ namespace Microsoft.Armada {
       }
       var ut = (UserDefinedType)type;
       return GetPrimitiveTypeNames().Contains(ut.Name);
+    }
+
+    public static bool IsValidHeapType(Type type, ArmadaStructs structs)
+    {
+      if (type is PointerType pt) {
+        return IsValidHeapType(pt.Arg, structs);
+      }
+      else if (IsPrimitiveType(type)) {
+        return true;
+      }
+      else if (type is UserDefinedType ut) {
+        return structs.DoesStructExist(ut.Name); // Datatypes aren't allowed on the heap, only structs
+      }
+      else if (type is SizedArrayType at) {
+        return IsValidHeapType(at.Range, structs);
+      }
+      else {
+        return false;
+      }
+    }
+
+    public static bool IsValidType(Type type, ArmadaStructs structs)
+    {
+      if (type is PointerType pt) {
+        return IsValidHeapType(pt.Arg, structs); // Pointer types are only valid if they point to heap types
+      }
+      else if (IsPrimitiveType(type)) {
+        return true;
+      }
+      else if (type is UserDefinedType ut) {
+        return true;
+      }
+      else if (type is SizedArrayType at) {
+        return IsValidType(at.Range, structs);
+      }
+      else if (type is SeqType seqt) {
+        return IsValidType(seqt.Arg, structs);
+      }
+      else if (type is SetType sett) {
+        return IsValidType(sett.Arg, structs);
+      }
+      else if (type is MultiSetType mst) {
+        return IsValidType(mst.Arg, structs);
+      }
+      else if (type is MapType mt) {
+        return IsValidType(mt.Domain, structs) && IsValidType(mt.Range, structs);
+      }
+      else if (type is ArrowType arrowt) {
+        return arrowt.Args.All(subtype => IsValidType(subtype, structs)) && IsValidType(arrowt.Result, structs);
+      }
+      else if (type == null) {
+        return false;
+      }
+      else {
+        return true;
+      }
     }
 
     public static string GetPrimitiveValueField(Type type)

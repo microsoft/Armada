@@ -48,25 +48,11 @@ namespace Microsoft.Armada {
       return name + "Local";
     }
 
-    public bool CheckForConcreteStructType(Type t, ArmadaStructs structs)
-    {
-      if (AH.IsPrimitiveType(t)) {
-        return true;
-      }
-      if (t is UserDefinedType u) {
-        return structs.DoesStructExist(u.Name);
-      }
-      if (t is SizedArrayType sat) {
-        return CheckForConcreteStructType(sat.Range, structs);
-      }
-      return false;
-    }
-
     public bool CheckForConcreteStructDefinition(ArmadaStruct s, ArmadaStructs structs)
     {
       foreach (var fieldName in s.FieldNames) {
         var t = s.GetFieldType(fieldName);
-        if (!CheckForConcreteStructType(t, structs)) {
+        if (!AH.IsValidHeapType(t, structs)) {
           AH.PrintError(prog, $"Struct {s.Name} has a field {fieldName} of type {t}, which is neither a primitive type nor a struct type.");
           return false;
         }
@@ -1043,6 +1029,13 @@ namespace Microsoft.Armada {
         }}
       ");
 
+      foreach (var fieldName in fieldNames) {
+        var fieldType = s.GetFieldType(fieldName);
+        if (!AH.IsValidHeapType(fieldType, structs)) {
+          AH.PrintError(prog, $"Struct {s.Name} contains field {fieldName} of type {fieldType}, which isn't a valid heap type");
+        }
+      }
+
       var fields = String.Join(", ", Enumerable.Range(0, numFields).Select(fieldIndex =>
                      AH.GetInvocationOfDereferencePointer("h", $"h.tree[p].children[{fieldIndex}]", fieldTypes[fieldIndex])));
       declCollector.AddItem($@"
@@ -1403,12 +1396,12 @@ namespace Microsoft.Armada {
       var symbols = new ArmadaSymbolTable(prog, m.ArmadaStructs);
       var classes = new Dictionary<string, ClassDecl>();
       var membersToRemove = new List<TopLevelDecl>();
-      symbols.AddClass(m.ArmadaStructs.DefaultClass, true /* from structs module */);
+      symbols.AddClass(m.ArmadaStructs.DefaultClass, true /* from structs module */, m.ArmadaStructs);
       foreach (var d in m.TopLevelDecls) {
         if (d is ClassDecl) {
           var c = (ClassDecl)d;
           if (c.IsDefaultClass) {
-            symbols.AddClass(c, false /* not from structs module */);
+            symbols.AddClass(c, false /* not from structs module */, m.ArmadaStructs);
           }
         }
       }

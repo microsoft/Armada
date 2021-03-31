@@ -432,7 +432,7 @@ namespace Microsoft.Armada {
       variableNames = new List<string>();
     }
 
-    public void AddClassInfo(Program prog, ClassDecl c)
+    public void AddClassInfo(Program prog, ClassDecl c, ArmadaStructs structs)
     {
       if (!c.IsDefaultClass) {
         AH.PrintError(prog, "Internal error:  ArmadaGlobalVariableSymbolTable.AddClassInfo called on non-default class");
@@ -443,14 +443,24 @@ namespace Microsoft.Armada {
           var f = (Field)member;
           variableNames.Add(f.Name);
           ArmadaVariable av = null;
-          if (f.IsGhost) {
+          if (!AH.IsValidType(f.Type, structs)) {
+            AH.PrintError(prog, $"Global variable {f.Name} has invalid type {f.Type}");
+            av = null;
+          }
+          else if (f.IsGhost) {
             av = new GlobalGhostArmadaVariable(f.Name, f.Type, f.InitialValue);
           }
           else if (f.IsNoAddr) {
             av = new GlobalUnaddressableArmadaVariable(f.Name, f.Type, f.InitialValue);
           }
           else {
-            av = new GlobalAddressableArmadaVariable(f.Name, f.Type, f.InitialValue);
+            if (AH.IsValidHeapType(f.Type, structs)) {
+              av = new GlobalAddressableArmadaVariable(f.Name, f.Type, f.InitialValue);
+            }
+            else {
+              AH.PrintError(prog, $"Global variable {f.Name} has type {f.Type} that can't be used on the heap. Consider making it noaddr or ghost.");
+              av = null;
+            }
           }
           table.Add(f.Name, av);
         }
@@ -563,22 +573,23 @@ namespace Microsoft.Armada {
       methodTable = new Dictionary<string, ArmadaSingleMethodSymbolTable>();
     }
 
-    private void ExtractLocalVariables(Program prog, Statement stmt, string methodName, ArmadaSingleMethodSymbolTable smst)
+    private void ExtractLocalVariables(Program prog, Statement stmt, string methodName, ArmadaSingleMethodSymbolTable smst,
+                                       ArmadaStructs structs)
     {
       if (stmt is BlockStmt) {
         var s = (BlockStmt)stmt;
         foreach (var substmt in s.Body) {
-          ExtractLocalVariables(prog, substmt, methodName, smst);
+          ExtractLocalVariables(prog, substmt, methodName, smst, structs);
         }
       }
       else if (stmt is IfStmt) {
         var s = (IfStmt)stmt;
-        ExtractLocalVariables(prog, s.Thn, methodName, smst);
-        ExtractLocalVariables(prog, s.Els, methodName, smst);
+        ExtractLocalVariables(prog, s.Thn, methodName, smst, structs);
+        ExtractLocalVariables(prog, s.Els, methodName, smst, structs);
       }
       else if (stmt is WhileStmt) {
         var s = (WhileStmt)stmt;
-        ExtractLocalVariables(prog, s.Body, methodName, smst);
+        ExtractLocalVariables(prog, s.Body, methodName, smst, structs);
       }
       else if (stmt is VarDeclStmt) {
         var s = (VarDeclStmt)stmt;
@@ -629,11 +640,20 @@ namespace Microsoft.Armada {
             }
           }
 
+          if (!AH.IsValidType(local.OptionalType, structs)) {
+            AH.PrintError(prog, stmt.Tok, $"Local variable {local.Name} in method {methodName} has invalid type {local.OptionalType}");
+            continue;
+          }
+
           ArmadaVariable v;
           if (local.IsNoAddr) {
             v = new MethodStackFrameUnaddressableLocalArmadaVariable(local.Name, local.OptionalType, initialValue, ArmadaVarType.Local, methodName);
           }
           else {
+            if (!AH.IsValidHeapType(local.OptionalType, structs)) {
+              AH.PrintError(prog, stmt.Tok, $"Local variable {local.Name} in method {methodName} has type {local.OptionalType} that can't be used on the heap. Consider using noaddr instead.");
+              continue;
+            }
             v = new MethodStackFrameAddressableLocalArmadaVariable(local.Name, local.OptionalType, initialValue,
                                                                    s.BypassStoreBuffers, methodName);
           }
@@ -662,7 +682,8 @@ namespace Microsoft.Armada {
       }
     }
 
-    public void AddMethodInfo(Program prog, ClassDecl c, ArmadaSymbolTable symbols, Method meth, bool fromStructsModule)
+    public void AddMethodInfo(Program prog, ClassDecl c, ArmadaSymbolTable symbols, Method meth, bool fromStructsModule,
+                              ArmadaStructs structs)
     {
       bool isExternal = (meth.Body is null || Attributes.Contains(meth.Attributes, "extern"));
 
@@ -678,7 +699,7 @@ namespace Microsoft.Armada {
         smst.AddVariable(prog, v);
       }
 
-      ExtractLocalVariables(prog, meth.Body, meth.Name, smst);
+      ExtractLocalVariables(prog, meth.Body, meth.Name, smst, structs);
 
       if (isExternal && meth.Reads.Expressions != null) {
         var reads = meth.Reads.Expressions;
@@ -855,17 +876,17 @@ namespace Microsoft.Armada {
       universalStepConstraints = new Dictionary<string, UniversalStepConstraintInfo>();
     }
 
-    public void AddClass(ClassDecl c, bool fromStructsModule)
+    public void AddClass(ClassDecl c, bool fromStructsModule, ArmadaStructs structs)
     {
       if (c.IsDefaultClass)
       {
         defaultClass = c;
-        globalVariables.AddClassInfo(prog, defaultClass);
+        globalVariables.AddClassInfo(prog, defaultClass, structs);
         foreach (MemberDecl member in defaultClass.Members)
         {
           if (member is Method) {
             var meth = (Method)member;
-            localVariables.AddMethodInfo(prog, defaultClass, this, meth, fromStructsModule);
+            localVariables.AddMethodInfo(prog, defaultClass, this, meth, fromStructsModule, structs);
           }
           else if (member is Function) {
             functionNames.Add(member.Name);
