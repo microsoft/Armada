@@ -25,6 +25,7 @@ AddOption('--DAFNYPATH',
   action='store',
   help='Specify the path to Dafny tool binaries (not needed)')
 
+armada_dll = os.path.abspath('Binaries/Armada.dll')
 if sys.platform == "win32" or sys.platform == "cygwin":
   armada_exe = os.path.abspath('Binaries/Armada.exe')
 else:
@@ -69,7 +70,7 @@ def run_directory(dir_name, entries):
   for (armada_name, dafny_files, proof_dirs) in entries:
     source = "Test/%s/%s.arm" % (dir_name, armada_name)
     targets = ["Test/%s/%s.dfy" % (dir_name, dafny_file) for dafny_file in dafny_files]
-    cmd = env.Armada(targets, [source, armada_exe])
+    cmd = env.Armada(targets, [source, armada_exe, armada_dll])
     for proof_dir in proof_dirs:
       subdir = "Test/%s/%s" % (dir_name, proof_dir)
       if os.path.isdir(subdir):
