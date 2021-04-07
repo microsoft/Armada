@@ -1874,6 +1874,11 @@ namespace Microsoft.Armada {
         return compatible;
       }
 
+      if (Attributes.Contains(methodInfo.method.Attributes, "atomic")) {
+        AH.PrintError(prog, methodInfo.method.tok, $"Method {methodInfo.method.Name} is labeled :atomic, but atomic methods aren't allowed in a concrete layer.");
+        compatible = false;
+      }
+
       // check unsupported statements
       // [somehow, TSO-bypassing, atomic, yield, assert, assume]
       int memoryAccess;
