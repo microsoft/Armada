@@ -1680,6 +1680,11 @@ namespace Microsoft.Armada
 
     public override void GenerateNextRoutines()
     {
+      if (stmt.rhss != null && stmt.rhss.Count > 0) {
+        AH.PrintError(parse.prog, stmt.Tok, "Armada doesn't allow arguments in return statements. You should just assign to output variables and then use a return statement with no arguments.");
+        return;
+      }
+      
       // We model a return statement as a goto with the target being the method's end PC.
 
       var targetPC = parse.methodInfo.ReturnPC;
