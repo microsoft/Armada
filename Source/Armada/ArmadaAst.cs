@@ -2413,8 +2413,12 @@ namespace Microsoft.Armada {
     [Pure]
     public override string TypeName(ModuleDefinition context, bool parseAble) {
       Contract.Ensures(Contract.Result<string>() != null);
-      var targs = HasTypeArg() ? this.TypeArgsToString(context, parseAble) : "";
-      return CollectionTypeName + targs;
+      if (sz is LiteralExpr le) {
+        return $"{Range.TypeName(context, parseAble)}[{le.Value}]";
+      }
+      else {
+        return $"{Range.TypeName(context, parseAble)}[]";
+      }
     }
 
     private bool SizeEquals(SizedArrayType that) {
@@ -2451,7 +2455,7 @@ namespace Microsoft.Armada {
     public PointerType(Type arg) : base(arg) {
     }
     public override string TypeName(ModuleDefinition context, bool parseAble) {
-      return "Armada_Pointer";
+      return $"ptr<{Arg.TypeName(context, parseAble)}>";
     }
     public override string CollectionTypeName { get { return "ptr"; } }
     public override bool Equals(Type that) {
