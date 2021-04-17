@@ -1858,12 +1858,6 @@ namespace Microsoft.Armada {
                                                   ArmadaSingleMethodSymbolTable methodSymbols) {
       bool compatible = true;
 
-      // checking return arguments
-      if (methodInfo.method.Outs.Count > 1) {
-        AH.PrintWarning(prog, methodInfo.method.tok, $"Method {methodInfo.method.Name} has more than one return value");
-        compatible = false;
-      }
-
       // check unsupported types
       // all types to check: [Ins, Outs, {variables in body}]
       IEnumerable<Type> allTypes = methodSymbols.AllVariables.Select(v => v.ty);
