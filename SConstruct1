@@ -175,6 +175,7 @@ run_directory("armada-parser", [
     ("test4", ["SharedStructs4", "D"], []),
     ("test5", ["SharedStructs5", "E"], []),
     ("test6", ["SharedStructs6", "F"], []),
+    ("test7", ["SharedStructs7", "G"], [])
 ])
 
 run_directory("mcslock", [

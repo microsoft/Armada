@@ -1,0 +1,25 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs SharedStructs7 {}
+
+level {:concrete} G using SharedStructs7 {
+  var a: int64;
+  var b: int64;
+
+  var p: ptr<int64>;
+
+  method foobar(v: int64) returns (x: int64) {
+    x := 0;
+  }
+
+  method main() {
+    noaddr var c: int64;
+
+    *(&a + 4) := 0;
+    c := *(&a);
+    p := &a;
+
+    a, c := 1, 1;
+    a := foobar(b);
+  }
+}

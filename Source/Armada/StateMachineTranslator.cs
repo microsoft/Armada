@@ -1513,6 +1513,14 @@ namespace Microsoft.Armada {
       return true;
     }
 
+    // The memory access counting logic closely follows that in
+    // ResolutionContext.cs, which summaries as follows,
+    // 1. +1 whenever GetLValue in ResolveAsLValue
+    // 2. +1 whenver GetRValue in ResolveAsRValue
+    // 3. +1 whenver UnaryOp.Dereference in ResolveAsRValue
+    // 4. Resolution of LValue caused by UnaryOp.AddressOf doesn't count as a
+    // memory reference. This is dealt after the recursion.
+
     private bool CheckExprCompilationCompatible(ArmadaSymbolTable symbols, string methodName, Expression expr, ref int memoryAccess) {
       // shallow check only
       // [integer, boolean, variable, uop, binop, address of, dereference, field read, subscript of array,
@@ -1549,6 +1557,9 @@ namespace Microsoft.Armada {
           }
           if (unary.Op == UnaryOpExpr.Opcode.Dereference) {
             ++ memoryAccess;
+          } else if (unary.Op == UnaryOpExpr.Opcode.AddressOf) {
+            // it's guaranteed at least one memory is counted already
+            -- memoryAccess;
           }
           break;
         case BinaryExpr binary:
@@ -1574,9 +1585,18 @@ namespace Microsoft.Armada {
           break;
         case ApplySuffix AS:
           /* I don't know why this is not filled with resolution results... */
+          /* since call and return are separated into two next routines,
+             memory accesses caused by evaluation of arguments should not be counted
+             together with LHSes */
+
           compatible = CheckExprCompilationCompatible(symbols, methodName, AS.Lhs, ref memoryAccess) && compatible;
+          int argMemoryAccess = 0;
           foreach (var subExpr in AS.Args) {
-            compatible = CheckExprCompilationCompatible(symbols, methodName, subExpr, ref memoryAccess) && compatible;
+            compatible = CheckExprCompilationCompatible(symbols, methodName, subExpr, ref argMemoryAccess) && compatible;
+          }
+          if (argMemoryAccess > 1) {
+            AH.PrintWarning(prog, AS.tok, "More than one memory access in the expression");
+            compatible = false;
           }
           break;
         case SuffixExpr _:
