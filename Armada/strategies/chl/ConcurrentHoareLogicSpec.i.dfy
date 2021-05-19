@@ -866,7 +866,7 @@ module ConcurrentHoareLogicSpecModule {
           cr.requires_clauses(forked_proc, s', forked_actor)
   }
 
-  predicate StraightlineBehaviorsSatisfyPostconditionsConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyPostconditionsConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -883,7 +883,7 @@ module ConcurrentHoareLogicSpecModule {
     && phase.StraightlinePhaseYielded?
   }
 
-  predicate StraightlineBehaviorsSatisfyPostconditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyPostconditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
     )
   {
@@ -892,7 +892,7 @@ module ConcurrentHoareLogicSpecModule {
       ==> cr.ensures_clauses(proc, sb.states[0].state, last(sb.states).state, actor)
   }
 
-  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntryConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -910,7 +910,7 @@ module ConcurrentHoareLogicSpecModule {
     && phase.StraightlinePhaseYielded?
   }
 
-  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnEntry<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
     )
   {
@@ -921,7 +921,7 @@ module ConcurrentHoareLogicSpecModule {
           cr.loop_modifies_clauses(pc, s, s, actor)
   }
 
-  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBackConditions<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -939,7 +939,7 @@ module ConcurrentHoareLogicSpecModule {
     && phase.StraightlinePhaseYielded?
   }
 
-  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack<State(!new), Actor(!new), Step(!new), PC, Proc(!new)>(
+  predicate StraightlineBehaviorsSatisfyLoopModifiesClausesOnJumpBack<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
     )
   {
@@ -990,7 +990,7 @@ module ConcurrentHoareLogicSpecModule {
   // Request validity
   /////////////////////////////////////////////////////
 
-  predicate IsValidConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>(
+  predicate IsValidConcurrentHoareLogicRequest<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>
     )
   {

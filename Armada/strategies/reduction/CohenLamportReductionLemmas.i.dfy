@@ -19,7 +19,7 @@ module CohenLamportReductionLemmasModule {
   import opened CohenLamportReductionSpecModule
   import opened util_collections_seqs_i
 
-  lemma lemma_InstantiateLeftMoversBeforeCrash<State, Actor, Step>(
+  lemma lemma_InstantiateLeftMoversBeforeCrash<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     initial_state:State,
     post_crash_state:State,
@@ -72,7 +72,7 @@ module CohenLamportReductionLemmasModule {
     assert BehaviorRefinesBehaviorUsingRefinementMap([initial_state, post_crash_state], states, clrr.relation, lm_map);
   }
 
-  lemma lemma_CreateLeftMoversBeforeCrash<State, Actor, Step>(
+  lemma lemma_CreateLeftMoversBeforeCrash<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -180,7 +180,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_BringLeftMoversToStartByCreatingLeftMoversBeforeCrash<State, Actor, Step>(
+  lemma lemma_BringLeftMoversToStartByCreatingLeftMoversBeforeCrash<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -244,7 +244,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 
-  lemma lemma_BringLeftMoversToStartAfterCreatingLeftMovers<State, Actor, Step>(
+  lemma lemma_BringLeftMoversToStartAfterCreatingLeftMovers<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -302,7 +302,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 
-  lemma lemma_BringLeftMoversToStartByCreatingLeftMoversAtEnd<State, Actor, Step>(
+  lemma lemma_BringLeftMoversToStartByCreatingLeftMoversAtEnd<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -385,7 +385,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 
-  lemma lemma_BringLeftMoversToStartByCreatingLeftMovers<State, Actor, Step>(
+  lemma lemma_BringLeftMoversToStartByCreatingLeftMovers<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -422,7 +422,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_BringLeftMoverLeftOneCaseCrashing<State, Actor, Step>(
+  lemma lemma_BringLeftMoverLeftOneCaseCrashing<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -491,7 +491,7 @@ module CohenLamportReductionLemmasModule {
     assert BehaviorRefinesBehavior(lstates, hstates, clrr.relation);
   }
 
-  lemma lemma_BringLeftMoverLeftOneCaseNotCrashing<State, Actor, Step>(
+  lemma lemma_BringLeftMoverLeftOneCaseNotCrashing<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -576,7 +576,7 @@ module CohenLamportReductionLemmasModule {
     lemma_TakePlusDropIsSeq(lstates, 3);
   }
 
-  lemma lemma_BringLeftMoverLeftOne<State, Actor, Step>(
+  lemma lemma_BringLeftMoverLeftOne<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -624,7 +624,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
    
-  lemma lemma_BringLeftMoverToStart<State, Actor, Step>(
+  lemma lemma_BringLeftMoverToStart<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -727,7 +727,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 
-  lemma lemma_FindFirstLeftMover<State, Actor, Step>(
+  lemma lemma_FindFirstLeftMover<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     states:seq<State>,
     trace:seq<Step>,
@@ -756,7 +756,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_BringLeftMoversToStart<State, Actor, Step>(
+  lemma lemma_BringLeftMoversToStart<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -811,7 +811,7 @@ module CohenLamportReductionLemmasModule {
     end_pos := m2end_pos + 1;
   }
 
-  lemma lemma_EarlierStateInBehaviorAlsoNotCrashed<State, Actor, Step>(
+  lemma lemma_EarlierStateInBehaviorAlsoNotCrashed<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     pos2:int,
@@ -830,7 +830,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_EstablishBehaviorRefinesBehaviorAfterMovingRightMoverRight<State, Actor, Step>(
+  lemma lemma_EstablishBehaviorRefinesBehaviorAfterMovingRightMoverRight<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor,
@@ -911,7 +911,7 @@ module CohenLamportReductionLemmasModule {
     assert hb.states == lb.states[..right_mover_pos] + hb2 + lb.states[right_mover_pos+3..];
   }
 
-  lemma lemma_EstablishBehaviorSatisfiesSpecAfterMovingRightMoverRight<State, Actor, Step>(
+  lemma lemma_EstablishBehaviorSatisfiesSpecAfterMovingRightMoverRight<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor,
@@ -963,7 +963,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_EstablishStillNoNonmoversAfterMovingRightMoverRight<State, Actor, Step>(
+  lemma lemma_EstablishStillNoNonmoversAfterMovingRightMoverRight<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor,
@@ -1015,7 +1015,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_MoveRightMoverRight<State, Actor, Step>(
+  lemma lemma_MoveRightMoverRight<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor,
@@ -1067,7 +1067,7 @@ module CohenLamportReductionLemmasModule {
       clrr, lb, step_actor, right_mover_pos, new_middle_state, other_step', right_mover', hb);
   }
 
-  lemma lemma_MoveRightMoverToEnd<State, Actor, Step>(
+  lemma lemma_MoveRightMoverToEnd<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor,
@@ -1104,7 +1104,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lb.states, mb.states, hb.states, clrr.relation);
   }
 
-  lemma lemma_BringRightMoversToEnd<State, Actor, Step>(
+  lemma lemma_BringRightMoversToEnd<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     step_actor:Actor
@@ -1183,7 +1183,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_FindLastRightMover<State, Actor, Step>(
+  lemma lemma_FindLastRightMover<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     b:AnnotatedBehavior<State, Step>,
     step_actor:Actor
@@ -1217,7 +1217,7 @@ module CohenLamportReductionLemmasModule {
     pos := pos - 1;
   }
 
-  lemma lemma_StateNextSeqCausesPhaseMatch<State, Actor, Step>(
+  lemma lemma_StateNextSeqCausesPhaseMatch<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     states:seq<State>,
     trace:seq<Step>,
@@ -1239,7 +1239,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_ShowBehaviorRefinementAfterLifting<State, Actor, Step>(
+  lemma lemma_ShowBehaviorRefinementAfterLifting<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     start_pos:int,
@@ -1317,7 +1317,7 @@ module CohenLamportReductionLemmasModule {
     lemma_SeqEqualsThreeWayConcatentation(hb.states, start_pos, start_pos+2);
   }
 
-  lemma lemma_ShowBehaviorSatisfiesSpecAfterLifting<State, Actor, Step>(
+  lemma lemma_ShowBehaviorSatisfiesSpecAfterLifting<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     start_pos:int,
@@ -1365,7 +1365,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_LiftActionSequence<State, Actor, Step>(
+  lemma lemma_LiftActionSequence<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     states:seq<State>,
     trace:seq<Step>,
@@ -1381,7 +1381,7 @@ module CohenLamportReductionLemmasModule {
     hstep :| ActionTuple(states[0], last(states), hstep) in clrr.spec.next && clrr.idmap(hstep) == actor;
   }
 
-  lemma lemma_RemoveNonmoverAtPos<State, Actor, Step>(
+  lemma lemma_RemoveNonmoverAtPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     nonmover_pos:int,
@@ -1444,7 +1444,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_BringMoversCloseToNonmoverAtPos<State, Actor, Step>(
+  lemma lemma_BringMoversCloseToNonmoverAtPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     nonmover_pos:int,
@@ -1541,7 +1541,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_RemoveAnyNonmoverAtPos<State, Actor, Step>(
+  lemma lemma_RemoveAnyNonmoverAtPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     nonmover_pos:int
@@ -1572,7 +1572,7 @@ module CohenLamportReductionLemmasModule {
     hb, pos_past_nonmovers := lemma_RemoveNonmoverAtPos(clrr, lb, nonmover_pos, step_actor);
   }
 
-  lemma lemma_RemoveAllNonmoversFromPos<State, Actor, Step>(
+  lemma lemma_RemoveAllNonmoversFromPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     nonmover_pos:int
@@ -1599,7 +1599,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  predicate IsNonmoverStep<State, Actor, Step>(
+  predicate IsNonmoverStep<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     s:State,
     s':State,
@@ -1611,7 +1611,7 @@ module CohenLamportReductionLemmasModule {
     || (clrr.phase1(s, actor) && clrr.crashed(s'))
   }
 
-  predicate IsNonmoverPos<State, Actor, Step>(
+  predicate IsNonmoverPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     states:seq<State>,
     trace:seq<Step>,
@@ -1622,7 +1622,7 @@ module CohenLamportReductionLemmasModule {
     IsNonmoverStep(clrr, states[pos], states[pos+1], clrr.idmap(trace[pos]))
   }
 
-  lemma lemma_RemoveAllNonmovers<State, Actor, Step>(
+  lemma lemma_RemoveAllNonmovers<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>
     ) returns (
@@ -1637,7 +1637,7 @@ module CohenLamportReductionLemmasModule {
     hb := lemma_RemoveAllNonmoversFromPos(clrr, lb, 0);
   }
 
-  lemma lemma_RemoveRightMoverFromPosCaseBeforeCrash<State, Actor, Step>(
+  lemma lemma_RemoveRightMoverFromPosCaseBeforeCrash<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -1745,7 +1745,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_RemoveRightMoverFromPosCaseAtEnd<State, Actor, Step>(
+  lemma lemma_RemoveRightMoverFromPosCaseAtEnd<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -1818,7 +1818,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_EstablishBehaviorRefinesBehaviorAfterMovingRightMoverForRemoval<State, Actor, Step>(
+  lemma lemma_EstablishBehaviorRefinesBehaviorAfterMovingRightMoverForRemoval<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -1900,7 +1900,7 @@ module CohenLamportReductionLemmasModule {
     assert hstates == lstates[..right_mover_pos] + hb2 + lstates[right_mover_pos+3..];
   }
 
-  lemma lemma_EstablishBehaviorSatisfiesSpecAfterMovingRightMoverForRemoval<State, Actor, Step>(
+  lemma lemma_EstablishBehaviorSatisfiesSpecAfterMovingRightMoverForRemoval<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -1953,7 +1953,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_EstablishStillNoNonmoversAfterMovingRightMoverForRemoval<State, Actor, Step>(
+  lemma lemma_EstablishStillNoNonmoversAfterMovingRightMoverForRemoval<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -2049,7 +2049,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_MoveRightMoverRightForRemoval<State, Actor, Step>(
+  lemma lemma_MoveRightMoverRightForRemoval<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -2116,7 +2116,7 @@ module CohenLamportReductionLemmasModule {
       clrr, lstates, ltrace, step_actor, right_mover_pos, new_middle_state, other_step', right_mover', hstates, htrace);
   }
 
-  lemma lemma_RemoveRightMoverFromPos<State, Actor, Step>(
+  lemma lemma_RemoveRightMoverFromPos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lstates:seq<State>,
     ltrace:seq<Step>,
@@ -2168,7 +2168,7 @@ module CohenLamportReductionLemmasModule {
     lemma_RefinementConvolutionTransitive(lstates, mstates, hstates, clrr.relation);
   }
 
-  lemma lemma_NoNonmoversMeansNoPhase2<State, Actor, Step>(
+  lemma lemma_NoNonmoversMeansNoPhase2<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -2189,7 +2189,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_RemoveAllRightMoversAtOrBeforePos<State, Actor, Step>(
+  lemma lemma_RemoveAllRightMoversAtOrBeforePos<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>,
     right_mover_pos:int
@@ -2285,7 +2285,7 @@ module CohenLamportReductionLemmasModule {
     }
   }
 
-  lemma lemma_RemoveAllRightMovers<State, Actor, Step>(
+  lemma lemma_RemoveAllRightMovers<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>
     ) returns (

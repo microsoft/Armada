@@ -274,4 +274,11 @@ function intsetmax(s:set<int>):int
         if x > y then x else y
 }
 
+lemma lemma_EmptySetCantHaveMember<T>(x:T, s:set<T>)
+    requires x in s
+    requires |s| == 0 || s == {}
+    ensures  false
+{
+}
+
 } 

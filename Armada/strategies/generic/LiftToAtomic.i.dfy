@@ -128,7 +128,7 @@ module LiftToAtomicModule
       ==> exists hpath :: SequencesCompressibleConclusions(hasf, s, s', tid, hpath)
   }
 
-  predicate RequirementsForLiftingToAtomic<State, OneStep, Path, PC>(
+  predicate RequirementsForLiftingToAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool
@@ -266,7 +266,7 @@ module LiftToAtomicModule
     }
   }
 
-  lemma lemma_LiftMultistepToAtomicGivenYRRRs<State, OneStep, Path, PC>(
+  lemma lemma_LiftMultistepToAtomicGivenYRRRs<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool,
@@ -338,7 +338,7 @@ module LiftToAtomicModule
                                                    pos_mid + 1, pos_mid + 1, yr, rrs + [rr], state_after_yr, s_next, s_next);
   }
 
-  lemma lemma_LiftMultistepToAtomicGivenInitialSteps<State, OneStep, Path, PC>(
+  lemma lemma_LiftMultistepToAtomicGivenInitialSteps<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool,
@@ -395,7 +395,7 @@ module LiftToAtomicModule
                                                    pos + 1, pos + 1, yr, [], s_next, s_next, s_next);
   }
 
-  lemma lemma_LiftMultistepToAtomicRegular<State, OneStep, Path, PC>(
+  lemma lemma_LiftMultistepToAtomicRegular<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool,
@@ -418,7 +418,7 @@ module LiftToAtomicModule
     entry := lemma_LiftMultistepToAtomicGivenInitialSteps(lasf, hasf, is_recurrent_pc, s, s', steps, tid, 0, s);
   }
 
-  lemma lemma_LiftMultistepToAtomic<State, OneStep, Path, PC>(
+  lemma lemma_LiftMultistepToAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool,
@@ -450,7 +450,7 @@ module LiftToAtomicModule
     }
   }
 
-  lemma lemma_LiftToAtomic<State, OneStep, Path, PC>(
+  lemma lemma_LiftToAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool,
@@ -472,7 +472,7 @@ module LiftToAtomicModule
     }
   }
 
-  lemma lemma_SpecRefinesAtomicSpec<State, OneStep, Path, PC>(
+  lemma lemma_SpecRefinesAtomicSpec<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<State, OneStep, PC>,
     hasf: AtomicSpecFunctions<State, Path, PC>,
     is_recurrent_pc: PC->bool

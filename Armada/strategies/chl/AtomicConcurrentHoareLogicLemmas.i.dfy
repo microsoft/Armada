@@ -30,7 +30,7 @@ module AtomicConcurrentHoareLogicLemmasModule {
   import opened ConcurrentHoareLogicModule
   import opened AtomicConcurrentHoareLogicSpecModule
 
-  function ExtractInv<LState, LPath, LPC, LProc, HState, HPath, HPC>(
+  function ExtractInv<LState(!new), LPath(!new), LPC(!new), LProc(!new), HState(!new), HPath(!new), HPC(!new)>(
     ar:AtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>
     ) : LState->bool
   {
@@ -44,7 +44,7 @@ module AtomicConcurrentHoareLogicLemmasModule {
     (ls, hs) => hs == ar.lstate_to_hstate(ls)
   }
 
-  lemma lemma_EstablishInitRequirements<LState, LPath, LPC, LProc, HState, HPath, HPC>(
+  lemma lemma_EstablishInitRequirements<LState(!new), LPath(!new), LPC(!new), LProc(!new), HState(!new), HPath(!new), HPC(!new)>(
     ar:AtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>,
     inv:LState->bool,
     relation:(LState, HState)->bool
@@ -65,7 +65,7 @@ module AtomicConcurrentHoareLogicLemmasModule {
     }
   }
 
-  lemma lemma_EstablishAtomicPathsLiftable<LState, LPath, LPC, LProc, HState, HPath, HPC>(
+  lemma lemma_EstablishAtomicPathsLiftable<LState(!new), LPath(!new), LPC(!new), LProc(!new), HState(!new), HPath(!new), HPC(!new)>(
     ar:AtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>,
     inv:LState->bool,
     relation:(LState, HState)->bool

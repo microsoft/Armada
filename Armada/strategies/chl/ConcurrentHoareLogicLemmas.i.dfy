@@ -70,7 +70,7 @@ module ConcurrentHoareLogicLemmasModule {
     positions:seq<int>
     )
 
-  predicate IsCallStep<State, Actor, Step, PC, Proc>(
+  predicate IsCallStep<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     actor:Actor,
     step:Step
@@ -83,7 +83,7 @@ module ConcurrentHoareLogicLemmasModule {
     && (effect.CHLStepEffectCall? || effect.CHLStepEffectReturnThenCall?)
   }
 
-  predicate IsForkStep<State, Actor, Step, PC, Proc>(
+  predicate IsForkStep<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     actor:Actor,
     s:State
@@ -92,7 +92,7 @@ module ConcurrentHoareLogicLemmasModule {
     cr.get_actor_pc_stack(s, actor).None?
   }
 
-  predicate StraightlineOverlayValid<State, Actor, Step, PC, Proc>(
+  predicate StraightlineOverlayValid<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     overlay:StraightlineOverlay<State, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
@@ -114,7 +114,7 @@ module ConcurrentHoareLogicLemmasModule {
          case HowStartedFork => 0 < pos <= |b.trace| && IsForkStep(cr, actor, b.states[pos-1]))
   }
 
-  predicate StraightlineOverlayLeadsToPos<State, Actor, Step, PC, Proc>(
+  predicate StraightlineOverlayLeadsToPos<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     overlay:StraightlineOverlay<State, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
@@ -131,7 +131,7 @@ module ConcurrentHoareLogicLemmasModule {
   // Lemmas about straightline behaviors
   ///////////////////////////////////////////
 
-  predicate ActorInProc<State, Actor, Step, PC, Proc>(
+  predicate ActorInProc<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     s:State,
     actor:Actor,
@@ -143,7 +143,7 @@ module ConcurrentHoareLogicLemmasModule {
       cr.pc_to_proc(pc) == proc
   }
 
-  lemma lemma_StraightlineBehaviorSatisfiesGlobalInvariant<State, Actor, Step, PC, Proc>(
+  lemma lemma_StraightlineBehaviorSatisfiesGlobalInvariant<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -171,7 +171,7 @@ module ConcurrentHoareLogicLemmasModule {
     assert cr.global_inv(ss'.state);
   }
 
-  lemma lemma_StraightlineBehaviorNeverChangesStack<State, Actor, Step, PC, Proc>(
+  lemma lemma_StraightlineBehaviorNeverChangesStack<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -214,7 +214,7 @@ module ConcurrentHoareLogicLemmasModule {
     assert StraightlineSpecNext(cr, ss, ss', sstep, actor, proc);
   }
 
-  lemma lemma_VisitedLoopsOnlyContainsLoopHeads<State, Actor, Step, PC, Proc>(
+  lemma lemma_VisitedLoopsOnlyContainsLoopHeads<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -241,7 +241,7 @@ module ConcurrentHoareLogicLemmasModule {
     lemma_VisitedLoopsOnlyContainsLoopHeads(cr, sb, actor, proc, pc, prev);
   }
 
-  lemma lemma_PCVisitedIfInLoopedPhase<State, Actor, Step, PC, Proc>(
+  lemma lemma_PCVisitedIfInLoopedPhase<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     sb:AnnotatedBehavior<StraightlineState<State, PC>, StraightlineStep<Step, PC, Proc>>,
     actor:Actor,
@@ -275,7 +275,7 @@ module ConcurrentHoareLogicLemmasModule {
   // Lemmas about overlays
   ///////////////////////////////////////////
 
-  lemma lemma_FindWhenLoopBegan<State, Actor, Step, PC, Proc>(
+  lemma lemma_FindWhenLoopBegan<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     actor:Actor,
@@ -321,7 +321,7 @@ module ConcurrentHoareLogicLemmasModule {
     earlier_pos := lemma_FindWhenLoopBegan(cr, b, actor, proc, overlay, pc, pos-1);
   }
 
-  lemma lemma_ExtendYieldingOverlayOneStep<State, Actor, Step, PC, Proc>(
+  lemma lemma_ExtendYieldingOverlayOneStep<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     actor:Actor,
@@ -366,7 +366,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := overlay_prev.(sb := overlay_prev.sb.(states := sstates), positions := all_but_last(overlay_prev.positions) + [pos]);
   }
 
-  lemma lemma_ExtendOverlayWithYielding<State, Actor, Step, PC, Proc>(
+  lemma lemma_ExtendOverlayWithYielding<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     actor:Actor,
@@ -412,7 +412,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := overlay_prev.(sb := AnnotatedBehavior(sstates, strace), positions := positions);
   }
 
-  lemma lemma_ExtendOverlayWithLooping<State, Actor, Step, PC, Proc>(
+  lemma lemma_ExtendOverlayWithLooping<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     actor:Actor,
@@ -502,7 +502,7 @@ module ConcurrentHoareLogicLemmasModule {
   // Cases of obtaining straightline behaviors
   ///////////////////////////////////////////////
 
-  lemma lemma_GetStraightlineBehaviorCaseInit<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseInit<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     actor:Actor,
@@ -534,7 +534,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendOverlayWithYielding(cr, b, actor, proc, 0, overlay_prev);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseNormal<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseNormal<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -595,7 +595,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendOverlayWithYielding(cr, b, actor, proc, pos, overlay_next);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseFork<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseFork<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -671,7 +671,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendOverlayWithYielding(cr, b, actor, proc, pos, overlay_prev);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseOtherActor<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseOtherActor<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -728,7 +728,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendYieldingOverlayOneStep(cr, b, actor, proc, pos, overlay_prev);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseActorless<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseActorless<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -765,7 +765,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendYieldingOverlayOneStep(cr, b, actor, proc, pos, overlay_prev);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseCall<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseCall<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -824,7 +824,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := lemma_ExtendOverlayWithYielding(cr, b, actor, proc, pos, overlay_prev);
   }
 
-  lemma lemma_GetStraightlineBehaviorCaseReturn<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorCaseReturn<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -889,7 +889,7 @@ module ConcurrentHoareLogicLemmasModule {
   // Obtaining straightline behaviors
   ///////////////////////////////////////////
 
-  lemma lemma_GetStraightlineBehaviorForCallerProc<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorForCallerProc<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,
@@ -1009,7 +1009,7 @@ module ConcurrentHoareLogicLemmasModule {
     overlay := StraightlineOverlay(sb, overlay_prev.how_started, positions + [call_pos + 1] + [pos]);
   }
 
-  lemma lemma_GetStraightlineBehaviorForCurrentProc<State, Actor, Step, PC, Proc>(
+  lemma lemma_GetStraightlineBehaviorForCurrentProc<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr:ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b:AnnotatedBehavior<State, Step>,
     pos:int,

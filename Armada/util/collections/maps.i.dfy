@@ -98,6 +98,7 @@ module util_collections_maps_i
       {
         if P(m[x]) {
           assert x in (set x | x in m && P(m[x]));
+          lemma_EmptySetCantHaveMember(x, set x | x in m && P(m[x]));
         }
       }
     }

@@ -53,7 +53,7 @@ module RefinementViaReductionLemmasModule {
     | Low(actor:Actor, step:LStep)
     | Reducible(actor:Actor, states:seq<State>, trace:seq<LStep>)
 
-  predicate ValidReducibleCrossLevelStep<State, Actor, LStep, HStep>(
+  predicate ValidReducibleCrossLevelStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<LStep>,
@@ -70,7 +70,7 @@ module RefinementViaReductionLemmasModule {
     && (forall i :: 0 < i < |trace| ==> rr.phase1(states[i], actor) || rr.phase2(states[i], actor))
   }
 
-  predicate CrossLevelNext<State, Actor, LStep, HStep>(
+  predicate CrossLevelNext<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s:State,
     s':State,
@@ -97,7 +97,7 @@ module RefinementViaReductionLemmasModule {
     iset s | true :: RefinementPair(s, s)
   }
 
-  lemma lemma_StateInCrossLevelBehaviorReachableInBaseSpec<State, Actor, LStep, HStep>(
+  lemma lemma_StateInCrossLevelBehaviorReachableInBaseSpec<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     b:AnnotatedBehavior<State, CrossLevelStep<State, Actor, LStep>>,
     pos:int
@@ -130,7 +130,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_AnnotatedReachablesOfCrossLevelSpec<State, Actor, LStep, HStep>(
+  lemma lemma_AnnotatedReachablesOfCrossLevelSpec<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>
     )
     requires ValidRefinementViaReductionRequest(rr)
@@ -159,7 +159,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  function LiftStepToCrossLevel<State, Actor, LStep, HStep>(
+  function LiftStepToCrossLevel<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s:State,
     s':State,
@@ -169,7 +169,7 @@ module RefinementViaReductionLemmasModule {
     Low(rr.idmap(step), step)
   }
 
-  lemma lemma_LiftStateNextSeqToCrossLevel<State, Actor, LStep, HStep>(
+  lemma lemma_LiftStateNextSeqToCrossLevel<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     states:seq<State>,
@@ -208,7 +208,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_FindFirstCrashingState<State, Actor, LStep, HStep>(
+  lemma lemma_FindFirstCrashingState<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<LStep>
@@ -249,7 +249,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LiftBehaviorToCrossLevel<State, Actor, LStep, HStep>(
+  lemma lemma_LiftBehaviorToCrossLevel<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     lb:AnnotatedBehavior<State, LStep>
     ) returns (
@@ -279,7 +279,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LiftBehaviorToHighLayer<State, Actor, LStep, HStep>(
+  lemma lemma_LiftBehaviorToHighLayer<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     cb:AnnotatedBehavior<State, CrossLevelStep<State, Actor, LStep>>
     ) returns (
@@ -326,7 +326,7 @@ module RefinementViaReductionLemmasModule {
     hb := AnnotatedBehavior(cb.states, htrace);
   }
 
-  lemma lemma_StateInCSpecBehaviorAmongAnnotatedReachables<State, Actor, LStep, HStep>(
+  lemma lemma_StateInCSpecBehaviorAmongAnnotatedReachables<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     b:AnnotatedBehavior<State, CrossLevelStep<State, Actor, LStep>>,
     pos:int
@@ -355,7 +355,7 @@ module RefinementViaReductionLemmasModule {
   // GENERAL CRASH LEMMAS
   ///////////////////////////////////////////
 
-  lemma lemma_StateNextSeqPreservesCrash<State, Actor, LStep, HStep>(
+  lemma lemma_StateNextSeqPreservesCrash<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<LStep>
@@ -388,7 +388,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_CSpecNextPreservesCrash<State, Actor, LStep, HStep>(
+  lemma lemma_CSpecNextPreservesCrash<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s:State,
     s':State,
@@ -404,7 +404,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_AllStatesFollowingCrashedStateSame<State, Actor, LStep, HStep>(
+  lemma lemma_AllStatesFollowingCrashedStateSame<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<LStep>,
@@ -425,7 +425,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_AllCSpecStatesFollowingCrashedStateSame<State, Actor, LStep, HStep>(
+  lemma lemma_AllCSpecStatesFollowingCrashedStateSame<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<CrossLevelStep<State, Actor, LStep>>,
@@ -446,7 +446,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_CSpecNextPreservesNoncrashBackward<State, Actor, LStep, HStep>(
+  lemma lemma_CSpecNextPreservesNoncrashBackward<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s:State,
     s':State,
@@ -463,7 +463,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_IfStateNextSeqDoesntCrashNoStateDoes<State, Actor, LStep, HStep>(
+  lemma lemma_IfStateNextSeqDoesntCrashNoStateDoes<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     states:seq<State>,
     trace:seq<LStep>,
@@ -488,14 +488,14 @@ module RefinementViaReductionLemmasModule {
   // CohenLamportReductionRequest
   ///////////////////////////////////////////
 
-  function GetCohenLamportReductionIdmap<State, Actor, LStep, HStep>(
+  function GetCohenLamportReductionIdmap<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>
     ) : CrossLevelStep<State, Actor, LStep>->Actor
   {
     (s:CrossLevelStep<State, Actor, LStep>) => s.actor
   }
 
-  function GetCohenLamportReductionRequest<State, Actor, LStep, HStep>(
+  function GetCohenLamportReductionRequest<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>
     ) : CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
   {
@@ -511,7 +511,7 @@ module RefinementViaReductionLemmasModule {
   // UTILITY LEMMAS
   /////////////////////////
 
-  predicate PhasesMatch<State, Actor, LStep, HStep>(
+  predicate PhasesMatch<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s1:State,
     s2:State,
@@ -523,7 +523,7 @@ module RefinementViaReductionLemmasModule {
     && (rr.phase2(s1, actor) <==> rr.phase2(s2, actor))
   }
 
-  lemma lemma_ReducibleStepStartsAndEndsOutOfPhase<State, Actor, LStep, HStep>(
+  lemma lemma_ReducibleStepStartsAndEndsOutOfPhase<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     s:State,
     s':State,
@@ -538,7 +538,7 @@ module RefinementViaReductionLemmasModule {
   {
   }
 
-  lemma lemma_StateNextSeqByOtherActorCausesPhasesMatch<State, Actor, LStep, HStep>(
+  lemma lemma_StateNextSeqByOtherActorCausesPhasesMatch<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     states:seq<State>,
@@ -568,7 +568,7 @@ module RefinementViaReductionLemmasModule {
   // PhaseUnaffectedByOtherActors
   /////////////////////////////////////
 
-  lemma lemma_DemonstratePhaseUnaffectedByOtherActors<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstratePhaseUnaffectedByOtherActors<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     s:State,
@@ -598,7 +598,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_PhaseUnaffectedByOtherActors<State, Actor, LStep, HStep>(
+  lemma lemma_PhaseUnaffectedByOtherActors<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -623,7 +623,7 @@ module RefinementViaReductionLemmasModule {
   // ActionSequencesLiftable
   /////////////////////////////////////
 
-  lemma lemma_DemonstrateActionSequencesLiftable<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateActionSequencesLiftable<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     states:seq<State>,
@@ -711,7 +711,7 @@ module RefinementViaReductionLemmasModule {
     assert ValidReducibleCrossLevelStep(rr, states, htrace, actor);
   }
 
-  lemma lemma_ActionSequencesLiftable<State, Actor, LStep, HStep>(
+  lemma lemma_ActionSequencesLiftable<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -732,7 +732,7 @@ module RefinementViaReductionLemmasModule {
   // RightMoversCommute
   /////////////////////////////////////
 
-  lemma lemma_DemonstrateRightMoverCommutesCaseOneStep<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCommutesCaseOneStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -772,7 +772,7 @@ module RefinementViaReductionLemmasModule {
       && rr.idmap(right_mover') == rr.idmap(right_mover);
   }
 
-  lemma lemma_DemonstrateRightMoverCommutesCaseMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCommutesCaseMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -883,7 +883,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateRightMoverCommutesCaseLow<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCommutesCaseLow<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -920,7 +920,7 @@ module RefinementViaReductionLemmasModule {
     right_mover' := Low(rr.idmap(right_mover_single), right_mover_single);
   }
 
-  lemma lemma_DemonstrateRightMoverCommutesCaseReducible<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCommutesCaseReducible<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -961,7 +961,7 @@ module RefinementViaReductionLemmasModule {
     assert CrossLevelNext(rr, new_middle_state, state_after_both_steps, right_mover');
   }
 
-  lemma lemma_DemonstrateRightMoverCommutes<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCommutes<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1005,7 +1005,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_RightMoversCommute<State, Actor, LStep, HStep>(
+  lemma lemma_RightMoversCommute<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -1040,7 +1040,7 @@ module RefinementViaReductionLemmasModule {
   // LeftMoversCommute
   /////////////////////////////////////
 
-  lemma lemma_DemonstrateLeftMoverCommutesCaseOneStep<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverCommutesCaseOneStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1080,7 +1080,7 @@ module RefinementViaReductionLemmasModule {
       && rr.idmap(other_step') == rr.idmap(other_step);
   }
 
-  lemma lemma_DemonstrateLeftMoverCommutesCaseMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverCommutesCaseMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1194,7 +1194,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoverCommutesCaseLow<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverCommutesCaseLow<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1231,7 +1231,7 @@ module RefinementViaReductionLemmasModule {
     other_step' := Low(rr.idmap(other_step_single), other_step_single);
   }
 
-  lemma lemma_DemonstrateLeftMoverCommutesCaseReducible<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverCommutesCaseReducible<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1272,7 +1272,7 @@ module RefinementViaReductionLemmasModule {
     assert CrossLevelNext(rr, initial_state, new_middle_state, left_mover');
   }
 
-  lemma lemma_DemonstrateLeftMoverCommutes<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverCommutes<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1318,7 +1318,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoversCommute<State, Actor, LStep, HStep>(
+  lemma lemma_LeftMoversCommute<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -1353,7 +1353,7 @@ module RefinementViaReductionLemmasModule {
   // LeftMoversAlwaysEnabled
   ////////////////////////////////////////
 
-  lemma lemma_DemonstrateLeftMoversAlwaysEnabled<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversAlwaysEnabled<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     s:State,
@@ -1408,7 +1408,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoversAlwaysEnabled<State, Actor, LStep, HStep>(
+  lemma lemma_LeftMoversAlwaysEnabled<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -1434,7 +1434,7 @@ module RefinementViaReductionLemmasModule {
   // LeftMoversEnabledBeforeCrash
   ////////////////////////////////////////
 
-  lemma lemma_MoveMultipleLeftMoversAcrossMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_MoveMultipleLeftMoversAcrossMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1537,7 +1537,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseOneStep<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseOneStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1585,7 +1585,7 @@ module RefinementViaReductionLemmasModule {
            && RefinementPair(post_crash_state, post_crash_state') in rr.relation;
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseLow<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseLow<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1627,7 +1627,7 @@ module RefinementViaReductionLemmasModule {
     left_mover_steps := lemma_LiftStateNextSeqToCrossLevel(rr, clrr, left_mover_states, ltrace);
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1712,7 +1712,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseReducible<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCaseReducible<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1756,7 +1756,7 @@ module RefinementViaReductionLemmasModule {
     assert CrossLevelNext(rr, last(left_mover_states), post_crash_state', crash_step');
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrash<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrash<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1800,7 +1800,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoversEnabledBeforeCrash<State, Actor, LStep, HStep>(
+  lemma lemma_LeftMoversEnabledBeforeCrash<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -1833,7 +1833,7 @@ module RefinementViaReductionLemmasModule {
   // RightMoverCrashPreservation
   ////////////////////////////////////////
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationCaseOneStep<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationCaseOneStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1870,7 +1870,7 @@ module RefinementViaReductionLemmasModule {
       && RefinementPair(state_after_both_steps, state_after_other_step') in rr.relation;
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationCaseMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationCaseMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1940,7 +1940,7 @@ module RefinementViaReductionLemmasModule {
     lemma_ExtendStateNextSeqRight(other_states_next, other_steps_next, rr.lspec.next, state_after_other_step', other_step');
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationCaseLow<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationCaseLow<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -1977,7 +1977,7 @@ module RefinementViaReductionLemmasModule {
     other_step' := Low(rr.idmap(other_step_single), other_step_single);
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationCaseReducible<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationCaseReducible<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2017,7 +2017,7 @@ module RefinementViaReductionLemmasModule {
     assert CrossLevelNext(rr, initial_state, state_after_other_step', other_step');
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservation<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateRightMoverCrashPreservation<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2064,7 +2064,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_RightMoverCrashPreservation<State, Actor, LStep, HStep>(
+  lemma lemma_RightMoverCrashPreservation<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -2093,7 +2093,7 @@ module RefinementViaReductionLemmasModule {
   // LeftMoverSelfCrashPreservation
   ////////////////////////////////////////
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseOneStep<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseOneStep<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2130,7 +2130,7 @@ module RefinementViaReductionLemmasModule {
       && RefinementPair(state_after_both_steps, state_after_left_mover') in rr.relation;
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseLow<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseLow<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2167,7 +2167,7 @@ module RefinementViaReductionLemmasModule {
     left_mover' := Low(rr.idmap(left_mover_single), left_mover_single);
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseMultipleSteps<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseMultipleSteps<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2228,7 +2228,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseReducible<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationCaseReducible<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2267,7 +2267,7 @@ module RefinementViaReductionLemmasModule {
     left_mover' := Low(rr.idmap(left_mover_single), left_mover_single);
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservation<State, Actor, LStep, HStep>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservation<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>,
     initial_state:State,
@@ -2314,7 +2314,7 @@ module RefinementViaReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoverSelfCrashPreservation<State, Actor, LStep, HStep>(
+  lemma lemma_LeftMoverSelfCrashPreservation<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     clrr:CohenLamportReductionRequest<State, Actor, CrossLevelStep<State, Actor, LStep>>
     )
@@ -2343,7 +2343,7 @@ module RefinementViaReductionLemmasModule {
   // Final demonstration that CohenLamportReductionRequest is valid
   ///////////////////////////////////////////////////////////////////////////
 
-  lemma lemma_IsValidCohenLamportReductionRequest<State, Actor, LStep, HStep>(
+  lemma lemma_IsValidCohenLamportReductionRequest<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>
     )
     requires ValidRefinementViaReductionRequest(rr)

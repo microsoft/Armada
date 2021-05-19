@@ -32,7 +32,7 @@ module RefinementViaReductionModule {
   import opened RefinementConvolutionModule
   import opened CohenLamportReductionModule
 
-  lemma lemma_PerformRefinementViaReduction<State, Actor, LStep, HStep>(
+  lemma lemma_PerformRefinementViaReduction<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>,
     lb:AnnotatedBehavior<State, LStep>
     ) returns (

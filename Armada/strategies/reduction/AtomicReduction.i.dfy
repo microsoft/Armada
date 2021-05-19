@@ -39,7 +39,7 @@ module AtomicReductionModule {
   import opened GenericArmadaAtomicModule
   import opened ArmadaCommonDefinitions
 
-  lemma lemma_ReduceAtomicBehavior<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_ReduceAtomicBehavior<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     lb:AnnotatedBehavior<LState, AtomicTraceEntry<LPath>>
     ) returns (
@@ -72,7 +72,7 @@ module AtomicReductionModule {
     lemma_RefinementConvolutionPure(lb.states, mb2.states, hb.states, arr.self_relation, arr.relation, arr.relation);
   }
 
-  lemma lemma_PerformAtomicReduction<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformAtomicReduction<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)

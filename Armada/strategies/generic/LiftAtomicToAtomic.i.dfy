@@ -366,7 +366,7 @@ module LiftAtomicToAtomicModule
     }
   }
 
-  lemma lemma_LiftAtomicBehaviorGivenAtomicPathsLiftableGeneral<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicBehaviorGivenAtomicPathsLiftableGeneral<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     lb: AnnotatedBehavior<LState, AtomicTraceEntry<LPath>>,
     lasf: AtomicSpecFunctions<LState, LPath, LPC>,
     hasf: AtomicSpecFunctions<HState, HPath, HPC>,
@@ -431,7 +431,7 @@ module LiftAtomicToAtomicModule
     assert BehaviorRefinesBehavior(lb.states, hb.states, refinement_relation);
   }
 
-  lemma lemma_AtomicBehaviorToAnnotatedBehavior<State, Path, PC>(
+  lemma lemma_AtomicBehaviorToAnnotatedBehavior<State(!new), Path(!new), PC(!new)>(
     asf: AtomicSpecFunctions<State, Path, PC>,
     b: seq<State>
     ) returns (
@@ -459,7 +459,7 @@ module LiftAtomicToAtomicModule
     ab := AnnotatedBehavior(b, trace);
   }
 
-  lemma lemma_AtomicAnnotatedBehaviorSatisfiesAtomicSpec<State, Path, PC>(
+  lemma lemma_AtomicAnnotatedBehaviorSatisfiesAtomicSpec<State(!new), Path(!new), PC(!new)>(
     asf: AtomicSpecFunctions<State, Path, PC>,
     ab: AnnotatedBehavior<State, AtomicTraceEntry<Path>>
     )
@@ -473,7 +473,7 @@ module LiftAtomicToAtomicModule
     }
   }
 
-  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsLiftableGeneral<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsLiftableGeneral<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     lasf: AtomicSpecFunctions<LState, LPath, LPC>,
     hasf: AtomicSpecFunctions<HState, HPath, HPC>,
     inv: LState->bool,
@@ -505,7 +505,7 @@ module LiftAtomicToAtomicModule
     }
   }
 
-  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsLiftable<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsLiftable<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     lasf: AtomicSpecFunctions<LState, LPath, LPC>,
     hasf: AtomicSpecFunctions<HState, HPath, HPC>,
     inv: LState->bool,
@@ -527,7 +527,7 @@ module LiftAtomicToAtomicModule
     lemma_LiftAtomicToAtomicGivenAtomicPathsLiftableGeneral(lasf, hasf, inv, relation, progress_measure, refinement_relation);
   }
 
-  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsSkippablyLiftable<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsSkippablyLiftable<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     lasf: AtomicSpecFunctions<LState, LPath, LPC>,
     hasf: AtomicSpecFunctions<HState, HPath, HPC>,
     inv: LState->bool,
@@ -549,7 +549,7 @@ module LiftAtomicToAtomicModule
     lemma_LiftAtomicToAtomicGivenAtomicPathsLiftableGeneral(lasf, hasf, inv, relation, progress_measure, refinement_relation);
   }
 
-  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsIntroduciblyLiftable<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicToAtomicGivenAtomicPathsIntroduciblyLiftable<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     lasf: AtomicSpecFunctions<LState, LPath, LPC>,
     hasf: AtomicSpecFunctions<HState, HPath, HPC>,
     inv: LState->bool,

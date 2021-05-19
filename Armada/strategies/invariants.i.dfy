@@ -18,7 +18,7 @@ module InvariantsModule
         iset b | BehaviorSatisfiesSpec(b, spec) :: last(b)
     }
 
-    lemma lemma_ReachablesPremiumProperties<State>(
+    lemma lemma_ReachablesPremiumProperties<State(!new)>(
         spec:Spec<State>
         )
         ensures var rs := Reachables(spec);
@@ -90,7 +90,7 @@ module InvariantsModule
         Reachables(spec)
     }
 
-    predicate IsSpecInvariant<State>(
+    predicate IsSpecInvariant<State(!new)>(
         inv:iset<State>,
         spec:Spec<State>
         )
@@ -120,7 +120,7 @@ module InvariantsModule
                       ==> s' in inv_unknown)
     }
 
-    predicate ConditionsForSpecInvarianceDeductionBeforeAndAfter<State>(
+    predicate ConditionsForSpecInvarianceDeductionBeforeAndAfter<State(!new)>(
         inv_unknown:iset<State>,
         inv_known:iset<State>,
         spec:Spec<State>
@@ -139,7 +139,7 @@ module InvariantsModule
         Spec(spec.init, iset s, s' | StatePair(s, s') in spec.next && s in inv :: StatePair(s, s'))
     }
 
-    lemma lemma_EstablishSpecInvariantPure<State>(
+    lemma lemma_EstablishSpecInvariantPure<State(!new)>(
         inv:iset<State>,
         spec:Spec<State>
         )
@@ -169,7 +169,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishSpecInvariantUsingInvariant<State>(
+    lemma lemma_EstablishSpecInvariantUsingInvariant<State(!new)>(
         inv_unknown:iset<State>,
         inv_known:iset<State>,
         spec:Spec<State>
@@ -199,7 +199,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishSpecInvariantUsingInvariantBeforeAndAfter<State>(
+    lemma lemma_EstablishSpecInvariantUsingInvariantBeforeAndAfter<State(!new)>(
         inv_unknown:iset<State>,
         inv_known:iset<State>,
         spec:Spec<State>
@@ -230,7 +230,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_SpecInvariantHoldsAtStart<State>(
+    lemma lemma_SpecInvariantHoldsAtStart<State(!new)>(
         s:State,
         spec:Spec<State>,
         inv:iset<State>
@@ -242,7 +242,7 @@ module InvariantsModule
         var rs := ReachablesPremium(spec);
     }
 
-    lemma lemma_SpecInvariantHoldsAtStep<State>(
+    lemma lemma_SpecInvariantHoldsAtStep<State(!new)>(
         b:seq<State>,
         t:int,
         spec:Spec<State>,
@@ -258,7 +258,7 @@ module InvariantsModule
         assert BehaviorSatisfiesSpec(b', spec);
     }
 
-    lemma lemma_ReachablesSatisfyConditionsForSpecInvariance<State>(
+    lemma lemma_ReachablesSatisfyConditionsForSpecInvariance<State(!new)>(
         spec:Spec<State>
         )
         ensures ConditionsForSpecInvariance(Reachables(spec), spec);
@@ -266,7 +266,7 @@ module InvariantsModule
         var rs := ReachablesPremium(spec);
     }
 
-    lemma lemma_ExtendingSpecWithInvariantProducesEquivalentSpec<State>(
+    lemma lemma_ExtendingSpecWithInvariantProducesEquivalentSpec<State(!new)>(
         spec:Spec<State>,
         inv:iset<State>,
         b:seq<State>
@@ -299,7 +299,7 @@ module InvariantsModule
         iset ab | AnnotatedBehaviorSatisfiesSpec(ab, spec) :: last(ab.states)
     }
 
-    lemma lemma_AnnotatedReachablesPremiumProperties<State, Step>(
+    lemma lemma_AnnotatedReachablesPremiumProperties<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>
         )
         ensures var rs := AnnotatedReachables(spec);
@@ -376,7 +376,7 @@ module InvariantsModule
         AnnotatedReachables(spec)
     }
 
-    lemma lemma_InitStateInAnnotatedReachables<State, Step>(
+    lemma lemma_InitStateInAnnotatedReachables<State(!new), Step(!new)>(
         s:State,
         spec:AnnotatedBehaviorSpec<State, Step>
         )
@@ -386,7 +386,7 @@ module InvariantsModule
         assert AnnotatedReachables(spec) == AnnotatedReachablesPremium(spec);
     }
 
-    lemma lemma_NextMaintainsAnnotatedReachables<State, Step>(
+    lemma lemma_NextMaintainsAnnotatedReachables<State(!new), Step(!new)>(
         s:State,
         s':State,
         step:Step,
@@ -399,7 +399,7 @@ module InvariantsModule
         assert AnnotatedReachables(spec) == AnnotatedReachablesPremium(spec);
     }
 
-    lemma lemma_StateNextSeqMaintainsAnnotatedReachables<State, Step>(
+    lemma lemma_StateNextSeqMaintainsAnnotatedReachables<State(!new), Step(!new)>(
         states:seq<State>,
         trace:seq<Step>,
         spec:AnnotatedBehaviorSpec<State, Step>
@@ -419,7 +419,7 @@ module InvariantsModule
         }
     }
 
-    predicate IsInvariantOfSpec<State, Step>(
+    predicate IsInvariantOfSpec<State(!new), Step(!new)>(
         inv:iset<State>,
         spec:AnnotatedBehaviorSpec<State, Step>
         )
@@ -473,7 +473,7 @@ module InvariantsModule
                                                       :: ActionTuple(s, s', step))
     }
 
-    lemma lemma_EstablishInvariantPure<State, Step>(
+    lemma lemma_EstablishInvariantPure<State(!new), Step(!new)>(
         inv:iset<State>,
         spec:AnnotatedBehaviorSpec<State, Step>
         )
@@ -503,7 +503,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishInvariantUsingInvariant<State, Step>(
+    lemma lemma_EstablishInvariantUsingInvariant<State(!new), Step(!new)>(
         inv_unknown:iset<State>,
         inv_known:iset<State>,
         spec:AnnotatedBehaviorSpec<State, Step>
@@ -533,7 +533,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishInvariantUsingInvariantBeforeAndAfter<State, Step>(
+    lemma lemma_EstablishInvariantUsingInvariantBeforeAndAfter<State(!new), Step(!new)>(
         inv_unknown:iset<State>,
         inv_known:iset<State>,
         spec:AnnotatedBehaviorSpec<State, Step>
@@ -564,7 +564,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_InvariantHoldsAtStart<State, Step>(
+    lemma lemma_InvariantHoldsAtStart<State(!new), Step(!new)>(
         s:State,
         spec:AnnotatedBehaviorSpec<State, Step>,
         inv:iset<State>
@@ -576,7 +576,7 @@ module InvariantsModule
         var rs := AnnotatedReachablesPremium(spec);
     }
 
-    lemma lemma_InvariantHoldsAtStep<State, Step>(
+    lemma lemma_InvariantHoldsAtStep<State(!new), Step(!new)>(
         ab:AnnotatedBehavior<State, Step>,
         t:int,
         spec:AnnotatedBehaviorSpec<State, Step>,
@@ -592,7 +592,7 @@ module InvariantsModule
         assert AnnotatedBehaviorSatisfiesSpec(ab', spec);
     }
 
-    lemma lemma_AnnotatedReachablesSatisfyConditionsForInvariance<State, Step>(
+    lemma lemma_AnnotatedReachablesSatisfyConditionsForInvariance<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>
         )
         ensures ConditionsForInvariance(AnnotatedReachables(spec), spec);
@@ -600,7 +600,7 @@ module InvariantsModule
         var rs := AnnotatedReachablesPremium(spec);
     }
 
-    lemma lemma_ConditionsForInvarianceTransferAcrossStateNextSeq<State, Step>(
+    lemma lemma_ConditionsForInvarianceTransferAcrossStateNextSeq<State(!new), Step(!new)>(
         states:seq<State>,
         trace:seq<Step>,
         spec:AnnotatedBehaviorSpec<State, Step>,
@@ -622,7 +622,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_ConjunctionOfInvariantsIsInvariant<State, Step>(
+    lemma lemma_ConjunctionOfInvariantsIsInvariant<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>,
         invs:seq<State->bool>,
         aggregate_inv:State->bool
@@ -633,7 +633,7 @@ module InvariantsModule
     {
     }
 
-    lemma lemma_ExtendingAnnotatedSpecWithInvariantProducesEquivalentSpec<State, Step>(
+    lemma lemma_ExtendingAnnotatedSpecWithInvariantProducesEquivalentSpec<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>,
         inv:iset<State>,
         ab:AnnotatedBehavior<State, Step>
@@ -658,7 +658,7 @@ module InvariantsModule
         }
     }
 
-    predicate IsInvariantPredicateOfSpec<State, Step>(
+    predicate IsInvariantPredicateOfSpec<State(!new), Step(!new)>(
         inv:State->bool,
         spec:AnnotatedBehaviorSpec<State, Step>
         )
@@ -711,7 +711,7 @@ module InvariantsModule
                               iset s, s', step | ActionTuple(s, s', step) in spec.next && inv(s) :: ActionTuple(s, s', step))
     }
 
-    lemma lemma_EstablishInvariantPredicatePure<State, Step>(
+    lemma lemma_EstablishInvariantPredicatePure<State(!new), Step(!new)>(
         inv:State->bool,
         spec:AnnotatedBehaviorSpec<State, Step>
         )
@@ -741,7 +741,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishInvariantPredicateUsingInvariantPredicate<State, Step>(
+    lemma lemma_EstablishInvariantPredicateUsingInvariantPredicate<State(!new), Step(!new)>(
         inv_unknown:State->bool,
         inv_known:State->bool,
         spec:AnnotatedBehaviorSpec<State, Step>
@@ -772,7 +772,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_EstablishInvariantPredicateUsingInvariantPredicateBeforeAndAfter<State, Step>(
+    lemma lemma_EstablishInvariantPredicateUsingInvariantPredicateBeforeAndAfter<State(!new), Step(!new)>(
         inv_unknown:State->bool,
         inv_known:State->bool,
         spec:AnnotatedBehaviorSpec<State, Step>
@@ -803,7 +803,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_InvariantPredicateHoldsAtStart<State, Step>(
+    lemma lemma_InvariantPredicateHoldsAtStart<State(!new), Step(!new)>(
         s:State,
         spec:AnnotatedBehaviorSpec<State, Step>,
         inv:State->bool
@@ -815,7 +815,7 @@ module InvariantsModule
         var rs := AnnotatedReachablesPremium(spec);
     }
 
-    lemma lemma_InvariantPredicateHoldsAtStep<State, Step>(
+    lemma lemma_InvariantPredicateHoldsAtStep<State(!new), Step(!new)>(
         ab:AnnotatedBehavior<State, Step>,
         t:int,
         spec:AnnotatedBehaviorSpec<State, Step>,
@@ -831,7 +831,7 @@ module InvariantsModule
         assert AnnotatedBehaviorSatisfiesSpec(ab', spec);
     }
 
-    lemma lemma_ConditionsForInvariancePredicateTransferAcrossStateNextSeq<State, Step>(
+    lemma lemma_ConditionsForInvariancePredicateTransferAcrossStateNextSeq<State(!new), Step(!new)>(
         states:seq<State>,
         trace:seq<Step>,
         spec:AnnotatedBehaviorSpec<State, Step>,
@@ -853,7 +853,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_ExtendingAnnotatedSpecWithInvariantPredicateProducesEquivalentSpec<State, Step>(
+    lemma lemma_ExtendingAnnotatedSpecWithInvariantPredicateProducesEquivalentSpec<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>,
         inv:State->bool,
         ab:AnnotatedBehavior<State, Step>
@@ -878,7 +878,7 @@ module InvariantsModule
         }
     }
 
-    lemma lemma_StateInAnnotatedBehaviorInAnnotatedReachables<State, Step>(
+    lemma lemma_StateInAnnotatedBehaviorInAnnotatedReachables<State(!new), Step(!new)>(
         spec:AnnotatedBehaviorSpec<State, Step>,
         ab:AnnotatedBehavior<State, Step>,
         pos:int

@@ -443,7 +443,7 @@ module AtomicReductionSpecModule {
           && RefinementPair(state_after_both_paths, state_after_left_mover) in arr.self_relation
   }
 
-  predicate ValidAtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>(
+  predicate ValidAtomicReductionRequest<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath(!new), HPC(!new)>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
   {

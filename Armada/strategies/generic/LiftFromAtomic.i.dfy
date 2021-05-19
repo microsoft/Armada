@@ -69,7 +69,7 @@ module LiftFromAtomicModule
         case AtomicPathType_RS  => AtomicStepsLiftPathFromAtomic(hasf, s, s', steps, tid, false, true, false)
         case AtomicPathType_RR  => AtomicStepsLiftPathFromAtomic(hasf, s, s', steps, tid, false, false, true)
   }
-  lemma lemma_LiftRecurrentEntryFromAtomic<State, OneStep, Path, PC>(
+  lemma lemma_LiftRecurrentEntryFromAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: AtomicSpecFunctions<State, Path, PC>,
     hasf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
@@ -134,7 +134,7 @@ module LiftFromAtomicModule
     assert Armada_NextMultistep(hasf, s, s', hsteps, tid, false);
   }
 
-  lemma lemma_LiftEntryFromAtomic<State, OneStep, Path, PC>(
+  lemma lemma_LiftEntryFromAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: AtomicSpecFunctions<State, Path, PC>,
     hasf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
@@ -177,7 +177,7 @@ module LiftFromAtomicModule
     }
   }
 
-  lemma lemma_LiftBehaviorFromAtomic<State, OneStep, Path, PC>(
+  lemma lemma_LiftBehaviorFromAtomic<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: AtomicSpecFunctions<State, Path, PC>,
     hasf: Armada_SpecFunctions<State, OneStep, PC>,
     b: seq<State>
@@ -202,7 +202,7 @@ module LiftFromAtomicModule
     }
   }
 
-  lemma lemma_AtomicSpecRefinesSpec<State, OneStep, Path, PC>(
+  lemma lemma_AtomicSpecRefinesSpec<State(!new), OneStep(!new), Path(!new), PC(!new)>(
     lasf: AtomicSpecFunctions<State, Path, PC>,
     hasf: Armada_SpecFunctions<State, OneStep, PC>
     ) returns (
