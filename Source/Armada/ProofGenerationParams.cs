@@ -23,6 +23,7 @@ namespace Microsoft.Armada
       originalsLow = symbolsLow.DefaultClass;
       originalsHigh = symbolsHigh.DefaultClass;
       extraMaterial = new Dictionary<string, string>();
+      opaqueUserDefs = new List<string>();
     }
 
     public readonly Program prog;
@@ -30,7 +31,8 @@ namespace Microsoft.Armada
     public readonly LiteralModuleDecl mLow, mHigh;
     public readonly ClassDecl originalsLow, originalsHigh;
     public readonly ArmadaSymbolTable symbolsLow, symbolsHigh;
-    public Dictionary<string, string> extraMaterial;
+    private Dictionary<string, string> extraMaterial;
+    private List<string> opaqueUserDefs;
 
     public ProofFile MainProof { get { return proofFiles.MainProof; } }
     public ProofFile AuxiliaryProof(string auxName) { return proofFiles.AuxiliaryProof(auxName); }
@@ -47,34 +49,37 @@ namespace Microsoft.Armada
 
     private string InsertExtraMaterial(string name, string contents, int minPos = 0)
     {
-      // Remove any "ProofCustomizationGoesHere();" and note its position.
-      
+      // Remove any "ProofCustomizationGoesHere();" and replace it
+      // with the extra material.  The extra material is whatever is
+      // specified by the user or, if nothing is specified by them,
+      // revelations of all user-defined opaque definitions.
+
       int insertionPos = contents.IndexOf("ProofCustomizationGoesHere();", minPos);
       if (insertionPos >= 0) {
-        contents = contents.Substring(0, insertionPos) + contents.Substring(insertionPos + 29);
+        string extra = extraMaterial.ContainsKey(name) ? extraMaterial[name] + "\n"
+                                                       : String.Concat(opaqueUserDefs.Select(f => $"reveal {f}();\n"));
+        return contents.Substring(0, insertionPos) + extra + contents.Substring(insertionPos + 29);
       }
 
-      if (extraMaterial.ContainsKey(name))
-      {
-        string extra = extraMaterial[name];
+      // If there is no "ProofCustomizationGoesHere();", but the user
+      // has provided extra material, put it after the first left
+      // brace + newline.  (Don't put it after a left brace not
+      // immediately followed by a newline because that might be
+      // followed by a colon indicating an attribute.)
 
-        // If there was no "ProofCustomizationGoesHere();", use the position right after the first open brace.
-
-        if (insertionPos < 0) {
-          var bracePos = contents.IndexOf("{", minPos);
-          if (bracePos < 0) {
-            AH.PrintError(prog, $"Could not find place in contents of {name} to insert extra material");
-            return contents;
-          }
-          insertionPos = bracePos + 1;
+      if (extraMaterial.ContainsKey(name)) {
+        var bracePos = contents.IndexOf("{\n");
+        if (bracePos >= 0) {
+          return contents.Substring(0, bracePos + 2) + extraMaterial[name] + contents.Substring(bracePos + 2);
         }
+      }
 
-        return contents.Substring(0, insertionPos) + "\n" + extra + "\n" + contents.Substring(insertionPos);
-      }
-      else
-      {
-        return contents;
-      }
+      return contents;
+    }
+
+    public void AddOpaqueUserDef(string fnName)
+    {
+      opaqueUserDefs.Add(fnName);
     }
 
     public void AddDefaultClassDecl(MemberDecl d, string auxName = null)

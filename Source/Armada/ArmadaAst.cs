@@ -5748,9 +5748,9 @@ namespace Microsoft.Armada {
   public abstract class ArmadaProofDecl : TopLevelDecl
   {
     public override string WhatKind { get { return "Armada proof element"; } }
-    public override bool CanBeRevealed() { return false; }
-    public ArmadaProofDecl(IToken tok, ModuleDefinition module) :
-      base(tok, "", module, new List<TypeParameter>(), null)
+    public override bool CanBeRevealed() { return Attributes.Contains(Attributes, "opaque"); }
+    public ArmadaProofDecl(IToken tok, ModuleDefinition module, Attributes attrs) :
+      base(tok, "", module, new List<TypeParameter>(), attrs)
     {
     }
   }
@@ -5759,8 +5759,8 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "refinement"; } }
 
-    public RefinementParametersDecl(IToken tok, ModuleDefinition module, IToken lowLevel, IToken highLevel) :
-      base(tok, module)
+    public RefinementParametersDecl(IToken tok, ModuleDefinition module, IToken lowLevel, IToken highLevel)
+      : base(tok, module, null)
     {
       LowLevel = lowLevel;
       HighLevel = highLevel;
@@ -5774,8 +5774,8 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "import file"; } }
 
-    public ImportFileArmadaProofDecl(IToken tok, ModuleDefinition module, string includePath, List<string> usedFiles) :
-      base(tok, module)
+    public ImportFileArmadaProofDecl(IToken tok, ModuleDefinition module, string includePath, List<string> usedFiles)
+      : base(tok, module, null)
     {
       IncludePath = includePath;
       UsedFiles = usedFiles;
@@ -5789,8 +5789,8 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "import module"; } }
 
-    public ImportModuleArmadaProofDecl(IToken tok, ModuleDefinition module, string includeModule, List<string> usedModules) :
-      base(tok, module)
+    public ImportModuleArmadaProofDecl(IToken tok, ModuleDefinition module, string includeModule, List<string> usedModules)
+      : base(tok, module, null)
     {
       IncludeModule = includeModule;
       UsedModules = usedModules;
@@ -5804,8 +5804,8 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "extra material"; } }
 
-    public ExtraMaterialArmadaProofDecl(IToken tok, ModuleDefinition module, string loc, string contents) :
-      base(tok, module)
+    public ExtraMaterialArmadaProofDecl(IToken tok, ModuleDefinition module, string loc, string contents)
+      : base(tok, module, null)
     {
       Loc = loc;
       Contents = Util.RemoveParsedStringQuotesSimple(contents);
@@ -5819,8 +5819,9 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "inductive invariant"; } }
 
-    public InductiveInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken name, string code, List<IToken> dependencies)
-      : base(tok, module)
+    public InductiveInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken name, string code, List<IToken> dependencies,
+                                             Attributes attrs)
+      : base(tok, module, attrs)
     {
       InvariantName = name.val;
       Code = Util.RemoveParsedStringQuotesSimple(code);
@@ -5837,7 +5838,7 @@ namespace Microsoft.Armada {
     public override string WhatKind { get { return "use regions"; } }
 
     public UseRegionsArmadaProofDecl(IToken tok, ModuleDefinition module)
-      : base(tok, module)
+      : base(tok, module, null)
     {
     }
   }
@@ -5847,7 +5848,7 @@ namespace Microsoft.Armada {
     public override string WhatKind { get { return "use address invariant"; } }
 
     public UseAddressInvariantArmadaProofDecl(IToken tok, ModuleDefinition module)
-      : base(tok, module)
+      : base(tok, module, null)
     {
     }
   }
@@ -5856,8 +5857,8 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "Concurrent Hoare logic invariant"; } }
 
-    public CHLInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken invariantName, string code) :
-      base(tok, module)
+    public CHLInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken invariantName, string code, Attributes attrs)
+      : base(tok, module, attrs)
     {
       InvariantName = invariantName.val;
       Code = Util.RemoveParsedStringQuotesSimple(code);
@@ -5871,8 +5872,9 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "Concurrent Hoare logic local invariant clause"; } }
 
-    public CHLLocalInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code) :
-      base(tok, module)
+    public CHLLocalInvariantArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code,
+                                            Attributes attrs)
+      : base(tok, module, attrs)
     {
       PCName = pcName.val;
       ClauseName = clauseName.val;
@@ -5890,11 +5892,10 @@ namespace Microsoft.Armada {
     public override string WhatKind { get { return "Concurrent Hoare logic yield predicate"; } }
 
     public CHLYieldPredicateArmadaProofDecl(IToken tok, ModuleDefinition module, IToken yieldPredicateName, string code, Attributes attrs) :
-      base(tok, module)
+      base(tok, module, attrs)
     {
       YieldPredicateName = yieldPredicateName.val;
       Code = Util.RemoveParsedStringQuotesSimple(code);
-      Attributes = attrs;
     }
 
     public readonly string YieldPredicateName;
@@ -5905,8 +5906,9 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "Concurrent Hoare logic precondition"; } }
 
-    public CHLPreconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken preconditionName, string code) :
-      base(tok, module)
+    public CHLPreconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken preconditionName, string code,
+                                          Attributes attrs)
+      : base(tok, module, attrs)
     {
       MethodName = methodName.val;
       PreconditionName = preconditionName.val;
@@ -5922,8 +5924,9 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "Concurrent Hoare logic postcondition"; } }
 
-    public CHLPostconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken postconditionName, string code) :
-      base(tok, module)
+    public CHLPostconditionArmadaProofDecl(IToken tok, ModuleDefinition module, IToken methodName, IToken postconditionName, string code,
+                                           Attributes attrs)
+      : base(tok, module, attrs)
     {
       MethodName = methodName.val;
       PostconditionName = postconditionName.val;
@@ -5939,8 +5942,9 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "Concurrent Hoare logic loop modifies clause"; } }
 
-    public CHLLoopModifiesClauseArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code) :
-      base(tok, module)
+    public CHLLoopModifiesClauseArmadaProofDecl(IToken tok, ModuleDefinition module, IToken pcName, IToken clauseName, string code,
+                                                Attributes attrs)
+      : base(tok, module, attrs)
     {
       PCName = pcName.val;
       ClauseName = clauseName.val;
@@ -5957,8 +5961,8 @@ namespace Microsoft.Armada {
     public override string WhatKind { get { return "auxiliary state"; } }
 
     public AuxiliaryArmadaProofDecl(IToken tok, ModuleDefinition module, string fieldName, string typeName,
-                                    string typeDefinitionCode, string initCode, string nextCode) :
-      base(tok, module)
+                                    string typeDefinitionCode, string initCode, string nextCode)
+      : base(tok, module, null)
     {
       FieldName = fieldName;
       TypeName = Util.RemoveParsedStringQuotesSimple(typeName);
@@ -5978,7 +5982,7 @@ namespace Microsoft.Armada {
   {
     public override string WhatKind { get { return "strategy"; } }
     public override bool CanBeRevealed() { return false; }
-    public StrategyDecl(IToken tok, ModuleDefinition module) : base(tok, module)
+    public StrategyDecl(IToken tok, ModuleDefinition module) : base(tok, module, null)
     {
     }
   }

@@ -424,11 +424,14 @@ namespace Microsoft.Armada {
 
       str = @"
         lemma lemma_GetThreadLocalViewAlwaysCommutesWithConvert()
-          ensures forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle :: tid in ls.threads ==>
+          ensures forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle
+                    {:trigger H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)}
+                    :: tid in ls.threads ==>
                     ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid)) ==
                     H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)
         {
-          forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle | tid in ls.threads
+          forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle {:trigger H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)}
+            | tid in ls.threads
             ensures ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid)) ==
                     H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)
           {

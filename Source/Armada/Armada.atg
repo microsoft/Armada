@@ -1228,6 +1228,7 @@ ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProo
     NoUSIdent<out id>
     stringToken                   (. proofDecl = new ExtraMaterialArmadaProofDecl(x, module, id.val, t.val); .)
   | "inductive_invariant"         (. x = t; code = null; ids = new List<IToken>(); .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     [ stringToken                 (. code = t.val; .)
     ]
@@ -1236,43 +1237,48 @@ ArmadaProofDecl<DeclModifierData dModIn, ModuleDefinition module, out ArmadaProo
       { "," NoUSIdent<out id2>    (. ids.Add(id2); .)
       }
     ]
-                                  (. proofDecl = new InductiveInvariantArmadaProofDecl(x, module, id, code, ids); .)
+                                  (. proofDecl = new InductiveInvariantArmadaProofDecl(x, module, id, code, ids, attrs); .)
   | "use_regions"                 (. proofDecl = new UseRegionsArmadaProofDecl(t, module); .)
   | "use_address_invariant"       (. proofDecl = new UseAddressInvariantArmadaProofDecl(t, module); .)
   | "chl_invariant"  (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     [ stringToken    (. code = t.val; .)
     ]
-                     (. proofDecl = new CHLInvariantArmadaProofDecl(x, module, id, code); .)
+                     (. proofDecl = new CHLInvariantArmadaProofDecl(x, module, id, code, attrs); .)
   | "chl_local_invariant"  (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     NoUSIdent<out id2>
     [ stringToken          (. code = t.val; .)
     ]
-                     (. proofDecl = new CHLLocalInvariantArmadaProofDecl(x, module, id, id2, code); .)
+                     (. proofDecl = new CHLLocalInvariantArmadaProofDecl(x, module, id, id2, code, attrs); .)
   | "chl_yield_pred" (. x = t; code = null; .)
     { Attribute<ref attrs> }
     NoUSIdent<out id>
     [ stringToken    (. code = t.val; .)
     ]                (. proofDecl = new CHLYieldPredicateArmadaProofDecl(x, module, id, code, attrs); .)
   | "chl_precondition"  (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     NoUSIdent<out id2>
     [ stringToken    (. code = t.val; .)
     ]
-                     (. proofDecl = new CHLPreconditionArmadaProofDecl(x, module, id, id2, code); .)
+                     (. proofDecl = new CHLPreconditionArmadaProofDecl(x, module, id, id2, code, attrs); .)
   | "chl_postcondition"  (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     NoUSIdent<out id2>
     [ stringToken    (. code = t.val; .)
     ]
-                     (. proofDecl = new CHLPostconditionArmadaProofDecl(x, module, id, id2, code); .)
+                     (. proofDecl = new CHLPostconditionArmadaProofDecl(x, module, id, id2, code, attrs); .)
   | "chl_loop_modifies"  (. x = t; code = null; .)
+    { Attribute<ref attrs> }
     NoUSIdent<out id>
     NoUSIdent<out id2>
     [ stringToken    (. code = t.val; .)
     ]
-                     (. proofDecl = new CHLLoopModifiesClauseArmadaProofDecl(x, module, id, id2, code); .)
+                     (. proofDecl = new CHLLoopModifiesClauseArmadaProofDecl(x, module, id, id2, code, attrs); .)
   | "auxiliary" (. x = t; .)
     NoUSIdent<out id>
     stringToken        (. code = t.val; .)

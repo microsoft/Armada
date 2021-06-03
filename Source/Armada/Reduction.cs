@@ -1256,7 +1256,8 @@ namespace Microsoft.Armada
                                          "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",
                                          atomicPath => true,
                                          atomicPath => postcondition,
-                                         atomicPath => "");
+                                         atomicPath => "",
+                                         false);
       lAtomic.GenerateOverallAtomicPathLemma(null,
                                              "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",
                                              "AtomicPathCantAffectOtherThreadPhaseExceptViaFork",

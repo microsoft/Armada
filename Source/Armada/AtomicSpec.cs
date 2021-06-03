@@ -920,9 +920,12 @@ namespace Microsoft.Armada
     public delegate string PathToStringDelegate(AtomicPath ap);
 
     public void GeneratePerAtomicPathLemma(string fileName, string lemmaName, PathToBoolDelegate pathFilter,
-                                           PathToStringDelegate postconditionDelegate, PathToStringDelegate proofBodyDelegate)
+                                           PathToStringDelegate postconditionDelegate, PathToStringDelegate proofBodyDelegate,
+                                           bool customizable)
     {
       string str;
+
+      var customization = customizable ? "ProofCustomizationGoesHere();" : "";
 
       var pr = new PathPrinter(this);
       foreach (var atomicPath in atomicPaths.Where(ap => pathFilter(ap)))
@@ -941,7 +944,7 @@ namespace Microsoft.Armada
           {{
             { pr.GetOpenValidPathInvocation(atomicPath) }
             { proofBodyDelegate(atomicPath) }
-            ProofCustomizationGoesHere();
+            { customization }
           }}
         ";
         if (fileName == null) {
@@ -1045,7 +1048,8 @@ namespace Microsoft.Armada
       GeneratePerAtomicPathLemma(auxName, "AtomicPathCantAffectOtherThreadPCsExceptViaFork",
                                  atomicPath => true,
                                  atomicPath => postcondition,
-                                 atomicPath => "");
+                                 atomicPath => "",
+                                 false);
       GenerateOverallAtomicPathLemma(auxName,
                                      "AtomicPathCantAffectOtherThreadPCsExceptViaFork",
                                      "AtomicPathCantAffectOtherThreadPCsExceptViaFork",

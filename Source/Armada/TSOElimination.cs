@@ -179,7 +179,7 @@ namespace Microsoft.Armada
     private string ownershipPredicate;
 
     public TSOEliminationNoConflictingOwnershipInvariantInfo(TSOFieldList i_fields, string i_ownershipPredicate)
-      : base("NoConflictingOwnership", "NoConflictingOwnership", new List<string>{ "InductiveInv" })
+      : base("NoConflictingOwnership", "NoConflictingOwnership", new List<string>{ "InductiveInv" }, "", false)
     {
       fields = i_fields;
       ownershipPredicate = i_ownershipPredicate;
@@ -228,7 +228,7 @@ namespace Microsoft.Armada
     private string ownershipPredicate;
 
     public TSOEliminationNonOwnersLackStoreBufferEntriesInvariantInfo(TSOFieldList i_fields, string i_ownershipPredicate)
-      : base("NonOwnersLackStoreBufferEntries", "NonOwnersLackStoreBufferEntries", new List<string>{ "InductiveInv" })
+      : base("NonOwnersLackStoreBufferEntries", "NonOwnersLackStoreBufferEntries", new List<string>{ "InductiveInv" }, "", false)
     {
       fields = i_fields;
       ownershipPredicate = i_ownershipPredicate;
