@@ -1832,22 +1832,29 @@ namespace Microsoft.Armada
       str += $@"
             assert L.Armada_ApplyStoreBuffer(ls.s.mem, ls.s.threads[tid].storeBuffer) ==
                    L.Armada_ApplyStoreBuffer(ls'.s.mem, ls'.s.threads[tid].storeBuffer);
+            var lg, lg', hg := ls.s.mem.globals, ls'.s.mem.globals, hs.mem.globals;
       
-            if NoThreadOwns(ls'{fields.IndexList}) {{
-              forall any_tid | any_tid in ls.s.threads
-                ensures !{ownershipPredicate}(ls, any_tid{fields.IndexList})
-              {{
-                assert !{ownershipPredicate}(ls', any_tid{fields.IndexList});
-              }}
-              assert NoThreadOwns(ls{fields.IndexList});
-      
+            if ValidIndices_L(lg'{fields.IndexList}) && ValidIndices_H(hg{fields.IndexList}) {{
               var buf := ls.s.threads[tid].storeBuffer;
               var entry := buf[0];
-              assert GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList});
-        
-              if StoreBufferLocationConcernsIndices_L(entry.loc{fields.IndexList}) {{
-                assert {ownershipPredicate}(ls, tid{fields.IndexList});
+              if !StoreBufferLocationConcernsIndices_L(entry.loc{fields.IndexList}) {{
+                assert lg'{fields.FieldSpec} == lg{fields.FieldSpec};
               }}
+
+              if NoThreadOwns(ls'{fields.IndexList}) {{
+                forall any_tid | any_tid in ls.s.threads
+                  ensures !{ownershipPredicate}(ls, any_tid{fields.IndexList})
+                {{
+                  assert !{ownershipPredicate}(ls', any_tid{fields.IndexList});
+                }}
+                assert NoThreadOwns(ls{fields.IndexList});
+      
+                assert GlobalsNoThreadOwnsMatchSpecific(ls, hs{fields.IndexList});
+        
+                if StoreBufferLocationConcernsIndices_L(entry.loc{fields.IndexList}) {{
+                  assert {ownershipPredicate}(ls, tid{fields.IndexList});
+                }}
+             }}
           }}
         }}
       ";

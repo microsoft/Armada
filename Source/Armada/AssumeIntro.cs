@@ -147,16 +147,16 @@ namespace Microsoft.Armada
   }
 
   ////////////////////////////////////////////////
-  // CHLYieldPredicateInfo
+  // CHLPredicateInfo
   ////////////////////////////////////////////////
 
-  class CHLYieldPredicateInfo
+  class CHLPredicateInfo
   {
     public readonly string Key;
     public readonly string Value;
     public readonly bool Opaque;
 
-    public CHLYieldPredicateInfo(string i_key, string i_value, bool i_opaque)
+    public CHLPredicateInfo(string i_key, string i_value, bool i_opaque)
     {
       Key = i_key;
       Value = i_value;
@@ -172,8 +172,8 @@ namespace Microsoft.Armada
   {
     private AssumeIntroStrategyDecl strategy;
     private List<ArmadaPC> lpcs;
-    private Dictionary<string, string> globalInvariantNames;
-    private List<CHLYieldPredicateInfo> yieldPredicateInfos;
+    private List<CHLPredicateInfo> globalInvariantInfos;
+    private List<CHLPredicateInfo> yieldPredicateInfos;
     private Dictionary<string, List<string>> extraPreconditionsForMethod;
     private Dictionary<string, List<string>> extraPostconditionsForMethod;
     private Dictionary<ArmadaPC, List<string>> extraLoopModifiesClausesForPC;
@@ -200,8 +200,8 @@ namespace Microsoft.Armada
       strategy = i_strategy;
       lpcs = new List<ArmadaPC>();
       i_pgp.symbolsLow.AllMethods.AppendAllPCs(lpcs);
-      globalInvariantNames = new Dictionary<string, string>();
-      yieldPredicateInfos = new List<CHLYieldPredicateInfo>();
+      globalInvariantInfos = new List<CHLPredicateInfo>();
+      yieldPredicateInfos = new List<CHLPredicateInfo>();
       extraPreconditionsForMethod = new Dictionary<string, List<string>>();
       extraPostconditionsForMethod = new Dictionary<string, List<string>>();
       extraLoopModifiesClausesForPC = new Dictionary<ArmadaPC, List<string>>();
@@ -1002,7 +1002,7 @@ namespace Microsoft.Armada
             AH.PrintError(pgp.prog, d.tok, $"No invariant named {invKey} found among the invariants");
             continue;
           }
-          globalInvariantNames[invKey] = invName;
+          globalInvariantInfos.Add(new CHLPredicateInfo(invKey, invName, d.CanBeRevealed()));
           allInvClauses += $"  && {invName}(s)\n";
         }
       }
@@ -1212,7 +1212,7 @@ namespace Microsoft.Armada
             AH.PrintError(pgp.prog, d.tok, $"No yield predicate named {ypKey} found among the yield predicates");
             continue;
           }
-          yieldPredicateInfos.Add(new CHLYieldPredicateInfo(ypKey, ypName, d.CanBeRevealed()));
+          yieldPredicateInfos.Add(new CHLPredicateInfo(ypKey, ypName, d.CanBeRevealed()));
           allYieldClauses += $"  && {ypName}(s, s', tid)\n";
         }
       }
@@ -1643,10 +1643,10 @@ namespace Microsoft.Armada
       string lemmaInvocations = "";
 
       var pr = new PathPrinter(lAtomic);
-      foreach (var globalInvariantPair in globalInvariantNames)
+      foreach (var globalInvariantInfo in globalInvariantInfos)
       {
         str = $@"
-          lemma lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(
+          lemma lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantInfo.Key}(
             s: LPlusState,
             s': LPlusState,
             path: LAtomic_Path,
@@ -1657,7 +1657,7 @@ namespace Microsoft.Armada
             requires GlobalInv(s)
             requires LAtomic_NextPath(s, s', path, tid)
             requires InductiveInv(s')
-            ensures  {globalInvariantPair.Value}(s')
+            ensures  {globalInvariantInfo.Value}(s')
           {{
             { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
             ProofCustomizationGoesHere();
@@ -1665,7 +1665,7 @@ namespace Microsoft.Armada
         ";
         pgp.AddLemma(str);
         lemmaInvocations += $@"
-          lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(s, s', path, tid);
+          lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantInfo.Key}(s, s', path, tid);
         ";
       }
 
@@ -1702,7 +1702,6 @@ namespace Microsoft.Armada
       {
         string yieldPredicateName = yieldPredicateInfo.Key;
         string fullyQualifiedYPName = yieldPredicateInfo.Value;
-        string revelation = yieldPredicateInfo.Opaque ? $"reveal {fullyQualifiedYPName}();\n" : "";
 
         str = $@"
           lemma lemma_YieldPredicateReflexive_{yieldPredicateName}(s:LPlusState, actor:Armada_ThreadHandle)
@@ -1710,7 +1709,7 @@ namespace Microsoft.Armada
             requires actor in s.s.threads
             ensures {fullyQualifiedYPName}(s, s, actor)
           {{
-            { revelation }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
@@ -1733,7 +1732,7 @@ namespace Microsoft.Armada
             requires YieldPredicate(s2, s3, actor)
             ensures  {fullyQualifiedYPName}(s1, s3, actor)
           {{
-            { revelation }
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
@@ -1754,7 +1753,6 @@ namespace Microsoft.Armada
             ensures  {fullyQualifiedYPName}(s, s', actor)
           {{
             { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
-            { revelation }
             ProofCustomizationGoesHere();
           }}
         ";
@@ -1847,18 +1845,19 @@ namespace Microsoft.Armada
       string str;
       string body = "";
 
-      foreach (var globalInvariantName in globalInvariantNames)
+      foreach (var globalInvariantInfo in globalInvariantInfos)
       {
         str = $@"
-          lemma lemma_GlobalInvariantSatisfiedInitially_{globalInvariantName.Key}(s:LPlusState)
+          lemma lemma_GlobalInvariantSatisfiedInitially_{globalInvariantInfo.Key}(s:LPlusState)
             requires LPlus_Init(s)
-            ensures  {globalInvariantName.Value}(s)
+            ensures  {globalInvariantInfo.Value}(s)
           {{
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
 
-        body += $"lemma_GlobalInvariantSatisfiedInitially_{globalInvariantName.Key}(s);\n";
+        body += $"lemma_GlobalInvariantSatisfiedInitially_{globalInvariantInfo.Key}(s);\n";
       }
 
       str = $@"
@@ -2415,7 +2414,7 @@ namespace Microsoft.Armada
 
       // If the global invariant is just "true", generate a very simple lemma:
 
-      if (!globalInvariantNames.Any()) {
+      if (!globalInvariantInfos.Any()) {
         str = @"
           lemma lemma_StraightlineBehaviorsSatisfyGlobalInvariant()
             ensures StraightlineBehaviorsSatisfyGlobalInvariant(GetConcurrentHoareLogicRequest())
@@ -2436,7 +2435,7 @@ namespace Microsoft.Armada
       // Otherwise, create two files for each global invariant, one to reason about all straightline behaviors
       // and one to reason about specific straightline behaviors.
 
-      foreach (var item in globalInvariantNames)
+      foreach (var item in globalInvariantInfos)
       {
         var invName = item.Key;
 
@@ -2476,10 +2475,10 @@ namespace Microsoft.Armada
                                 .Concat(sbd.GetStatesAndPaths(extractorSB, false))
                                 .Concat(new List<string>{ "path", "s'" }));
 
-          foreach (var kv in globalInvariantNames)
+          foreach (var globalInvariantInfo in globalInvariantInfos)
           {
-            var invName = kv.Key;
-            var invPred = kv.Value;
+            var invName = globalInvariantInfo.Key;
+            var invPred = globalInvariantInfo.Value;
             str = $@"
               lemma lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
                 {expandedParamDeclarations}
@@ -2533,7 +2532,7 @@ namespace Microsoft.Armada
               lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
               if InductiveInv(s') {{
           ";
-          str += String.Concat(globalInvariantNames.Select(kv => kv.Key).Select(invName => $@"
+          str += String.Concat(globalInvariantInfos.Select(info => info.Key).Select(invName => $@"
                 lemma_EnumeratedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
                   {enumeratedParamValues}
                 );
@@ -4082,7 +4081,6 @@ namespace Microsoft.Armada
           {
             var predName = yieldPredicateInfo.Key;
             var predFun = yieldPredicateInfo.Value;
-            var revelation = yieldPredicateInfo.Opaque ? $"reveal {predFun}();\n" : "";
 
             str = $@"
               lemma lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}(
@@ -4095,7 +4093,6 @@ namespace Microsoft.Armada
                 requires other_tid in {extractorExpanded.State(sbd.NumSteps)}.s.threads
                 ensures  {predFun}({extractorExpanded.State(sbd.NumSteps)}, {extractorExpanded.State(sbd.NumSteps + 1)}, other_tid)
               {{
-                { revelation }
                 ProofCustomizationGoesHere();
               }}
             ";

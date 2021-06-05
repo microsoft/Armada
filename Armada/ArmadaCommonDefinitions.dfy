@@ -570,7 +570,7 @@ module ArmadaCommonDefinitions {
 
   predicate Armada_HeapInvariant(h: Armada_Heap)
   {
-    && h.valid * h.freed == {}
+    && (forall p :: p in h.valid ==> p !in h.freed)
     && 0 in h.freed
     && !(0 in h.valid)
     && Armada_TreeProperties(h.tree)

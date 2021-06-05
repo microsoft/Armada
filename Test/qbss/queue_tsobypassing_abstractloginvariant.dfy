@@ -25,10 +25,9 @@ lemma lemma_NoSetIntersectionImpliesNoCommonElements<T>(a:set<T>, b:set<T>)
 
 predicate WeakHeapInvariant(h: Armada_Heap)
 {
-    && h.valid * h.freed == {}
+    && (forall p :: p in h.valid ==> p !in h.freed)
     && 0 in h.freed
     && !(0 in h.valid)
-    && (forall p {:trigger Armada_TriggerPointer(p)} :: Armada_TriggerPointer(p) in h.valid ==> p !in h.freed)
     && Armada_TreeProperties(h.tree)
     && (forall p {:trigger Armada_TriggerPointer(p)} :: 
         Armada_TriggerPointer(p) in h.tree &&
