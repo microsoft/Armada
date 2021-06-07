@@ -4061,8 +4061,21 @@ namespace Microsoft.Armada
             }
           }
           case "Minusable":
-            satisfied = t.IsNumericBased() || t.IsBitVectorType || t.IsBigOrdinalType || t.IsCharType || t is SetType || t is MultiSetType;
+            satisfied = t.IsNumericBased() || t.IsBitVectorType || t.IsBigOrdinalType || t.IsCharType || t is SetType || t is MultiSetType || t is PointerType;
             break;
+          case "MinusRight": {
+            var xcWithExprs = (XConstraintWithExprs)this;
+            var e = xcWithExprs.Exprs[0];
+            if (t is PointerType) {
+              resolver.ConstrainToIntegerType(e, "pointer arithmetic requires integral right-hand operand (got {0})");
+              moreXConstraints = true;
+              return true;
+            } else {
+              resolver.ConstrainSubtypeRelation(t, e.Type, e.tok, "type of right argument to - ({0}) must agree with the result type ({1})", e.Type, t);
+              convertedIntoOtherTypeConstraints = true;
+              return true;
+            }
+          }
           case "Mullable":
             satisfied = t.IsNumericBased() || t.IsBitVectorType || t is SetType || t is MultiSetType;
             break;
@@ -12436,7 +12449,7 @@ namespace Microsoft.Armada
               expr.Type = new InferredTypeProxy();
               AddXConstraint(e.tok, "Minusable", expr.Type, "type of - must be of a numeric type, bitvector type, ORDINAL, char, or a set-like type (instead got {0})");
               ConstrainSubtypeRelation(expr.Type, e.E0.Type, expr.tok, "type of left argument to - ({0}) must agree with the result type ({1})", e.E0.Type, expr.Type);
-              ConstrainSubtypeRelation(expr.Type, e.E1.Type, expr.tok, "type of right argument to - ({0}) must agree with the result type ({1})", e.E1.Type, expr.Type);
+              AddXConstraint(e.tok, "MinusRight", expr.Type, e.E1, "type of right argument to - ({0}) must agree with the result type, or, if result is pointer, must be integral");
             }
             break;
 

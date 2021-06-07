@@ -163,7 +163,7 @@ namespace Microsoft.Armada {
         var updated_index = $"{tree}[{operand1.Val}].child_type.i {BinaryExpr.OpcodeString(op)} {operand2val}";
         crashAvoidance.Add($"0 <= {updated_index} < |{tree}[{parent}].children|");
 
-        // return tree[operand1.parent].children[child_type.i + operand2]
+        // return tree[operand1.parent].children[child_type.i {op} operand2]
         return new ArmadaRValue(crashAvoidance, $"{tree}[{parent}].children[{updated_index}]");
       }
 
