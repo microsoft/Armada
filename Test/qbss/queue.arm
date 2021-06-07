@@ -540,6 +540,11 @@ proof NoTSOUseAbstractQueueForLog {
       assert WeakeningInvariant_ext(s');
     "
 
+    extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_enqueue_End_to_exit @"
+      assert MemorySafetyElementArray(s'.s.mem);
+      assert WeakeningInvariant_ext(s');
+    "
+
     extra lemma_InvariantPredicateMaintainedByPath_WeakeningInvariant_From_dequeue_read_index_update_To_dequeue_End @"
       lemma_mod_auto(s.s.mem.globals.queue.number_elements as int);
       assert MemorySafetyElementArray(s'.s.mem);

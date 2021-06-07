@@ -600,6 +600,10 @@ proof L4_L5 {
     Q_push_facts(s3.s.ghosts.Q, tid);
   "
 
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait @"
+    reveal UserInv_inv_sb();
+  "
+
   extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait @"
     reveal UserInv_inv_Q();
     reveal UserInv_inv_sb();
