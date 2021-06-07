@@ -82,5 +82,5 @@ level D using SharedStructs2 {
 proof CD {
   refinement C D
   weakening
-  inductive_invariant XNotOne
+  inductive_invariant {:opaque} XNotOne
 }

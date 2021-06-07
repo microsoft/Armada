@@ -31,12 +31,12 @@ module RefinementConvolutionModule {
       ==> RefinementPair(s1, s5) in r15
   }
 
-  predicate RefinementRelationTransitive<T>(relation:RefinementRelation<T, T>)
+  predicate RefinementRelationTransitive<T(!new)>(relation:RefinementRelation<T, T>)
   {
     RefinementRelationsConvolve(relation, relation, relation)
   }
 
-  predicate BehaviorRefinesWhatOtherBehaviorRefines<LState, MState, HState(!new)>(
+  predicate BehaviorRefinesWhatOtherBehaviorRefines<LState(!new), MState(!new), HState(!new)>(
     lb:seq<LState>,
     mb:seq<MState>,
     lh_relation:RefinementRelation<LState, HState>,
@@ -46,7 +46,7 @@ module RefinementConvolutionModule {
     forall hb :: BehaviorRefinesBehavior(mb, hb, mh_relation) ==> BehaviorRefinesBehavior(lb, hb, lh_relation)
   }
 
-  lemma lemma_RefinementConvolution<L, M, H>(
+  lemma lemma_RefinementConvolution<L(!new), M(!new), H(!new)>(
     lb:seq<L>,
     mb:seq<M>,
     hb:seq<H>,
@@ -172,7 +172,7 @@ module RefinementConvolutionModule {
     assert BehaviorRefinesBehaviorUsingRefinementMap(lb, hb, lh_relation, lh_map);
   }
 
-  lemma lemma_RefinementConvolutionPure<L, M, H>(
+  lemma lemma_RefinementConvolutionPure<L(!new), M(!new), H(!new)>(
     lb:seq<L>,
     mb:seq<M>,
     hb:seq<H>,
@@ -190,7 +190,7 @@ module RefinementConvolutionModule {
     var lh_map := lemma_RefinementConvolution(lb, mb, hb, lm_relation, mh_relation, lh_relation, lm_map, mh_map);
   }
   
-  lemma lemma_RefinementConvolutionTransitive<T>(
+  lemma lemma_RefinementConvolutionTransitive<T(!new)>(
     lb:seq<T>,
     mb:seq<T>,
     hb:seq<T>,
@@ -204,7 +204,7 @@ module RefinementConvolutionModule {
     lemma_RefinementConvolutionPure(lb, mb, hb, relation, relation, relation);
   }
 
-  lemma lemma_EstablishBehaviorRefinesWhatOtherBehaviorRefines<LState, MState, HState>(
+  lemma lemma_EstablishBehaviorRefinesWhatOtherBehaviorRefines<LState(!new), MState(!new), HState(!new)>(
     lb:seq<LState>,
     mb:seq<MState>,
     lm_relation:RefinementRelation<LState, MState>,
@@ -222,7 +222,7 @@ module RefinementConvolutionModule {
     }
   }
 
-  lemma lemma_SpecRefinesSpecConvolution<S1, S2, S3>(
+  lemma lemma_SpecRefinesSpecConvolution<S1(!new), S2(!new), S3(!new)>(
     spec1: Spec<S1>,
     spec2: Spec<S2>,
     spec3: Spec<S3>,
@@ -246,7 +246,7 @@ module RefinementConvolutionModule {
     }
   }
     
-  lemma lemma_SpecRefinesSpecQuadrupleConvolution<S1, S2, S3, S4, S5>(
+  lemma lemma_SpecRefinesSpecQuadrupleConvolution<S1(!new), S2(!new), S3(!new), S4(!new), S5(!new)>(
     spec1: Spec<S1>,
     spec2: Spec<S2>,
     spec3: Spec<S3>,

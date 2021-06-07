@@ -305,7 +305,7 @@ module CohenLamportReductionSpecModule {
       ==> exists hstep :: ActionTuple(states[0], last(states), hstep) in clrr.spec.next && clrr.idmap(hstep) == actor
   }
 
-  predicate ValidCohenLamportReductionRequest<State(!new), Actor(!new), Step>(
+  predicate ValidCohenLamportReductionRequest<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>
     )
   {

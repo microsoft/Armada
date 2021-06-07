@@ -105,7 +105,7 @@ module AtomicConcurrentHoareLogicSpecModule {
     && (forall s, tid :: ar.cr.get_actor_pc_stack(s, tid).Some? <==> ar.l.get_thread_pc(s, tid).Some?)
   }
 
-  predicate IsValidAtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>(
+  predicate IsValidAtomicConcurrentHoareLogicRequest<LState(!new), LPath(!new), LPC(!new), LProc(!new), HState(!new), HPath(!new), HPC(!new)>(
     ar:AtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>
     )
   {

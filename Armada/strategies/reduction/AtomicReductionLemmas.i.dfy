@@ -105,7 +105,7 @@ module AtomicReductionLemmasModule {
       )
   }
 
-  predicate AtomicNextMultistep<State, Path, PC>(
+  predicate AtomicNextMultistep<State(!new), Path(!new), PC(!new)>(
     asf:AtomicSpecFunctions<State, Path, PC>,
     s:State,
     s':State,
@@ -124,7 +124,7 @@ module AtomicReductionLemmasModule {
       )
   }
 
-  predicate RefinementViaReductionLSpecNext<LState(!new), LPath(!new), LPC, HState, HPath, HPC>(
+  predicate RefinementViaReductionLSpecNext<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     s':LState,
@@ -134,7 +134,7 @@ module AtomicReductionLemmasModule {
     AtomicNextMultistep(arr.l, s, s', multistep.steps, multistep.tid, multistep.tau)
   }
 
-  function GetRefinementViaReductionLSpec<LState(!new), LPath(!new), LPC, HState, HPath, HPC>(
+  function GetRefinementViaReductionLSpec<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     ) : AnnotatedBehaviorSpec<LState, Armada_Multistep<LPath>>
   {
@@ -143,7 +143,7 @@ module AtomicReductionLemmasModule {
       iset s, s', multistep | RefinementViaReductionLSpecNext(arr, s, s', multistep) :: ActionTuple(s, s', multistep))
   }
 
-  predicate RefinementViaReductionHSpecNext<LState(!new), LPath(!new), LPC, HState, HPath, HPC>(
+  predicate RefinementViaReductionHSpecNext<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     s':LState,
@@ -153,7 +153,7 @@ module AtomicReductionLemmasModule {
     GenericNextReduced(arr, s, s', multistep.steps, multistep.tid, multistep.tau)
   }
 
-  function GetRefinementViaReductionHSpec<LState(!new), LPath(!new), LPC, HState, HPath, HPC>(
+  function GetRefinementViaReductionHSpec<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     ) : AnnotatedBehaviorSpec<LState, Armada_Multistep<LPath>>
   {
@@ -220,7 +220,7 @@ module AtomicReductionLemmasModule {
     (s:LState) => !arr.l.state_ok(s)
   }
 
-  function GetRefinementViaReductionRequest<LState, LPath, LPC, HState, HPath, HPC>(
+  function GetRefinementViaReductionRequest<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     ) : RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>
   {
@@ -488,7 +488,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_TakingAtomicMultistepKeepsThreadYielding<State, Path, PC>(
+  lemma lemma_TakingAtomicMultistepKeepsThreadYielding<State(!new), Path(!new), PC(!new)>(
     asf:AtomicSpecFunctions<State, Path, PC>,
     s:State,
     s':State,
@@ -525,7 +525,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_StateAmongAnnotatedReachablesHasThreadYielding<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_StateAmongAnnotatedReachablesHasThreadYielding<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     tid:Armada_ThreadHandle
@@ -659,7 +659,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_StateAmongAnnotatedReachablesSatisfiesInv<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_StateAmongAnnotatedReachablesSatisfiesInv<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState
     )
@@ -729,7 +729,7 @@ module AtomicReductionLemmasModule {
     true
   }
 
-  predicate PerformRightMoveThroughPredicate<LState, LPath, LPC, HState, HPath, HPC>(
+  predicate PerformRightMoveThroughPredicate<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     other_tid:Armada_ThreadHandle,
     other_states_before:seq<LState>,
@@ -748,7 +748,7 @@ module AtomicReductionLemmasModule {
              OKAndPCTypesMatch(arr, other_states'[i], other_states_after[i-|other_states_before|+1], other_tid))
   }
 
-  predicate PerformRightMoveRemainingPredicate<LState, LPath, LPC, HState, HPath, HPC>(
+  predicate PerformRightMoveRemainingPredicate<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     mover_states_before:seq<LState>,
@@ -771,7 +771,7 @@ module AtomicReductionLemmasModule {
   // LEMMAS SUPPORTING PERFORM-RIGHT-MOVE
   //////////////////////////////////////////
 
-  lemma lemma_PerformRightMoveSingle<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveSingle<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -812,7 +812,7 @@ module AtomicReductionLemmasModule {
     s2' := arr.l.path_next(s1, other_path, other_tid);
   }
 
-  lemma lemma_PerformRightMoveThroughHelper<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveThroughHelper<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -923,7 +923,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMoveThrough<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveThrough<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1012,7 +1012,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMoveOne<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveOne<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1063,7 +1063,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMoveRemainingHelper1<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveRemainingHelper1<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1148,7 +1148,7 @@ module AtomicReductionLemmasModule {
     lemma_LastOfConcatenationIsLastOfLatter([last(other_states_mid)], mover_states_after);
   }
 
-  lemma lemma_PerformRightMoveRemainingHelper2<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveRemainingHelper2<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1263,7 +1263,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMoveRemaining<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveRemaining<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1377,7 +1377,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMoveAll<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMoveAll<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -1446,7 +1446,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformRightMove<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformRightMove<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s1:LState,
     s2:LState,
@@ -1485,7 +1485,7 @@ module AtomicReductionLemmasModule {
   // LEFT-MOVER ENABLEMENT LEMMAS
   //////////////////////////////////////////
 
-  lemma lemma_GenerateLeftMoverSequenceOfSubpaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_GenerateLeftMoverSequenceOfSubpaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     tid:Armada_ThreadHandle
@@ -1548,7 +1548,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_GenerateLeftMoverSequence<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_GenerateLeftMoverSequence<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     tid:Armada_ThreadHandle
@@ -1656,7 +1656,7 @@ module AtomicReductionLemmasModule {
     assert last(states) == single_states[pos] == last(single_states);
   }
 
-  lemma lemma_LeftMoversAlwaysEnabled<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LeftMoversAlwaysEnabled<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -1685,7 +1685,7 @@ module AtomicReductionLemmasModule {
   // LEMMAS ABOUT LIFTING ACTION SEQUENCES
   ////////////////////////////////////////////
 
-  function CombineMultisteps<LState, LPath, LPC, HState, HPath, HPC>(
+  function CombineMultisteps<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     trace:seq<Armada_Multistep<LPath>>
     ) : seq<LPath>
@@ -1693,7 +1693,7 @@ module AtomicReductionLemmasModule {
     if |trace| == 0 then [] else trace[0].steps + CombineMultisteps(arr, trace[1..])
   }
 
-  lemma lemma_CombineMultistepsEffectOnGetStateSequence<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineMultistepsEffectOnGetStateSequence<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     states:seq<LState>,
     trace:seq<Armada_Multistep<LPath>>,
@@ -1792,7 +1792,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_CombineMultistepsCreatesValidHPathHelper<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineMultistepsCreatesValidHPathHelper<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     s':LState,
@@ -1823,7 +1823,7 @@ module AtomicReductionLemmasModule {
     assert IsNonyieldingOrInPhase(arr, states[i], multistep.tid);
   }
 
-  lemma lemma_CombineMultistepsCreatesValidHPath<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineMultistepsCreatesValidHPath<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     states:seq<LState>,
     trace:seq<Armada_Multistep<LPath>>,
@@ -1907,7 +1907,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_CombineMultistepsPreservesStateNextSeq<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineMultistepsPreservesStateNextSeq<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     states:seq<LState>,
     trace:seq<Armada_Multistep<LPath>>,
@@ -1948,7 +1948,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_LiftActionSequenceCaseMultiplePaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftActionSequenceCaseMultiplePaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     states:seq<LState>,
@@ -1997,7 +1997,7 @@ module AtomicReductionLemmasModule {
     assert GenericNextReduced(arr, states[0], last(states), paths, actor.v, false);
   }
 
-  lemma lemma_LiftActionSequenceCasePath<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftActionSequenceCasePath<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     states:seq<LState>,
@@ -2028,7 +2028,7 @@ module AtomicReductionLemmasModule {
     assert GenericNextReduced(arr, s, s', hmultistep.steps, hmultistep.tid, hmultistep.tau);
   }
 
-  lemma lemma_LiftActionSequenceCaseTau<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftActionSequenceCaseTau<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     states:seq<LState>,
@@ -2055,7 +2055,7 @@ module AtomicReductionLemmasModule {
     assert false;
   }
 
-  lemma lemma_LiftActionSequence<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LiftActionSequence<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     states:seq<LState>,
@@ -2087,7 +2087,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_ActionSequencesLiftable<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_ActionSequencesLiftable<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2107,7 +2107,7 @@ module AtomicReductionLemmasModule {
   // LEMMAS PROVING VALIDITY OF GENERATED CRASHING REDUCTION REQUEST
   //////////////////////////////////////////////////////////////////////////
 
-  lemma lemma_IfAtomicReductionRequestValidThenCrashingCantGoDirectlyFromPhase2ToPhase1<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_IfAtomicReductionRequestValidThenCrashingCantGoDirectlyFromPhase2ToPhase1<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2141,7 +2141,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_IfAtomicReductionRequestValidThenCrashingPhaseUnaffectedByOtherActorsHelper<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_IfAtomicReductionRequestValidThenCrashingPhaseUnaffectedByOtherActorsHelper<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2183,7 +2183,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_IfAtomicReductionRequestValidThenCrashingPhaseUnaffectedByOtherActors<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_IfAtomicReductionRequestValidThenCrashingPhaseUnaffectedByOtherActors<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2207,7 +2207,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PostCrashStepsStutter<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PostCrashStepsStutter<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2230,7 +2230,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_RightMoversPreserveStateRefinement<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_RightMoversPreserveStateRefinement<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2274,7 +2274,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoversPreserveStateRefinement<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LeftMoversPreserveStateRefinement<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2307,7 +2307,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_MoveLeftMoverLeftOneAsSinglePath<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_MoveLeftMoverLeftOneAsSinglePath<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -2352,7 +2352,7 @@ module AtomicReductionLemmasModule {
     lemma_ExecutingPathDoesntChangeOtherActorPCType(arr, state_after_mover_path, state_after_both_paths, other_path, other_tid, mover_tid);
   }
 
-  lemma {:timeLimitMultiplier 2} lemma_MoveLeftMoverLeftAsSinglePaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma {:timeLimitMultiplier 2} lemma_MoveLeftMoverLeftAsSinglePaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -2437,7 +2437,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_MoveLeftMoversLeftAsSinglePaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_MoveLeftMoversLeftAsSinglePaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -2539,7 +2539,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_PerformLeftMoveAll<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformLeftMoveAll<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     mover_tid:Armada_ThreadHandle,
     other_tid:Armada_ThreadHandle,
@@ -2597,7 +2597,7 @@ module AtomicReductionLemmasModule {
     } 
   }
 
-  lemma lemma_PerformLeftMove<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_PerformLeftMove<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s1:LState,
     s2:LState,
@@ -2632,7 +2632,7 @@ module AtomicReductionLemmasModule {
     lemma_AtomicNextLastElement(arr.l, s2', s3, multistep1.steps, multistep1.tid, other_states');
   }
 
-  lemma lemma_RightMoversCommute<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_RightMoversCommute<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2662,7 +2662,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_LeftMoversCommute<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LeftMoversCommute<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -2696,7 +2696,7 @@ module AtomicReductionLemmasModule {
   // RIGHT MOVER CRASH PRESERVATION
   //////////////////////////////////////
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverPathOtherPathSequence<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverPathOtherPathSequence<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2773,7 +2773,7 @@ module AtomicReductionLemmasModule {
     other_multistep_states' := [initial_state] + other_multistep_states_mid;
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverOtherArmada_Multistep<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverOtherArmada_Multistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2812,7 +2812,7 @@ module AtomicReductionLemmasModule {
         other_multistep_states);
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverOtherMultistep<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationOneRightMoverOtherMultistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2846,7 +2846,7 @@ module AtomicReductionLemmasModule {
         other_multistep, right_mover, right_mover_tid);
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationRightMoverPathSequenceOtherMultistep<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationRightMoverPathSequenceOtherMultistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2910,7 +2910,7 @@ module AtomicReductionLemmasModule {
         all_but_last(right_mover_states));
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservationRightMoverArmada_MultistepOtherMultistep<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservationRightMoverArmada_MultistepOtherMultistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2944,7 +2944,7 @@ module AtomicReductionLemmasModule {
         other_multistep, right_mover.steps, right_mover.tid, right_mover_states);
   }
 
-  lemma lemma_DemonstrateRightMoverCrashPreservation<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateRightMoverCrashPreservation<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -2979,7 +2979,7 @@ module AtomicReductionLemmasModule {
         right_mover, other_multistep);
   }
 
-  lemma lemma_RightMoverCrashPreservation<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_RightMoverCrashPreservation<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -3017,7 +3017,7 @@ module AtomicReductionLemmasModule {
   // LEFT MOVERS ENABLED BEFORE CRASH
   //////////////////////////////////////
 
-  lemma lemma_CombineLeftMoverSubpathsIntoPathsOneIteration<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineLeftMoverSubpathsIntoPathsOneIteration<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     tid:Armada_ThreadHandle,
@@ -3142,7 +3142,7 @@ module AtomicReductionLemmasModule {
     assert AtomicNextMultiplePaths(arr.l, last(multistates'), states[pos'], partial_paths', tid);
   }
 
-  lemma lemma_CombineLeftMoverSubpathsIntoPaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_CombineLeftMoverSubpathsIntoPaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     tid:Armada_ThreadHandle,
@@ -3204,7 +3204,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashPathSequencePart2<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashPathSequencePart2<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3298,7 +3298,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashPath<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashPath<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3371,7 +3371,7 @@ module AtomicReductionLemmasModule {
   }
 
   lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashPathSequence
-    <LState, LPath, LPC, HState, HPath, HPC>(
+    <LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3438,7 +3438,7 @@ module AtomicReductionLemmasModule {
   }
 
   lemma lemma_DemonstrateLeftMoversEnabledBeforeCrashCrashArmada_Multistep
-    <LState, LPath, LPC, HState, HPath, HPC>(
+    <LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3478,7 +3478,7 @@ module AtomicReductionLemmasModule {
         left_mover_tid);
   } 
 
-  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrash<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoversEnabledBeforeCrash<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3518,7 +3518,7 @@ module AtomicReductionLemmasModule {
     assert ActionTuple(last(left_mover_states), post_crash_state', crash_multistep) in rr.lspec.next;
   }
 
-  lemma lemma_LeftMoversEnabledBeforeCrash<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LeftMoversEnabledBeforeCrash<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -3551,7 +3551,7 @@ module AtomicReductionLemmasModule {
   //////////////////////////////////////////
 
   lemma lemma_DemonstrateLeftMoverSinglePathSelfCrashPreservationAcrossSinglePath
-    <LState, LPath, LPC, HState, HPath, HPC>(
+    <LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3590,7 +3590,7 @@ module AtomicReductionLemmasModule {
   }
 
   lemma lemma_DemonstrateLeftMoverSinglePathSelfCrashPreservationAcrossPathSequence
-    <LState, LPath, LPC, HState, HPath, HPC>(
+    <LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3646,7 +3646,7 @@ module AtomicReductionLemmasModule {
         mover_tid, other_tau, other_tid);
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationPathSequence<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationPathSequence<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3739,7 +3739,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationArmadaMultistep<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservationArmadaMultistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3780,7 +3780,7 @@ module AtomicReductionLemmasModule {
         mover_states, mover_tid, other_multistep.tau, other_multistep.tid);
   }
 
-  lemma lemma_DemonstrateLeftMoverSelfCrashPreservation<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_DemonstrateLeftMoverSelfCrashPreservation<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     rr:RefinementViaReductionRequest<LState, Option<Armada_ThreadHandle>, Armada_Multistep<LPath>, Armada_Multistep<LPath>>,
     initial_state:LState,
@@ -3813,7 +3813,7 @@ module AtomicReductionLemmasModule {
         arr, rr, initial_state, state_after_other_multistep, state_after_both_paths, other_multistep, left_mover, mover_tid);
   }
 
-  lemma lemma_LeftMoverSelfCrashPreservation<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LeftMoverSelfCrashPreservation<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -3852,7 +3852,7 @@ module AtomicReductionLemmasModule {
   //////////////////////////////////////
 
   lemma lemma_IfAtomicReductionRequestValidThenRefinementViaReductionRequestValid
-    <LState, LPath, LPC, HState, HPath, HPC>(
+    <LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>
     )
     requires ValidAtomicReductionRequest(arr)
@@ -3882,7 +3882,7 @@ module AtomicReductionLemmasModule {
   // UTILITY FUNCTIONS
   //////////////////////////////
 
-  function LMultistepToHMultistep<LState, LPath, LPC, HState, HPath, HPC>(
+  function LMultistepToHMultistep<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     lmultipath:Armada_Multistep<LPath>
     ) : Armada_Multistep<HPath>
@@ -3894,7 +3894,7 @@ module AtomicReductionLemmasModule {
   // UTILITY LEMMAS
   //////////////////////////////
 
-  lemma lemma_ArmadaGetStateSequenceLastElement<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_ArmadaGetStateSequenceLastElement<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     s':LState,
@@ -3960,7 +3960,7 @@ module AtomicReductionLemmasModule {
       case AtomicTraceEntry_Recurrent(tid, yr, rrs, rx) => Armada_Multistep([yr] + rrs + [rx], tid, false)
   }
 
-  function ConvertMultistepToAtomicTraceEntry<LState, LPath, LPC, HState, HPath, HPC>(
+  function ConvertMultistepToAtomicTraceEntry<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     multistep:Armada_Multistep<LPath>
     ) : AtomicTraceEntry<HPath>
@@ -3982,7 +3982,7 @@ module AtomicReductionLemmasModule {
         )
   }
 
-  lemma lemma_ConvertAtomicTraceEntryToMultistepMaintainsNext<State, Path, PC>(
+  lemma lemma_ConvertAtomicTraceEntryToMultistepMaintainsNext<State(!new), Path(!new), PC(!new)>(
     asf:AtomicSpecFunctions<State, Path, PC>,
     s:State,
     s':State,
@@ -4063,7 +4063,7 @@ module AtomicReductionLemmasModule {
     assert AtomicNextMultiplePaths(asf, s, s', paths, tid);
   }
 
-  lemma lemma_IfBehaviorSatisfiesGenericSpecThenItSatisfiesRefinementViaReductionLSpec<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_IfBehaviorSatisfiesGenericSpecThenItSatisfiesRefinementViaReductionLSpec<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     lb:AnnotatedBehavior<LState, AtomicTraceEntry<LPath>>
     ) returns (
@@ -4087,7 +4087,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_LHMaintainsNextRecurrent<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LHMaintainsNextRecurrent<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     ls:LState,
     ls':LState,
@@ -4157,7 +4157,7 @@ module AtomicReductionLemmasModule {
     assert AtomicValidRecursiveStep(arr.h, hs, tid, hyr, hrrs, hrx);
   }
 
-  lemma lemma_LHMaintainsNext<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_LHMaintainsNext<LState(!new), LPath(!new), LPC(!new), HState(!new), HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     ls:LState,
     ls':LState,
@@ -4193,7 +4193,7 @@ module AtomicReductionLemmasModule {
     lemma_LHMaintainsNextRecurrent(arr, ls, ls', lmultistep, hs, hs', hentry);
   }
 
-  lemma lemma_AtomicInvariantHoldsAtIntermediateStateAtomicNextMultiplePaths<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_AtomicInvariantHoldsAtIntermediateStateAtomicNextMultiplePaths<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     s:LState,
     s':LState,
@@ -4216,7 +4216,7 @@ module AtomicReductionLemmasModule {
     }
   }
 
-  lemma lemma_GenericNextReducedBehaviorSatisfiesInv<LState, LPath, LPC, HState, HPath, HPC>(
+  lemma lemma_GenericNextReducedBehaviorSatisfiesInv<LState(!new), LPath(!new), LPC(!new), HState, HPath, HPC>(
     arr:AtomicReductionRequest<LState, LPath, LPC, HState, HPath, HPC>,
     b:AnnotatedBehavior<LState, Armada_Multistep<LPath>>,
     i:int

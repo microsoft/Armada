@@ -513,46 +513,78 @@ proof L4_L5 {
   include_file "L4_L5_helper.dfy"
   import_module Helper
 
-  inductive_invariant trivial_inv "Helper.inv_trivial(s.s)"
+  inductive_invariant {:opaque} trivial_inv "Helper.inv_trivial(s.s)"
 
   inductive_invariant inv_wf "Helper.inv_wf(s.s)" depends_on trivial_inv
 
-  chl_yield_pred {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_nolocks "Helper.yp_nolocks(s.s, s'.s, tid)"
+  chl_yield_pred {:opaque} {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_nolocks "Helper.yp_nolocks(s.s, s'.s, tid)"
 
-  chl_yield_pred {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_locks "Helper.yp_locks(s.s, s'.s, tid)"
+  chl_yield_pred {:opaque} {:excludeMethod acquire, release} {:excludeLoop client_Start} yp_locks "Helper.yp_locks(s.s, s'.s, tid)"
 
-  chl_invariant inv_Q "Helper.inv_Q(s.s)"
+  chl_invariant {:opaque} inv_Q "Helper.inv_Q(s.s)"
 
-  chl_invariant inv_sb "Helper.inv_sb(s.s)"
+  chl_invariant {:opaque} inv_sb "Helper.inv_sb(s.s)"
 
-  chl_invariant inv_wait_clear "Helper.inv_wait_clear(s.s)"
+  chl_invariant {:opaque} inv_wait_clear "Helper.inv_wait_clear(s.s)"
 
-  chl_invariant inv_next_deliver "Helper.inv_next_deliver(s.s)"
+  chl_invariant {:opaque} inv_next_deliver "Helper.inv_next_deliver(s.s)"
 
-  chl_local_invariant acquire_1 inv_Q_tail "(|ghosts.Q| == 0 <==> ghosts.ghost_tail == 0) && (|ghosts.Q| != 0 ==> ghosts.ghost_tail == ghosts.Q[|s.s.ghosts.Q|-1])"
+  chl_local_invariant {:opaque} acquire_1 inv_Q_tail "(|ghosts.Q| == 0 <==> ghosts.ghost_tail == 0) && (|ghosts.Q| != 0 ==> ghosts.ghost_tail == ghosts.Q[|s.s.ghosts.Q|-1])"
 
-  chl_local_invariant acquire_3 inv_prev "tid in ghosts.Q && threads[tid].top.acquire.prev == if owner_of(tid, ghosts.Q) then 0 else Helper.pred(tid, ghosts.Q)"
+  chl_local_invariant {:opaque} acquire_3 inv_prev "tid in ghosts.Q && threads[tid].top.acquire.prev == if owner_of(tid, ghosts.Q) then 0 else Helper.pred(tid, ghosts.Q)"
 
-  chl_local_invariant release_5 inv_next_correct "|ghosts.Q| > 1 && globals.locks[tid].next == ghosts.Q[1]"
+  chl_local_invariant {:opaque} release_5 inv_next_correct "|ghosts.Q| > 1 && globals.locks[tid].next == ghosts.Q[1]"
 
-  chl_local_invariant release_6 inv_head_waiting "|ghosts.Q| > 1 && owner_of(tid, ghosts.Q) && globals.locks[ghosts.Q[1]].wait != 0 && ghosts.Q[1] in threads && waiting_pc(threads[ghosts.Q[1]].pc)"
+  chl_local_invariant {:opaque} release_6 inv_head_waiting "|ghosts.Q| > 1 && owner_of(tid, ghosts.Q) && globals.locks[ghosts.Q[1]].wait != 0 && ghosts.Q[1] in threads && waiting_pc(threads[ghosts.Q[1]].pc)"
 
   // loop entry
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_acquire_Y_Yielded_wait "reveal yp_storebuffer();"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnEntry_acquire_Y_Yielded_wait @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    reveal yp_storebuffer();
+  "
 
   // loop back
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_acquire_YY_YieldedRevisited_wait "yp_storebuffer_trans();"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLoopModifiesClausesOnJumpBack_acquire_YY_YieldedRevisited_wait @"
+    reveal UserInv_inv_sb();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    yp_storebuffer_trans();
+  "
 
   // postconditions
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesPostcondition_release_YN_Yielded_End "Q_pop_facts(s11.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesPostcondition_release_YN_Yielded_End @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    Q_pop_facts(s11.s.ghosts.Q);
+  "
 
   // local invs
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_From_release_6_To_release_End "unique_Q_facts(s11.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserLocalInvariant_release_6_inv_head_waiting();
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    unique_Q_facts(s11.s.ghosts.Q);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_UB_From_release_6_To_release_End "unique_Q_facts(s11.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_6_Then_UB_From_release_6_To_release_End @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    unique_Q_facts(s11.s.ghosts.Q);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_5_Then_From_release_5_To_release_6 "unique_Q_facts(s9.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_release_YN_Yielded_5_Then_From_release_5_To_release_6 @"
+    reveal UserLocalInvariant_release_5_inv_next_correct();
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    unique_Q_facts(s9.s.ghosts.Q);
+  "
 
   // inv_wf
 
@@ -560,13 +592,38 @@ proof L4_L5 {
 
   // inv_sb
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    Q_push_facts(s3.s.ghosts.Q, tid);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait "assert waiting_pc(s11.s.threads[tid].pc);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait @"
+    reveal UserInv_inv_sb();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_release_Yielded_Start_Then_From_release_Start_To_release_2 "unique_Q_singleton(s1.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    assert waiting_pc(s11.s.threads[tid].pc);
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_release_Yielded_Start_Then_From_release_Start_To_release_2 @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    unique_Q_singleton(s1.s.ghosts.Q);
+  "
 
   extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
     Q_pop_facts(s11.s.ghosts.Q);
     unique_Q_facts(s11.s.ghosts.Q);
 
@@ -576,12 +633,31 @@ proof L4_L5 {
     }
   "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_client_Y_Yielded_JumpBack_6_Then_From_client_JumpBack_6_To_client_Start "assert !waiting_pc(s19.s.threads[tid].pc);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_client_Y_Yielded_JumpBack_6_Then_From_client_JumpBack_6_To_client_Start @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    assert !waiting_pc(s19.s.threads[tid].pc);
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 @"
+    reveal UserInv_inv_sb();
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_F_To_acquire_End @"
+    reveal UserInv_inv_sb();
+    reveal UserInv_inv_wait_clear();
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_sb_client_Y_YieldedRevisited_Start_Then_From_client_Start_T_To_client_1 @"
+    reveal UserInv_inv_sb();
+  "
 
   // inv_next_deliver
 
   extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_next_deliver @"
-
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserInv_inv_next_deliver();
     forall tid' | tid' in s'.s.ghosts.Q && !owner_of(tid', s'.s.ghosts.Q) && s'.s.mem.globals.locks[pred(tid', s'.s.ghosts.Q)].next != 0
       ensures s'.s.mem.globals.locks[tid'].wait != 0
       ensures waiting_pc(s'.s.threads[tid'].pc)
@@ -620,9 +696,28 @@ proof L4_L5 {
       }
     }"
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_nolocks();
+    Q_push_facts(s3.s.ghosts.Q, tid);
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_wait_clear();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_locks();
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_F_To_acquire_End @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+  "
 
   extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
     var threads, Q := s11.s.threads, s11.s.ghosts.Q;
     var threads', Q' := s13.s.threads, s13.s.ghosts.Q;
 
@@ -648,24 +743,63 @@ proof L4_L5 {
     assert inv_next_deliver(s13.s);
   "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Y_Yielded_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 "assert waiting_pc(s12.s.threads[tid].pc);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_Y_Yielded_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+    assert waiting_pc(s12.s.threads[tid].pc);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait "assert waiting_pc(s15.s.threads[tid].pc);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_next_deliver_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+    assert waiting_pc(s15.s.threads[tid].pc);
+  "
 
   // inv_Q
-  extra lemma_GlobalInvariantSatisfiedInitially_inv_Q "empty_Q_unique();"
+  extra lemma_GlobalInvariantSatisfiedInitially_inv_Q @"
+    reveal UserInv_trivial_inv();
+    reveal UserInv_inv_Q();
+    empty_Q_unique();
+  "
 
-  extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_Q "unique_Q_facts(s'.s.ghosts.Q);"
+  extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_Q @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    unique_Q_facts(s'.s.ghosts.Q);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_trivial_inv();
+    reveal UserLocalInvariant_acquire_1_inv_Q_tail();
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    Q_push_facts(s3.s.ghosts.Q, tid);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_YN_Yielded_6_Then_From_release_6_To_release_End "Q_pop_facts(s11.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserInv_trivial_inv();
+    reveal UserLocalInvariant_release_6_inv_head_waiting();
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    Q_pop_facts(s11.s.ghosts.Q);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_Yielded_Start_Then_From_release_Start_To_release_2 "empty_Q_unique();"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_Q_release_Yielded_Start_Then_From_release_Start_To_release_2 @"
+    reveal UserInv_trivial_inv();
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    empty_Q_unique();
+  "
 
   // inv_wait_clear
 
   extra lemma_ActorlessStepsMaintainSpecificGlobalInv_inv_wait_clear @"
+    reveal UserInv_trivial_inv();
+    reveal UserInv_inv_sb();
+    reveal UserInv_inv_wait_clear();
     forall tid' | tid' in s'.s.threads
       ensures Armada_GetThreadLocalViewLength(s'.s, tid').globals.locks[tid'].wait == 0 ==> s'.s.mem.globals.locks[tid'].wait == 0
       ensures Armada_GetThreadLocalViewLength(s'.s, tid').globals.locks[tid'].wait == 0 && waiting_pc(s'.s.threads[tid'].pc) ==> owner_of(tid', s'.s.ghosts.Q)
@@ -677,57 +811,144 @@ proof L4_L5 {
         wait_cleared_entry_release_7(s.s, tid, tid');
         assert owner_of(tid', s.s.ghosts.Q);
       }
-    }"
+    }
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_Start_Then_From_acquire_Start_To_acquire_1 "next_wait_non_interference(s1.s, tid, next_entry(tid, 0, L.Armada_PC_acquire_Start));"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_Start_Then_From_acquire_Start_To_acquire_1 @"
+    reveal UserInv_inv_wait_clear();
+    next_wait_non_interference(s1.s, tid, next_entry(tid, 0, L.Armada_PC_acquire_Start));
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "storebuffer_same_localview_general(s3.s, s5.s);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_wait_clear();
+    storebuffer_same_localview_general(s3.s, s5.s);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_4_Then_From_acquire_4_To_acquire_5 "var mem' := apply_storebuffer_snoc(s9.s.mem, s8.s.threads[tid].storeBuffer, wait_entry(tid, 1, L.Armada_PC_acquire_4)); reveal Armada_ApplyStoreBufferEntryLength(); assert Armada_ApplyStoreBufferEntryLength(mem', wait_entry(tid, 1, L.Armada_PC_acquire_4)).globals.locks[tid].wait != 0;"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_4_Then_From_acquire_4_To_acquire_5 @"
+    reveal UserInv_inv_wait_clear();
+    var mem' := apply_storebuffer_snoc(s9.s.mem, s8.s.threads[tid].storeBuffer, wait_entry(tid, 1, L.Armada_PC_acquire_4));
+    reveal Armada_ApplyStoreBufferEntryLength();
+    assert Armada_ApplyStoreBufferEntryLength(mem', wait_entry(tid, 1, L.Armada_PC_acquire_4)).globals.locks[tid].wait != 0;
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait "next_wait_non_interference(s10.s, tid, next_entry(s10.s.threads[tid].top.acquire.prev, tid, L.Armada_PC_acquire_5)); reveal Armada_GetThreadLocalViewLength(); reveal Armada_ApplyStoreBufferLength(); reveal Armada_ApplyStoreBufferEntryLength();"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_Y_Yielded_5_Then_From_acquire_5_To_acquire_wait @"
+    reveal UserInv_inv_wait_clear();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    next_wait_non_interference(s10.s, tid, next_entry(s10.s.threads[tid].top.acquire.prev, tid, L.Armada_PC_acquire_5));
+    reveal Armada_GetThreadLocalViewLength();
+    reveal Armada_ApplyStoreBufferLength();
+    reveal Armada_ApplyStoreBufferEntryLength();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_release_YN_Yielded_6_Then_From_release_6_To_release_End "wait_wait_non_interference(s12.s, tid, wait_entry(s12.s.threads[tid].top.release.nextLock, 0, L.Armada_PC_release_7));"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_YY_Yielded_JumpBack_7_Then_From_acquire_JumpBack_7_To_acquire_wait @"
+    reveal UserInv_inv_wait_clear();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 "reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s6.s.mem, s7.s.mem);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_T_To_acquire_JumpBack_7 @"
+    reveal UserInv_inv_wait_clear();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 "reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s16.s.mem, s17.s.mem);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_acquire_YY_YieldedRevisited_wait_Then_From_acquire_wait_F_To_acquire_End @"
+    reveal UserInv_inv_wait_clear();
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserLocalInvariant_release_5_inv_next_correct();
+    reveal UserLocalInvariant_release_6_inv_head_waiting();
+    reveal UserInv_inv_wait_clear();
+    reveal UserYP_yp_nolocks();
+    wait_wait_non_interference(s12.s, tid, wait_entry(s12.s.threads[tid].top.release.nextLock, 0, L.Armada_PC_release_7));
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 @"
+    reveal UserInv_inv_wait_clear();
+    reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s6.s.mem, s7.s.mem);
+  "
+
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_inv_wait_clear_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 @"
+    reveal UserInv_inv_wait_clear();
+    reveal Armada_GetThreadLocalViewLength();locks_independence_generalized(s16.s.mem, s17.s.mem);
+  "
 
   // yp_nolocks
 
   extra lemma_YieldPredicateTransitive_yp_nolocks @"
+    reveal UserYP_yp_nolocks();
     forall ensures yp_storebuffer(s1.s.threads[actor].storeBuffer, s3.s.threads[actor].storeBuffer) {
       reveal yp_storebuffer();
     }
   "
 
-  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_nolocks "reveal yp_storebuffer();"
+  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_nolocks @"
+    reveal UserYP_yp_nolocks();
+    reveal yp_storebuffer();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    Q_push_facts(s3.s.ghosts.Q, tid);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_Yielded_Start_Then_From_release_Start_To_release_2 "empty_Q_unique(); unique_Q_singleton(s1.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_Yielded_Start_Then_From_release_Start_To_release_2 @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    empty_Q_unique();
+    unique_Q_singleton(s1.s.ghosts.Q);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_YN_Yielded_6_Then_From_release_6_To_release_End "Q_pop_facts(s11.s.ghosts.Q);unique_Q_facts(s11.s.ghosts.Q);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_nolocks_release_YN_Yielded_6_Then_From_release_6_To_release_End @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    Q_pop_facts(s11.s.ghosts.Q);
+    unique_Q_facts(s11.s.ghosts.Q);
+  "
 
   // yp_locks
   extra lemma_YieldPredicateTransitive_yp_locks @"
-  reveal yp_storebuffer();
-  var sb1, sb2, sb3 := s1.s.threads[actor].storeBuffer, s2.s.threads[actor].storeBuffer,s3.s.threads[actor].storeBuffer;
-  if !owner_of(actor, s1.s.ghosts.Q) && actor in s1.s.ghosts.Q && 0 < pred(actor, s1.s.ghosts.Q) as int < |s1.s.mem.globals.locks| {
-    if Armada_ApplyStoreBufferLength(s1.s.mem, sb1).globals.locks[actor].wait != 0 &&
-      Armada_ApplyStoreBufferLength(s3.s.mem, sb3).globals.locks[actor].wait == 0 {
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserInv_inv_wait_clear();
+    reveal UserInv_inv_next_deliver();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    reveal yp_storebuffer();
+    var sb1, sb2, sb3 := s1.s.threads[actor].storeBuffer, s2.s.threads[actor].storeBuffer,s3.s.threads[actor].storeBuffer;
+    if !owner_of(actor, s1.s.ghosts.Q) && actor in s1.s.ghosts.Q && 0 < pred(actor, s1.s.ghosts.Q) as int < |s1.s.mem.globals.locks| {
+      if Armada_ApplyStoreBufferLength(s1.s.mem, sb1).globals.locks[actor].wait != 0 &&
+        Armada_ApplyStoreBufferLength(s3.s.mem, sb3).globals.locks[actor].wait == 0 {
+      }
     }
-  }
   "
 
-  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_locks "reveal Armada_GetThreadLocalViewLength();reveal Armada_ApplyStoreBufferLength();reveal Armada_ApplyStoreBufferEntryLength();"
+  extra lemma_ActorlessStepsMaintainYieldPredicate_yp_locks @"
+    reveal UserInv_inv_Q();
+    reveal UserInv_inv_sb();
+    reveal UserYP_yp_locks();
+    reveal Armada_GetThreadLocalViewLength();
+    reveal Armada_ApplyStoreBufferLength();
+    reveal Armada_ApplyStoreBufferEntryLength();
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 "Q_push_facts(s3.s.ghosts.Q, tid);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
+    reveal UserYP_yp_locks();
+    Q_push_facts(s3.s.ghosts.Q, tid);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 "locks_independence(s6.s.mem, s7.s.mem, s6.s.threads[other_tid].storeBuffer);"
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_2_Then_From_acquire_End_To_client_2 @"
+    reveal UserYP_yp_locks();
+    locks_independence(s6.s.mem, s7.s.mem, s6.s.threads[other_tid].storeBuffer);
+  "
 
-  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 "locks_independence(s16.s.mem, s17.s.mem, s16.s.threads[other_tid].storeBuffer);"
-
+  extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_client_Y_Ensured_JumpBack_6_Then_From_release_End_To_client_JumpBack_6 @"
+    reveal UserYP_yp_locks();
+    locks_independence(s16.s.mem, s17.s.mem, s16.s.threads[other_tid].storeBuffer);
+  "
 }
 
 proof L5_L6 {

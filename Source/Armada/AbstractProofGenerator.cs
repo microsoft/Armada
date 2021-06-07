@@ -34,8 +34,9 @@ namespace Microsoft.Armada
     protected string initLemmaName;
     protected string nextLemmaName;
     protected string nextStepBody;
+    protected bool opaque;
 
-    public InvariantInfo(string i_key, string i_name, List<string> i_dependencies, string i_nextStepBody="")
+    public InvariantInfo(string i_key, string i_name, List<string> i_dependencies, string i_nextStepBody, bool i_opaque)
     {
       key = i_key;
       name = i_name;
@@ -43,6 +44,7 @@ namespace Microsoft.Armada
       initLemmaName = null;
       nextLemmaName = null;
       nextStepBody = i_nextStepBody;
+      opaque = i_opaque;
     }
 
     public virtual string Key { get { return key; } }
@@ -61,14 +63,32 @@ namespace Microsoft.Armada
       return dependency;
     }
 
+    private string GetRevelations(IEnumerable<InvariantInfo> allInvariants)
+    {
+      string revelations = opaque ? $"reveal {Name}();\n" : "";
+      foreach (var dependency in Dependencies) {
+        foreach (var inv in allInvariants) {
+          if (inv.Key == dependency || inv.Key == $"UserInv_{dependency}") {
+            if (inv.opaque) {
+              revelations += $"reveal {inv.Name}();\n";
+              break;
+            }
+          }
+        }
+      }
+      return revelations;
+    }
+
     public virtual void GenerateInitLemma(ProofGenerationParams pgp)
     {
       initLemmaName = $"lemma_InvariantPredicateImpliedByInit_{Key}";
+      var revelation = opaque ? $"reveal {Name}();" : "";
       string str = $@"
         lemma {initLemmaName}(s:LPlusState)
           requires LPlus_Init(s)
           ensures  {Name}(s)
         {{
+          {revelation}
         }}
       ";
       pgp.AddLemma(str, "invariants");
@@ -98,6 +118,7 @@ namespace Microsoft.Armada
           ensures  {Name}(s')
         {{
           { pr.GetOpenValidPathInvocation(atomicPath) }
+          { GetRevelations(allInvariants) }
           ProofCustomizationGoesHere();
           { nextStepBody }
         }}
@@ -135,6 +156,7 @@ namespace Microsoft.Armada
           requires s' == {atomicSpec.Prefix}_GetStateAfterPath(s, path, tid)
           ensures  {Name}(s')
         {{
+          { GetRevelations(allInvariants) }
           match path {{
             { finalCases }
           }}
@@ -153,7 +175,8 @@ namespace Microsoft.Armada
 
   public class UserInvariantInfo : InvariantInfo
   {
-    public UserInvariantInfo(string i_key, string i_name, List<string> i_dependencies) : base(i_key, i_name, i_dependencies)
+    public UserInvariantInfo(string i_key, string i_name, List<string> i_dependencies, bool i_opaque)
+      : base(i_key, i_name, i_dependencies, "", i_opaque)
     {
     }
   }
@@ -161,7 +184,7 @@ namespace Microsoft.Armada
   public class InternalInvariantInfo : InvariantInfo
   {
     public InternalInvariantInfo(string i_key, string i_name, List<string> i_dependencies, string nextStepBody="")
-      : base(i_key, i_name, i_dependencies, nextStepBody)
+      : base(i_key, i_name, i_dependencies, nextStepBody, false /* opaque: no */)
     {
     }
   }
@@ -656,10 +679,11 @@ namespace Microsoft.Armada
       string invKey = d.InvariantName;
       string invName, str;
       var userInvariants = pgp.symbolsLow.GlobalInvariants;
+      var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
       if (d.Code != null) {
         invName = $"UserInv_{invKey}";
         str = $@"
-          predicate {invName}(s:LPlusState)
+          predicate {attrs} {invName}(s:LPlusState)
           {{
             var threads := s.s.threads;
             var globals := s.s.mem.globals;
@@ -669,24 +693,30 @@ namespace Microsoft.Armada
           }}
         ";
         pgp.AddPredicate(str, "defs");
+        if (d.CanBeRevealed()) {
+          pgp.AddOpaqueUserDef(invName);
+        }
       }
       else if (userInvariants.ContainsKey(invKey)) {
         var inv = userInvariants[invKey];
         invName = $"UserInv_{invKey}";
         str = $@"
-          predicate {invName}(splus:LPlusState)
+          predicate {attrs} {invName}(splus:LPlusState)
           {{
             L.{inv.TranslatedName}(splus.s)
           }}
         ";
         pgp.AddPredicate(str, "defs");
+        if (d.CanBeRevealed()) {
+          pgp.AddOpaqueUserDef(invName);
+        }
       }
       else {
         AH.PrintError(pgp.prog, d.tok, $"No invariant named {invKey} found among the invariants");
         return;
       }
       var dependencies = new List<string>(d.Dependencies);
-      invariants.Add(new UserInvariantInfo(invKey, invName, dependencies));
+      invariants.Add(new UserInvariantInfo(invKey, invName, dependencies, d.CanBeRevealed()));
     }
 
     private void ParseImports()
@@ -1046,6 +1076,7 @@ namespace Microsoft.Armada
     {
       var liftFile = pgp.proofFiles.CreateAuxiliaryProofFile("LiftToAtomic");
       liftFile.IncludeAndImportGeneratedFile("specs");
+      liftFile.IncludeAndImportGeneratedFile("defs");
       liftFile.IncludeAndImportGeneratedFile("pceffect");
       liftFile.IncludeAndImportGeneratedFile("revelations");
       liftFile.IncludeAndImportGeneratedFile("latomic");
@@ -1208,6 +1239,7 @@ namespace Microsoft.Armada
     {
       var liftFile = pgp.proofFiles.CreateAuxiliaryProofFile("LiftFromAtomic");
       liftFile.IncludeAndImportGeneratedFile("specs");
+      liftFile.IncludeAndImportGeneratedFile("defs");
       liftFile.IncludeAndImportGeneratedFile("pceffect");
       liftFile.IncludeAndImportGeneratedFile("revelations");
       liftFile.IncludeAndImportGeneratedFile("hatomic");
@@ -3201,11 +3233,12 @@ namespace Microsoft.Armada
       str = @"
         lemma lemma_GetThreadLocalViewAlwaysCommutesWithConvert()
           ensures forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle
-                    {:trigger H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)}
+                    {:trigger L.Armada_GetThreadLocalView(ls, tid)}
                     :: tid in ls.threads ==>
                     ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid)) == H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)
         {
-          forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle | tid in ls.threads
+          forall ls:L.Armada_TotalState, tid:Armada_ThreadHandle {:trigger L.Armada_GetThreadLocalView(ls, tid)}
+            | tid in ls.threads
             ensures ConvertSharedMemory_LH(L.Armada_GetThreadLocalView(ls, tid)) ==
                     H.Armada_GetThreadLocalView(ConvertTotalState_LH(ls), tid)
           {

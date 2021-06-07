@@ -10,7 +10,7 @@ module GenericArmadaLemmasModule {
   import opened GeneralRefinementLemmasModule
   import opened GenericArmadaSpecModule
 
-  lemma lemma_BehaviorToAnnotatedBehavior<State, OneStep, PC>(
+  lemma lemma_BehaviorToAnnotatedBehavior<State(!new), OneStep(!new), PC(!new)>(
     asf:Armada_SpecFunctions<State, OneStep, PC>,
     b:seq<State>
     ) returns (
@@ -43,7 +43,7 @@ module GenericArmadaLemmasModule {
     return AnnotatedBehavior(b, trace);
   }
 
-  lemma lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes<State, OneStep, PC>(
+  lemma lemma_IfAnnotatedBehaviorSatisfiesSpecThenBehaviorDoes<State(!new), OneStep(!new), PC(!new)>(
     asf:Armada_SpecFunctions<State, OneStep, PC>,
     ab:AnnotatedBehavior<State, Armada_Multistep<OneStep>>
     )
@@ -59,7 +59,7 @@ module GenericArmadaLemmasModule {
     }
   }
 
-  lemma lemma_ExtendArmadaNextMultipleSteps<State, OneStep, PC>(
+  lemma lemma_ExtendArmadaNextMultipleSteps<State(!new), OneStep(!new), PC(!new)>(
     asf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
     s': State,
@@ -84,7 +84,7 @@ module GenericArmadaLemmasModule {
     }
   }
 
-  lemma lemma_ExtendArmadaStepsStartNonyielding<State, OneStep, PC>(
+  lemma lemma_ExtendArmadaStepsStartNonyielding<State(!new), OneStep(!new), PC(!new)>(
     asf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
     s': State,
@@ -119,7 +119,7 @@ module GenericArmadaLemmasModule {
     }
   }
 
-  lemma lemma_CombineArmadaNextMultipleSteps<State, OneStep, PC>(
+  lemma lemma_CombineArmadaNextMultipleSteps<State(!new), OneStep(!new), PC(!new)>(
     asf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
     s': State,
@@ -150,7 +150,7 @@ module GenericArmadaLemmasModule {
     }
   }
 
-  lemma lemma_CombineArmadaStepsStartNonyielding<State, OneStep, PC>(
+  lemma lemma_CombineArmadaStepsStartNonyielding<State(!new), OneStep(!new), PC(!new)>(
     asf: Armada_SpecFunctions<State, OneStep, PC>,
     s: State,
     s': State,

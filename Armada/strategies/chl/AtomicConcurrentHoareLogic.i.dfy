@@ -29,7 +29,7 @@ module AtomicConcurrentHoareLogicModule {
   import opened AtomicConcurrentHoareLogicSpecModule
   import opened AtomicConcurrentHoareLogicLemmasModule
 
-  lemma lemma_LiftAtomicToAtomicUsingCHLRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>(
+  lemma lemma_LiftAtomicToAtomicUsingCHLRequest<LState(!new), LPath(!new), LPC(!new), LProc(!new), HState(!new), HPath(!new), HPC(!new)>(
     ar:AtomicConcurrentHoareLogicRequest<LState, LPath, LPC, LProc, HState, HPath, HPC>
     )
     requires IsValidAtomicConcurrentHoareLogicRequest(ar)

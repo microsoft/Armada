@@ -60,7 +60,7 @@ module GeneralRefinementModule {
         exists hb :: BehaviorRefinesBehavior(lb, hb, relation) && BehaviorSatisfiesSpec(hb, spec)
     }
 
-    predicate SpecRefinesSpec<L(!new), H>(
+    predicate SpecRefinesSpec<L(!new), H(!new)>(
         l_spec:Spec<L>,
         h_spec:Spec<H>,
         relation:RefinementRelation<L, H>

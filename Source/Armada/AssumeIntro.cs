@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 namespace Microsoft.Armada
 {
   ////////////////////////////////////////////////
-  // CHLStepEffect
+  // CHLPathEffect
   ////////////////////////////////////////////////
 
   abstract class CHLPathEffect
@@ -146,12 +146,34 @@ namespace Microsoft.Armada
     public override bool CanFollow(StraightlineState state) { return false; }
   }
 
+  ////////////////////////////////////////////////
+  // CHLPredicateInfo
+  ////////////////////////////////////////////////
+
+  class CHLPredicateInfo
+  {
+    public readonly string Key;
+    public readonly string Value;
+    public readonly bool Opaque;
+
+    public CHLPredicateInfo(string i_key, string i_value, bool i_opaque)
+    {
+      Key = i_key;
+      Value = i_value;
+      Opaque = i_opaque;
+    }
+  }
+
+  ////////////////////////////////////////////////
+  // AssumeIntroPathGenerator
+  ////////////////////////////////////////////////
+
   public class AssumeIntroProofGenerator : AbstractProofGenerator
   {
     private AssumeIntroStrategyDecl strategy;
     private List<ArmadaPC> lpcs;
-    private Dictionary<string, string> globalInvariantNames;
-    private Dictionary<string, string> yieldPredicateNames;
+    private List<CHLPredicateInfo> globalInvariantInfos;
+    private List<CHLPredicateInfo> yieldPredicateInfos;
     private Dictionary<string, List<string>> extraPreconditionsForMethod;
     private Dictionary<string, List<string>> extraPostconditionsForMethod;
     private Dictionary<ArmadaPC, List<string>> extraLoopModifiesClausesForPC;
@@ -178,8 +200,8 @@ namespace Microsoft.Armada
       strategy = i_strategy;
       lpcs = new List<ArmadaPC>();
       i_pgp.symbolsLow.AllMethods.AppendAllPCs(lpcs);
-      globalInvariantNames = new Dictionary<string, string>();
-      yieldPredicateNames = new Dictionary<string, string>();
+      globalInvariantInfos = new List<CHLPredicateInfo>();
+      yieldPredicateInfos = new List<CHLPredicateInfo>();
       extraPreconditionsForMethod = new Dictionary<string, List<string>>();
       extraPostconditionsForMethod = new Dictionary<string, List<string>>();
       extraLoopModifiesClausesForPC = new Dictionary<ArmadaPC, List<string>>();
@@ -943,11 +965,11 @@ namespace Microsoft.Armada
           var d = (CHLInvariantArmadaProofDecl)topDecl;
           var invKey = d.InvariantName;
           var invName = d.InvariantName;
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           if (d.Code != null) {
             invName = $"UserInv_{invKey}";
             str = $@"
-              predicate {invName}(s: LPlusState)
-                requires InductiveInv(s)
+              predicate {attrs} {invName}(s: LPlusState)
               {{
                 var threads := s.s.threads;
                 var globals := s.s.mem.globals;
@@ -957,23 +979,29 @@ namespace Microsoft.Armada
               }}
             ";
             pgp.AddPredicate(str, "defs");
+            if (d.CanBeRevealed()) {
+              pgp.AddOpaqueUserDef(invName);
+            }
           }
           else if (userInvariants.ContainsKey(invKey)) {
             var inv = userInvariants[invKey];
             invName = $"UserInv_{invKey}";
             str = $@"
-              predicate {invName}(s: LPlusState)
+              predicate {attrs} {invName}(s: LPlusState)
               {{
                 L.{inv.TranslatedName}(s.s)
               }}
               ";
             pgp.AddPredicate(str, "defs");
+            if (d.CanBeRevealed()) {
+              pgp.AddOpaqueUserDef(invName);
+            }
           }
           else {
             AH.PrintError(pgp.prog, d.tok, $"No invariant named {invKey} found among the invariants");
             continue;
           }
-          globalInvariantNames[invKey] = invName;
+          globalInvariantInfos.Add(new CHLPredicateInfo(invKey, invName, d.CanBeRevealed()));
           allInvClauses += $"  && {invName}(s)\n";
         }
       }
@@ -1005,8 +1033,9 @@ namespace Microsoft.Armada
           }
           var methodName = pc.methodName;
           var fnName = $"UserLocalInvariant_{methodName}_{pc.Name}_{d.ClauseName}";
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           str = $@"
-            predicate {fnName}(s:LPlusState, tid:Armada_ThreadHandle)
+            predicate {attrs} {fnName}(s:LPlusState, tid:Armada_ThreadHandle)
               requires tid in s.s.threads
               requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
               requires InductiveInv(s)
@@ -1019,6 +1048,9 @@ namespace Microsoft.Armada
             }}
           ";
           pgp.AddPredicate(str, "defs");
+          if (d.CanBeRevealed()) {
+            pgp.AddOpaqueUserDef(fnName);
+          }
           pcsWithLocalInvariants.Add(pc);
           if (!extraLocalInvariantClausesForPC.ContainsKey(pc)) {
             extraLocalInvariantClausesForPC[pc] = new List<string>{ fnName };
@@ -1031,8 +1063,9 @@ namespace Microsoft.Armada
           var d = (CHLPreconditionArmadaProofDecl)topDecl;
           var methodName = d.MethodName;
           var preconditionName = $"UserPrecondition_{methodName}_{d.PreconditionName}";
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           str = $@"
-            predicate {preconditionName}(s:LPlusState, tid:Armada_ThreadHandle)
+            predicate {attrs} {preconditionName}(s:LPlusState, tid:Armada_ThreadHandle)
               requires tid in s.s.threads
               requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
             {{
@@ -1044,6 +1077,9 @@ namespace Microsoft.Armada
             }}
           ";
           pgp.AddPredicate(str, "defs");
+          if (d.CanBeRevealed()) {
+            pgp.AddOpaqueUserDef(preconditionName);
+          }
           if (!extraPreconditionsForMethod.ContainsKey(methodName)) {
             extraPreconditionsForMethod[methodName] = new List<string>{ preconditionName };
           }
@@ -1055,8 +1091,9 @@ namespace Microsoft.Armada
           var d = (CHLPostconditionArmadaProofDecl)topDecl;
           var methodName = d.MethodName;
           var postconditionName = $"UserPostcondition_{methodName}_{d.PostconditionName}";
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           str = $@"
-            predicate {postconditionName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+            predicate {attrs} {postconditionName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
               requires tid in s.s.threads
               requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
               requires tid in s'.s.threads
@@ -1073,6 +1110,9 @@ namespace Microsoft.Armada
             }}
           ";
           pgp.AddPredicate(str, "defs");
+          if (d.CanBeRevealed()) {
+            pgp.AddOpaqueUserDef(postconditionName);
+          }
           if (!extraPostconditionsForMethod.ContainsKey(methodName)) {
             extraPostconditionsForMethod[methodName] = new List<string>{ postconditionName };
           }
@@ -1088,8 +1128,9 @@ namespace Microsoft.Armada
           }
           var methodName = pc.methodName;
           var fnName = $"UserLoopModifies_{methodName}_{pc.Name}_{d.ClauseName}";
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           str = $@"
-            predicate {fnName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+            predicate {attrs} {fnName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
               requires tid in s.s.threads
               requires s.s.threads[tid].top.Armada_StackFrame_{methodName}?
               requires tid in s'.s.threads
@@ -1106,6 +1147,9 @@ namespace Microsoft.Armada
             }}
           ";
           pgp.AddPredicate(str, "defs");
+          if (d.CanBeRevealed()) {
+            pgp.AddOpaqueUserDef(fnName);
+          }
           if (!extraLoopModifiesClausesForPC.ContainsKey(pc)) {
             extraLoopModifiesClausesForPC[pc] = new List<string>{ fnName };
           }
@@ -1128,10 +1172,11 @@ namespace Microsoft.Armada
           var d = (CHLYieldPredicateArmadaProofDecl)topDecl;
           var ypKey = d.YieldPredicateName;
           var ypName = d.YieldPredicateName;
+          var attrs = d.CanBeRevealed() ? "{:opaque}" : "";
           if (d.Code != null) {
             ypName = $"UserYP_{ypKey}";
             str = $@"
-              predicate {ypName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+              predicate {attrs} {ypName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
               {{
                 var threads := s.s.threads;
                 var globals := s.s.mem.globals;
@@ -1144,23 +1189,29 @@ namespace Microsoft.Armada
               }}
             ";
             pgp.AddPredicate(str, "defs");
+            if (d.CanBeRevealed()) {
+              pgp.AddOpaqueUserDef(ypName);
+            }
           }
           else if (userYPs.ContainsKey(ypKey)) {
             ypName = $"UserYP_{ypKey}";
             var yp = userYPs[ypKey];
             str = $@"
-              predicate {ypName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
+              predicate {attrs} {ypName}(s:LPlusState, s':LPlusState, tid:Armada_ThreadHandle)
               {{
                 tid in s.s.threads && tid in s'.s.threads ==> L.{yp.TranslatedName}(s.s, s'.s, tid)
               }}
             ";
             pgp.AddPredicate(str, "defs");
+            if (d.CanBeRevealed()) {
+              pgp.AddOpaqueUserDef(ypName);
+            }
           }
           else {
             AH.PrintError(pgp.prog, d.tok, $"No yield predicate named {ypKey} found among the yield predicates");
             continue;
           }
-          yieldPredicateNames[ypKey] = ypName;
+          yieldPredicateInfos.Add(new CHLPredicateInfo(ypKey, ypName, d.CanBeRevealed()));
           allYieldClauses += $"  && {ypName}(s, s', tid)\n";
         }
       }
@@ -1504,7 +1555,8 @@ namespace Microsoft.Armada
                                          "AtomicPathCantAffectOtherThreadsExceptViaFork",
                                          atomicPath => true,
                                          atomicPath => postcondition,
-                                         atomicPath => "");
+                                         atomicPath => "",
+                                         false);
       lAtomic.GenerateOverallAtomicPathLemma("others",
                                              "AtomicPathCantAffectOtherThreadsExceptViaFork",
                                              "AtomicPathCantAffectOtherThreadsExceptViaFork",
@@ -1557,7 +1609,8 @@ namespace Microsoft.Armada
                                          "ForkedActorsStartAtEntryPointsWithEmptyStacks",
                                          atomicPath => true,
                                          atomicPath => postcondition,
-                                         atomicPath => "");
+                                         atomicPath => "",
+                                         false);
       lAtomic.GenerateOverallAtomicPathLemma("ForkedStack",
                                              "ForkedActorsStartAtEntryPointsWithEmptyStacks",
                                              "ForkedActorsStartAtEntryPointsWithEmptyStacks",
@@ -1589,10 +1642,10 @@ namespace Microsoft.Armada
       string lemmaInvocations = "";
 
       var pr = new PathPrinter(lAtomic);
-      foreach (var globalInvariantPair in globalInvariantNames)
+      foreach (var globalInvariantInfo in globalInvariantInfos)
       {
         str = $@"
-          lemma lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(
+          lemma lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantInfo.Key}(
             s: LPlusState,
             s': LPlusState,
             path: LAtomic_Path,
@@ -1603,7 +1656,7 @@ namespace Microsoft.Armada
             requires GlobalInv(s)
             requires LAtomic_NextPath(s, s', path, tid)
             requires InductiveInv(s')
-            ensures  {globalInvariantPair.Value}(s')
+            ensures  {globalInvariantInfo.Value}(s')
           {{
             { pr.GetOpenValidPathInvocation(lAtomic.TauPath) }
             ProofCustomizationGoesHere();
@@ -1611,7 +1664,7 @@ namespace Microsoft.Armada
         ";
         pgp.AddLemma(str);
         lemmaInvocations += $@"
-          lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantPair.Key}(s, s', path, tid);
+          lemma_ActorlessStepsMaintainSpecificGlobalInv_{globalInvariantInfo.Key}(s, s', path, tid);
         ";
       }
 
@@ -1644,10 +1697,10 @@ namespace Microsoft.Armada
 
       var pr = new PathPrinter(lAtomic);
 
-      foreach (var yieldPredicatePair in yieldPredicateNames)
+      foreach (var yieldPredicateInfo in yieldPredicateInfos)
       {
-        string yieldPredicateName = yieldPredicatePair.Key;
-        string fullyQualifiedYPName = yieldPredicatePair.Value;
+        string yieldPredicateName = yieldPredicateInfo.Key;
+        string fullyQualifiedYPName = yieldPredicateInfo.Value;
 
         str = $@"
           lemma lemma_YieldPredicateReflexive_{yieldPredicateName}(s:LPlusState, actor:Armada_ThreadHandle)
@@ -1655,6 +1708,7 @@ namespace Microsoft.Armada
             requires actor in s.s.threads
             ensures {fullyQualifiedYPName}(s, s, actor)
           {{
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
@@ -1677,6 +1731,7 @@ namespace Microsoft.Armada
             requires YieldPredicate(s2, s3, actor)
             ensures  {fullyQualifiedYPName}(s1, s3, actor)
           {{
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
@@ -1712,9 +1767,9 @@ namespace Microsoft.Armada
             ensures cr.yield_pred(s, s, actor)
           {
       ";
-      foreach (var yieldPredicateName in yieldPredicateNames.Keys)
+      foreach (var yieldPredicateInfo in yieldPredicateInfos)
       {
-        str += $"lemma_YieldPredicateReflexive_{yieldPredicateName}(s, actor);\n";
+        str += $"lemma_YieldPredicateReflexive_{yieldPredicateInfo.Key}(s, actor);\n";
       }
       str += @"
           }
@@ -1737,9 +1792,9 @@ namespace Microsoft.Armada
           {
             if actor in s1.s.threads && actor in s2.s.threads && actor in s3.s.threads {
       ";
-      foreach (var yieldPredicateName in yieldPredicateNames.Keys)
+      foreach (var yieldPredicateInfo in yieldPredicateInfos)
       {
-        str += $"        lemma_YieldPredicateTransitive_{yieldPredicateName}(s1, s2, s3, actor);";
+        str += $"        lemma_YieldPredicateTransitive_{yieldPredicateInfo.Key}(s1, s2, s3, actor);";
       }
       str += @"
             }
@@ -1771,10 +1826,10 @@ namespace Microsoft.Armada
             assert LAtomic_NextPath(s, s', step.path, step.tid);
             lemma_ActorlessStepsMaintainGlobalInv(s, s', step.path, step.tid);
       ";
-      foreach (var yieldPredicateName in yieldPredicateNames.Keys)
+      foreach (var yieldPredicateInfo in yieldPredicateInfos)
       {
         str += $@"
-            lemma_ActorlessStepsMaintainYieldPredicate_{yieldPredicateName}(s, s', step.path, step.tid, actor);
+            lemma_ActorlessStepsMaintainYieldPredicate_{yieldPredicateInfo.Key}(s, s', step.path, step.tid, actor);
         ";
       }
       str += @"
@@ -1789,18 +1844,19 @@ namespace Microsoft.Armada
       string str;
       string body = "";
 
-      foreach (var globalInvariantName in globalInvariantNames)
+      foreach (var globalInvariantInfo in globalInvariantInfos)
       {
         str = $@"
-          lemma lemma_GlobalInvariantSatisfiedInitially_{globalInvariantName.Key}(s:LPlusState)
+          lemma lemma_GlobalInvariantSatisfiedInitially_{globalInvariantInfo.Key}(s:LPlusState)
             requires LPlus_Init(s)
-            ensures  {globalInvariantName.Value}(s)
+            ensures  {globalInvariantInfo.Value}(s)
           {{
+            ProofCustomizationGoesHere();
           }}
         ";
         pgp.AddLemma(str);
 
-        body += $"lemma_GlobalInvariantSatisfiedInitially_{globalInvariantName.Key}(s);\n";
+        body += $"lemma_GlobalInvariantSatisfiedInitially_{globalInvariantInfo.Key}(s);\n";
       }
 
       str = $@"
@@ -2357,7 +2413,7 @@ namespace Microsoft.Armada
 
       // If the global invariant is just "true", generate a very simple lemma:
 
-      if (!globalInvariantNames.Any()) {
+      if (!globalInvariantInfos.Any()) {
         str = @"
           lemma lemma_StraightlineBehaviorsSatisfyGlobalInvariant()
             ensures StraightlineBehaviorsSatisfyGlobalInvariant(GetConcurrentHoareLogicRequest())
@@ -2378,7 +2434,7 @@ namespace Microsoft.Armada
       // Otherwise, create two files for each global invariant, one to reason about all straightline behaviors
       // and one to reason about specific straightline behaviors.
 
-      foreach (var item in globalInvariantNames)
+      foreach (var item in globalInvariantInfos)
       {
         var invName = item.Key;
 
@@ -2418,10 +2474,10 @@ namespace Microsoft.Armada
                                 .Concat(sbd.GetStatesAndPaths(extractorSB, false))
                                 .Concat(new List<string>{ "path", "s'" }));
 
-          foreach (var kv in globalInvariantNames)
+          foreach (var globalInvariantInfo in globalInvariantInfos)
           {
-            var invName = kv.Key;
-            var invPred = kv.Value;
+            var invName = globalInvariantInfo.Key;
+            var invPred = globalInvariantInfo.Value;
             str = $@"
               lemma lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
                 {expandedParamDeclarations}
@@ -2475,7 +2531,7 @@ namespace Microsoft.Armada
               lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
               if InductiveInv(s') {{
           ";
-          str += String.Concat(globalInvariantNames.Select(kv => kv.Key).Select(invName => $@"
+          str += String.Concat(globalInvariantInfos.Select(info => info.Key).Select(invName => $@"
                 lemma_EnumeratedStraightlineBehaviorSatisfiesGlobalInvariant_{invName}_{sbd.Name}_Then_{atomicPath.Name}(
                   {enumeratedParamValues}
                 );
@@ -3955,7 +4011,7 @@ namespace Microsoft.Armada
 
       // If the yield predicate is just "true", generate a very simple lemma:
 
-      if (!yieldPredicateNames.Any()) {
+      if (!yieldPredicateInfos.Any()) {
         str = @"
           lemma lemma_StraightlineBehaviorsSatisfyYieldPredicate()
             ensures StraightlineBehaviorsSatisfyYieldPredicate(GetConcurrentHoareLogicRequest())
@@ -3983,7 +4039,7 @@ namespace Microsoft.Armada
 
       // Otherwise, create a file for each yield predicate conjunct
 
-      foreach (var item in yieldPredicateNames)
+      foreach (var item in yieldPredicateInfos)
       {
         var predName = item.Key;
         var specificPredFile = pgp.proofFiles.CreateAuxiliaryProofFile($"Yield_{predName}");
@@ -4020,10 +4076,10 @@ namespace Microsoft.Armada
                                 .Concat(sbd.GetStatesAndPaths(extractorSB, false))
                                 .Concat(new List<string>{ "path", "s'" }));
 
-          foreach (var kv in yieldPredicateNames)
+          foreach (var yieldPredicateInfo in yieldPredicateInfos)
           {
-            var predName = kv.Key;
-            var predFun = kv.Value;
+            var predName = yieldPredicateInfo.Key;
+            var predFun = yieldPredicateInfo.Value;
 
             str = $@"
               lemma lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}(
@@ -4088,7 +4144,7 @@ namespace Microsoft.Armada
               assert YieldPredicateBasic(s, s', other_tid);
               lemma_EnumerateStraightlineBehavior_{sbd.Name}(sb, tid, proc);
           ";
-          str += String.Concat(yieldPredicateNames.Select(kv => kv.Key).Select(predName => $@"
+          str += String.Concat(yieldPredicateInfos.Select(kv => kv.Key).Select(predName => $@"
               lemma_EnumeratedStraightlineBehaviorSatisfiesYieldPredicate_{predName}_{sbd.Name}_Then_{atomicPath.Name}({enumeratedParamValues});
           "));
           str += "}";

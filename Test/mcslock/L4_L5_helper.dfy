@@ -147,10 +147,10 @@ module Helper
   }
 
   predicate inv_sb(s: Armada_TotalState)
-    requires inv_wf(s)
   {
-    var threads := s.threads;
-    forall tid {:trigger threads[tid].storeBuffer} :: tid in threads ==> inv_sb_thread(tid, threads[tid].storeBuffer, s)
+    inv_wf(s) ==>
+      var threads := s.threads;
+      forall tid {:trigger threads[tid].storeBuffer} :: tid in threads ==> inv_sb_thread(tid, threads[tid].storeBuffer, s)
   }
 
   predicate inv_sb_thread(tid: Armada_ThreadHandle, sb: seq<Armada_StoreBufferEntry>, s: Armada_TotalState)
@@ -220,8 +220,8 @@ module Helper
   }
 
   predicate inv_next_deliver(s: Armada_TotalState)
-    requires inv_wf(s)
   {
+    inv_wf(s) ==>
     && var threads, Q := s.threads, s.ghosts.Q;
     && (forall tid {:trigger waiting_pc(threads[tid].pc)} :: tid in Q && !owner_of(tid, Q) && waiting_pc(threads[tid].pc) && |threads[tid].storeBuffer| == 0 ==> s.mem.globals.locks[pred(tid, Q)].next != 0)
     && (forall tid {:trigger pred(tid, Q)} :: tid in Q && !owner_of(tid, Q) && s.mem.globals.locks[pred(tid, Q)].next != 0 ==>
@@ -232,8 +232,8 @@ module Helper
   }
 
   predicate inv_wait_clear(s: Armada_TotalState)
-    requires inv_wf(s)
   {
+    inv_wf(s) ==>
     //except in acquire, no wait clear
     && var threads, Q := s.threads, s.ghosts.Q;
     && (forall tid {:trigger s.mem.globals.locks[tid]} :: tid in threads ==>
@@ -243,8 +243,8 @@ module Helper
   }
 
   predicate inv_Q(s: Armada_TotalState)
-    requires inv_wf(s)
   {
+    inv_wf(s) ==>
     && var Q, locks, threads, tail := s.ghosts.Q, s.mem.globals.locks, s.threads, s.ghosts.ghost_tail;
       // linked-list correctness
       && (forall tid {:trigger pred(tid, Q)} :: tid in Q && !owner_of(tid, Q) ==>

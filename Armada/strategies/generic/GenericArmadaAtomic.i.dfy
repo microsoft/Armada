@@ -412,7 +412,7 @@ module GenericArmadaAtomicModule {
     }
   }
 
-  lemma lemma_AtomicBehaviorToAnnotatedBehavior<State, Path, PC>(
+  lemma lemma_AtomicBehaviorToAnnotatedBehavior<State(!new), Path(!new), PC(!new)>(
     asf:AtomicSpecFunctions<State, Path, PC>,
     b:seq<State>
     ) returns (
@@ -442,7 +442,7 @@ module GenericArmadaAtomicModule {
     ab := AnnotatedBehavior(b, trace);
   }
 
-  lemma lemma_AtomicAnnotatedBehaviorSatisfiesAtomicSpec<State, Path, PC>(
+  lemma lemma_AtomicAnnotatedBehaviorSatisfiesAtomicSpec<State(!new), Path(!new), PC(!new)>(
     asf:AtomicSpecFunctions<State, Path, PC>,
     ab:AnnotatedBehavior<State, AtomicTraceEntry<Path>>
     )

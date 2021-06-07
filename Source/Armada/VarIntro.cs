@@ -388,22 +388,22 @@ namespace Microsoft.Armada
         cases += $"case Armada_GlobalStaticVar_{varName} => {{ }}\n";
       }
 
-      var extraRequires = canIntroduceTau ? "requires CanConvertGlobalStaticVar_HL(lv)" : "";
+      var extraRequires = canIntroduceTau ? "requires CanConvertGlobalStaticVar_HL(hv)" : "";
       str = $@"
         lemma lemma_ApplyStoreBufferEntryUnaddressableCommutesWithConvert(
-          lglobals:H.Armada_Globals, lv:H.Armada_GlobalStaticVar, fields:seq<int>, value:Armada_PrimitiveValue,
-          hv:L.Armada_GlobalStaticVar, hglobals1:L.Armada_Globals, hglobals2:L.Armada_Globals)
+          hglobals:H.Armada_Globals, hv:H.Armada_GlobalStaticVar, fields:seq<int>, value:Armada_PrimitiveValue,
+          lv:L.Armada_GlobalStaticVar, lglobals1:L.Armada_Globals, lglobals2:L.Armada_Globals)
           { extraRequires }
-          requires hv == ConvertGlobalStaticVar_HL(lv)
-          requires hglobals1 == ConvertGlobals_HL(H.Armada_ApplyTauUnaddressable(lglobals, lv, fields, value))
-          requires hglobals2 == L.Armada_ApplyTauUnaddressable(ConvertGlobals_HL(lglobals), hv, fields, value)
-          ensures  hglobals1 == hglobals2
+          requires lv == ConvertGlobalStaticVar_HL(hv)
+          requires lglobals1 == ConvertGlobals_HL(H.Armada_ApplyTauUnaddressable(hglobals, hv, fields, value))
+          requires lglobals2 == L.Armada_ApplyTauUnaddressable(ConvertGlobals_HL(hglobals), lv, fields, value)
+          ensures  lglobals1 == lglobals2
         {{
-          match lv
+          match hv
             case Armada_GlobalStaticVarNone =>
             {{
-              var hglobals := ConvertGlobals_HL(lglobals);
-              assert hglobals1 == hglobals == hglobals2;
+              var lglobals := ConvertGlobals_HL(hglobals);
+              assert lglobals1 == lglobals == lglobals2;
             }}
             { cases }
         }}
@@ -413,34 +413,34 @@ namespace Microsoft.Armada
       if (canIntroduceTau) {
         str = @"
           lemma lemma_ApplyingUnconvertibleStoreBufferEntryDoesntChangeHState(
-            lmem:H.Armada_SharedMemory,
-            lentry:H.Armada_StoreBufferEntry
+            hmem:H.Armada_SharedMemory,
+            hentry:H.Armada_StoreBufferEntry
             )
-            requires !CanConvertStoreBufferEntry_HL(lentry)
-            ensures  ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(lmem, lentry)) == ConvertSharedMemory_HL(lmem)
+            requires !CanConvertStoreBufferEntry_HL(hentry)
+            ensures  ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(hmem, hentry)) == ConvertSharedMemory_HL(hmem)
           {
           }
         ";
         pgp.AddLemma(str, "utility");
       }
 
-      extraRequires = canIntroduceTau ? "requires CanConvertStoreBufferEntry_HL(lentry)" : "";
+      extraRequires = canIntroduceTau ? "requires CanConvertStoreBufferEntry_HL(hentry)" : "";
       str = $@"
-        lemma lemma_ApplyStoreBufferEntryCommutesWithConvert(lmem:H.Armada_SharedMemory, lentry:H.Armada_StoreBufferEntry,
-                                                             hentry:L.Armada_StoreBufferEntry, hmem1:L.Armada_SharedMemory,
-                                                             hmem2:L.Armada_SharedMemory)
+        lemma lemma_ApplyStoreBufferEntryCommutesWithConvert(hmem:H.Armada_SharedMemory, hentry:H.Armada_StoreBufferEntry,
+                                                             lentry:L.Armada_StoreBufferEntry, lmem1:L.Armada_SharedMemory,
+                                                             lmem2:L.Armada_SharedMemory)
           { extraRequires }
-          requires hentry == ConvertStoreBufferEntry_HL(lentry)
-          requires hmem1 == ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(lmem, lentry))
-          requires hmem2 == L.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_HL(lmem), hentry)
-          ensures  hmem1 == hmem2
+          requires lentry == ConvertStoreBufferEntry_HL(hentry)
+          requires lmem1 == ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(hmem, hentry))
+          requires lmem2 == L.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_HL(hmem), lentry)
+          ensures  lmem1 == lmem2
         {{
-          match lentry.loc
-            case Armada_StoreBufferLocation_Unaddressable(lv, lfields) =>
+          match hentry.loc
+            case Armada_StoreBufferLocation_Unaddressable(hv, hfields) =>
             {{
-              var hv := ConvertGlobalStaticVar_HL(lv);
-              lemma_ApplyStoreBufferEntryUnaddressableCommutesWithConvert(lmem.globals, lv, lfields, lentry.value, hv, hmem1.globals,
-                                                                          hmem2.globals);
+              var lv := ConvertGlobalStaticVar_HL(hv);
+              lemma_ApplyStoreBufferEntryUnaddressableCommutesWithConvert(hmem.globals, hv, hfields, hentry.value, lv,
+                                                                          lmem1.globals, lmem2.globals);
             }}
             case Armada_StoreBufferLocation_Addressable(p) =>
             {{
@@ -450,40 +450,40 @@ namespace Microsoft.Armada
       pgp.AddLemma(str, "utility");
 
       var mainProof = @"
-        var hmem1' := ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(lmem, lbuf[0]));
-        var hmem2' := L.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_HL(lmem), hbuf[0]);
-        lemma_ApplyStoreBufferEntryCommutesWithConvert(lmem, lbuf[0], hbuf[0], hmem1', hmem2');
-        lemma_ApplyStoreBufferCommutesWithConvert(lmem', lbuf[1..], hbuf[1..], hmem1, hmem2);
+        var lmem1' := ConvertSharedMemory_HL(H.Armada_ApplyStoreBufferEntry(hmem, hbuf[0]));
+        var lmem2' := L.Armada_ApplyStoreBufferEntry(ConvertSharedMemory_HL(hmem), lbuf[0]);
+        lemma_ApplyStoreBufferEntryCommutesWithConvert(hmem, hbuf[0], lbuf[0], lmem1', lmem2');
+        lemma_ApplyStoreBufferCommutesWithConvert(hmem', hbuf[1..], lbuf[1..], lmem1, lmem2);
       ";
       if (canIntroduceTau) {
         mainProof = $@"
-          if CanConvertStoreBufferEntry_HL(lbuf[0]) {{
+          if CanConvertStoreBufferEntry_HL(hbuf[0]) {{
             { mainProof }
           }}
           else {{
-            lemma_ApplyingUnconvertibleStoreBufferEntryDoesntChangeHState(lmem, lbuf[0]);
-            assert ConvertSharedMemory_HL(lmem') == ConvertSharedMemory_HL(lmem);
-            assert hbuf == ConvertStoreBuffer_HL(lbuf[1..]);
-            lemma_ApplyStoreBufferCommutesWithConvert(lmem', lbuf[1..], hbuf, hmem1, hmem2);
+            lemma_ApplyingUnconvertibleStoreBufferEntryDoesntChangeHState(hmem, hbuf[0]);
+            assert ConvertSharedMemory_HL(hmem') == ConvertSharedMemory_HL(hmem);
+            assert lbuf == ConvertStoreBuffer_HL(hbuf[1..]);
+            lemma_ApplyStoreBufferCommutesWithConvert(hmem', hbuf[1..], lbuf, lmem1, lmem2);
           }}
         ";
       }
 
       str = $@"
-        lemma lemma_ApplyStoreBufferCommutesWithConvert(lmem:H.Armada_SharedMemory, lbuf:seq<H.Armada_StoreBufferEntry>,
-                                                        hbuf:seq<L.Armada_StoreBufferEntry>, hmem1:L.Armada_SharedMemory,
-                                                        hmem2:L.Armada_SharedMemory)
-          requires hbuf == ConvertStoreBuffer_HL(lbuf)
-          requires hmem1 == ConvertSharedMemory_HL(H.Armada_ApplyStoreBuffer(lmem, lbuf))
-          requires hmem2 == L.Armada_ApplyStoreBuffer(ConvertSharedMemory_HL(lmem), hbuf)
-          ensures  hmem1 == hmem2
-          decreases |lbuf| + |hbuf|
+        lemma lemma_ApplyStoreBufferCommutesWithConvert(hmem:H.Armada_SharedMemory, hbuf:seq<H.Armada_StoreBufferEntry>,
+                                                        lbuf:seq<L.Armada_StoreBufferEntry>, lmem1:L.Armada_SharedMemory,
+                                                        lmem2:L.Armada_SharedMemory)
+          requires lbuf == ConvertStoreBuffer_HL(hbuf)
+          requires lmem1 == ConvertSharedMemory_HL(H.Armada_ApplyStoreBuffer(hmem, hbuf))
+          requires lmem2 == L.Armada_ApplyStoreBuffer(ConvertSharedMemory_HL(hmem), lbuf)
+          ensures  lmem1 == lmem2
+          decreases |hbuf| + |lbuf|
         {{
-          if |lbuf| == 0 {{
+          if |hbuf| == 0 {{
             return;
           }}
 
-          var lmem' := H.Armada_ApplyStoreBufferEntry(lmem, lbuf[0]);
+          var hmem' := H.Armada_ApplyStoreBufferEntry(hmem, hbuf[0]);
 
           { mainProof }
         }}
@@ -491,32 +491,36 @@ namespace Microsoft.Armada
       pgp.AddLemma(str, "utility");
 
       str = @"
-        lemma lemma_GetThreadLocalViewCommutesWithConvert(ls:HState, hs:LState, tid:Armada_ThreadHandle)
-          requires hs == ConvertTotalState_HL(ls)
-          requires tid in ls.threads;
-          ensures  ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(ls, tid)) == L.Armada_GetThreadLocalView(hs, tid)
+        lemma lemma_GetThreadLocalViewCommutesWithConvert(hs:HState, ls:LState, tid:Armada_ThreadHandle)
+          requires ls == ConvertTotalState_HL(hs)
+          requires tid in hs.threads;
+          ensures  ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(hs, tid)) == L.Armada_GetThreadLocalView(ls, tid)
         {
-          assert tid in hs.threads;
-          lemma_ApplyStoreBufferCommutesWithConvert(ls.mem, ls.threads[tid].storeBuffer,
-                                                    hs.threads[tid].storeBuffer,
-                                                    ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(ls, tid)),
-                                                    L.Armada_GetThreadLocalView(hs, tid));
+          assert tid in ls.threads;
+          lemma_ApplyStoreBufferCommutesWithConvert(hs.mem, hs.threads[tid].storeBuffer,
+                                                    ls.threads[tid].storeBuffer,
+                                                    ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(hs, tid)),
+                                                    L.Armada_GetThreadLocalView(ls, tid));
         }
       ";
       pgp.AddLemma(str, "utility");
 
       str = @"
         lemma lemma_GetThreadLocalViewAlwaysCommutesWithConvert()
-          ensures forall ls:H.Armada_TotalState, tid:Armada_ThreadHandle :: tid in ls.threads ==>
-                    ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(ls, tid)) ==
-                    L.Armada_GetThreadLocalView(ConvertTotalState_HL(ls), tid)
+          ensures forall hs:H.Armada_TotalState, tid:Armada_ThreadHandle
+                    {:trigger H.Armada_GetThreadLocalView(hs, tid)}
+                    :: tid in hs.threads ==>
+                    ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(hs, tid)) ==
+                    L.Armada_GetThreadLocalView(ConvertTotalState_HL(hs), tid)
         {
-          forall ls:H.Armada_TotalState, tid:Armada_ThreadHandle | tid in ls.threads
-            ensures ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(ls, tid)) ==
-                    L.Armada_GetThreadLocalView(ConvertTotalState_HL(ls), tid)
+          forall hs:H.Armada_TotalState, tid:Armada_ThreadHandle
+            {:trigger H.Armada_GetThreadLocalView(hs, tid)}
+            | tid in hs.threads
+            ensures ConvertSharedMemory_HL(H.Armada_GetThreadLocalView(hs, tid)) ==
+                    L.Armada_GetThreadLocalView(ConvertTotalState_HL(hs), tid)
           {
-            var hs := ConvertTotalState_HL(ls);
-            lemma_GetThreadLocalViewCommutesWithConvert(ls, hs, tid);
+            var ls := ConvertTotalState_HL(hs);
+            lemma_GetThreadLocalViewCommutesWithConvert(hs, ls, tid);
           }
         }
       ";
@@ -621,19 +625,19 @@ namespace Microsoft.Armada
 
         str = @"
           lemma lemma_StoreBufferAppendAlwaysCommutesWithConvert()
-          ensures forall lbuf: seq<H.Armada_StoreBufferEntry>, lentry: H.Armada_StoreBufferEntry
-            {:trigger H.Armada_StoreBufferAppend(lbuf, lentry)} ::
-            CanConvertStoreBufferEntry_HL(lentry) ==>
-            L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(lbuf), ConvertStoreBufferEntry_HL(lentry)) ==
-            ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(lbuf, lentry))
+          ensures forall hbuf: seq<H.Armada_StoreBufferEntry>, hentry: H.Armada_StoreBufferEntry
+            {:trigger ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))} ::
+            CanConvertStoreBufferEntry_HL(hentry) ==>
+            L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(hbuf), ConvertStoreBufferEntry_HL(hentry)) ==
+            ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))
         {
-          forall lbuf: seq<H.Armada_StoreBufferEntry>, lentry: H.Armada_StoreBufferEntry
-            {:trigger H.Armada_StoreBufferAppend(lbuf, lentry)}
-            | CanConvertStoreBufferEntry_HL(lentry)
-            ensures L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(lbuf), ConvertStoreBufferEntry_HL(lentry)) ==
-                    ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(lbuf, lentry))
+          forall hbuf: seq<H.Armada_StoreBufferEntry>, hentry: H.Armada_StoreBufferEntry
+            {:trigger ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))}
+            | CanConvertStoreBufferEntry_HL(hentry)
+            ensures L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(hbuf), ConvertStoreBufferEntry_HL(hentry)) ==
+                    ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))
           {
-            lemma_StoreBufferAppendConversion(lbuf, lentry);
+            lemma_StoreBufferAppendConversion(hbuf, hentry);
           }
         }
         ";
@@ -789,17 +793,17 @@ namespace Microsoft.Armada
 
         str = @"
           lemma lemma_StoreBufferAppendAlwaysCommutesWithConvert()
-          ensures forall lbuf: seq<H.Armada_StoreBufferEntry>, lentry: H.Armada_StoreBufferEntry
-            {:trigger H.Armada_StoreBufferAppend(lbuf, lentry)} ::
-            L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(lbuf), ConvertStoreBufferEntry_HL(lentry)) ==
-            ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(lbuf, lentry))
+          ensures forall hbuf: seq<H.Armada_StoreBufferEntry>, hentry: H.Armada_StoreBufferEntry
+            {:trigger ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))} ::
+            L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(hbuf), ConvertStoreBufferEntry_HL(hentry)) ==
+            ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))
         {
-          forall lbuf: seq<H.Armada_StoreBufferEntry>, lentry: H.Armada_StoreBufferEntry
-            {:trigger H.Armada_StoreBufferAppend(lbuf, lentry)}
-            ensures L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(lbuf), ConvertStoreBufferEntry_HL(lentry)) ==
-                    ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(lbuf, lentry))
+          forall hbuf: seq<H.Armada_StoreBufferEntry>, hentry: H.Armada_StoreBufferEntry
+            {:trigger ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))}
+            ensures L.Armada_StoreBufferAppend(ConvertStoreBuffer_HL(hbuf), ConvertStoreBufferEntry_HL(hentry)) ==
+                    ConvertStoreBuffer_HL(H.Armada_StoreBufferAppend(hbuf, hentry))
           {
-            lemma_StoreBufferAppendConversion(lbuf, lentry);
+            lemma_StoreBufferAppendConversion(hbuf, hentry);
           }
         }
         ";
@@ -1334,7 +1338,7 @@ namespace Microsoft.Armada
         {{
           { lpr.GetOpenValidPathInvocation(lAtomicPath) }
 
-          var locv: H.Armada_SharedMemory := H.Armada_GetThreadLocalView(ConvertTotalState_LPlusH(ls), tid);
+          var locv: H.Armada_SharedMemory := H.Armada_GetThreadLocalView(hs, tid);
           var ls' := LAtomic_GetStateAfterPath(ls, lpath, tid);
           hpath := ConvertAtomicPath_LH(lpath);
           var hs' := HAtomic_GetStateAfterPath(hs, hpath, tid);

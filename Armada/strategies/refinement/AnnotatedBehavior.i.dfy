@@ -83,7 +83,7 @@ module AnnotatedBehaviorModule {
         }
     }
 
-    lemma lemma_BehaviorInAnnotatedBehaviorSatisfiesConvertedSpec<State, Step>(
+    lemma lemma_BehaviorInAnnotatedBehaviorSatisfiesConvertedSpec<State(!new), Step(!new)>(
         b:AnnotatedBehavior<State, Step>,
         spec:AnnotatedBehaviorSpec<State, Step>
         )

@@ -307,7 +307,7 @@ module RefinementViaReductionSpecModule {
       ==> exists hstep :: ActionTuple(states[0], last(states), hstep) in rr.hspec.next
   }
 
-  predicate ValidRefinementViaReductionRequest<State(!new), Actor(!new), LStep, HStep>(
+  predicate ValidRefinementViaReductionRequest<State(!new), Actor(!new), LStep(!new), HStep(!new)>(
     rr:RefinementViaReductionRequest<State, Actor, LStep, HStep>
     )
   {

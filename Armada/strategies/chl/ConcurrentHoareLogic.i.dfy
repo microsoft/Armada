@@ -9,7 +9,7 @@ module ConcurrentHoareLogicModule {
   import opened ConcurrentHoareLogicSpecModule
   import opened ConcurrentHoareLogicLemmasModule
 
-  lemma lemma_CHLGlobalInvariantHoldsWhenActorPresent<State, Actor, Step, PC, Proc>(
+  lemma lemma_CHLGlobalInvariantHoldsWhenActorPresent<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr: ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b: AnnotatedBehavior<State, Step>,
     pos: int,
@@ -28,7 +28,7 @@ module ConcurrentHoareLogicModule {
     lemma_StraightlineBehaviorSatisfiesGlobalInvariant(cr, overlay.sb, actor, proc, |overlay.sb.states| - 1);
   }
 
-  lemma lemma_CHLLocalInvariantHoldsWhenActorAboutToStep<State, Actor, Step, PC, Proc>(
+  lemma lemma_CHLLocalInvariantHoldsWhenActorAboutToStep<State(!new), Actor(!new), Step(!new), PC(!new), Proc(!new)>(
     cr: ConcurrentHoareLogicRequest<State, Actor, Step, PC, Proc>,
     b: AnnotatedBehavior<State, Step>,
     pos: int,

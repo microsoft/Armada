@@ -26,7 +26,7 @@ module CohenLamportReductionModule {
   import opened CohenLamportReductionSpecModule
   import opened CohenLamportReductionLemmasModule
 
-  lemma lemma_PerformCohenLamportReduction<State, Actor, Step>(
+  lemma lemma_PerformCohenLamportReduction<State(!new), Actor(!new), Step(!new)>(
     clrr:CohenLamportReductionRequest<State, Actor, Step>,
     lb:AnnotatedBehavior<State, Step>
     ) returns (

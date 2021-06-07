@@ -11,7 +11,7 @@ module GenericArmadaPlusModule
   import opened GeneralRefinementLemmasModule
   import opened GenericArmadaLemmasModule
 
-  predicate InitsMatch<LState(!new), HState(!new), OneStep, PC>(
+  predicate InitsMatch<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -30,7 +30,7 @@ module GenericArmadaPlusModule
       ==> hasf.step_valid(hs, step, tid) && lasf.step_next(ls, step, tid) == convert(hasf.step_next(hs, step, tid))
   }
 
-  predicate TausMatch<LState, HState, OneStep(!new), PC>(
+  predicate TausMatch<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -39,7 +39,7 @@ module GenericArmadaPlusModule
     forall step :: lasf.is_step_tau(step) <==> hasf.is_step_tau(step)
   }
 
-  predicate ThreadPCsMatch<LState(!new), HState(!new), OneStep, PC>(
+  predicate ThreadPCsMatch<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -48,7 +48,7 @@ module GenericArmadaPlusModule
     forall ls, hs, tid :: ls == convert(hs) ==> lasf.get_thread_pc(ls, tid) == hasf.get_thread_pc(hs, tid)
   }
 
-  predicate NonyieldingPCsMatch<LState, HState, OneStep, PC(!new)>(
+  predicate NonyieldingPCsMatch<LState(!new), HState(!new), OneStep(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -57,7 +57,7 @@ module GenericArmadaPlusModule
     forall pc :: lasf.is_pc_nonyielding(pc) <==> hasf.is_pc_nonyielding(pc)
   }
 
-  predicate StateOKsMatch<LState(!new), HState(!new), OneStep, PC>(
+  predicate StateOKsMatch<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -66,7 +66,7 @@ module GenericArmadaPlusModule
     forall ls, hs :: ls == convert(hs) ==> lasf.state_ok(ls) == hasf.state_ok(hs)
   }
 
-  predicate RequirementsForSpecRefinesPlusSpec<LState, HState, OneStep, PC>(
+  predicate RequirementsForSpecRefinesPlusSpec<LState(!new), HState(!new), OneStep(!new), PC(!new)>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState
@@ -80,7 +80,7 @@ module GenericArmadaPlusModule
     && StateOKsMatch(lasf, hasf, convert)
   }
 
-  lemma lemma_LiftStepsStartNonyielding<LState, HState, OneStep, PC>(
+  lemma lemma_LiftStepsStartNonyielding<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState,
@@ -111,7 +111,7 @@ module GenericArmadaPlusModule
     hs' := lemma_LiftStepsStartNonyielding(lasf, hasf, convert, ls_next, ls', hs_next, steps[1..], tid);
   }
 
-  lemma lemma_LiftMultistep<LState, HState, OneStep, PC>(
+  lemma lemma_LiftMultistep<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState,
@@ -148,7 +148,7 @@ module GenericArmadaPlusModule
     }
   }
 
-  lemma lemma_LiftBehavior<LState, HState, OneStep, PC>(
+  lemma lemma_LiftBehavior<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState,
@@ -198,7 +198,7 @@ module GenericArmadaPlusModule
     assert lb[..pos+1] == lb;
   }
 
-  lemma lemma_SpecRefinesPlusSpec<LState, HState, OneStep, PC>(
+  lemma lemma_SpecRefinesPlusSpec<LState(!new), HState(!new), OneStep(!new), PC>(
     lasf: Armada_SpecFunctions<LState, OneStep, PC>,
     hasf: Armada_SpecFunctions<HState, OneStep, PC>,
     convert: HState->LState

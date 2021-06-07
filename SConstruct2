@@ -31,19 +31,38 @@ AddOption('--ONLYFILENAMES',
   help='Only print out the file paths of dafny files that would be verified')
 onlyfilenames = GetOption('onlyfilenames')
 
+AddOption('--TIMELIMIT',
+  dest='time_limit',
+  type='int',
+  default=120,
+  action='store',
+  help='Specify the time limit to use for each verification')
+
 dafny_path = GetOption('dafny_path')
 if dafny_path is None:
   sys.stderr.write("ERROR:  Missing --DAFNYPATH on command line\n")
   exit(-1)
+
 if sys.platform == "win32" or sys.platform == "cygwin":
-  dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.exe')
+  dafny_exe = os.path.join(dafny_path, 'Dafny.exe')
+  if not os.path.exists(dafny_exe):
+    print("ERROR:  Could not find Dafny executable in " + dafny_path)
+    exit(-1)
+  dafny_invocation = [dafny_exe]
 else:
-  dafny_exe = os.path.join(GetOption('dafny_path'), 'Dafny.dll')
+  dafny_exe = os.path.join(dafny_path, 'Dafny.dll')
+  if not os.path.exists(dafny_exe):
+    dafny_exe = os.path.join(dafny_path, 'dafny.dll')
+  if not os.path.exists(dafny_exe):
+    print("ERROR:  Could not find Dafny executable in " + dafny_path)
+    exit(-1)
+  dafny_invocation = ["dotnet", dafny_exe]
 
 # Useful Dafny command lines
-dafny_basic_args = '/compile:0 /timeLimit:120 /trace /noCheating:1'
-dafny_default_args = dafny_basic_args + ' /arith:5'
-dafny_args_nlarith = dafny_basic_args + ' /arith:2'
+dafny_basic_args = ['/compile:0', '/timeLimit:' + str(GetOption('time_limit')), '/trace']
+dafny_default_args = dafny_basic_args + ['/arith:5', '/noCheating:1']
+dafny_args_nlarith = dafny_basic_args + ['/arith:2', '/noCheating:1']
+dafny_spec_args = dafny_basic_args
 
 ####################################################################
 #
@@ -85,6 +104,19 @@ source_to_args = [
 ####################################################################
 
 dafny_include_re = re.compile(r'include\s+"(\S+)"', re.M)
+single_line_comments_re = re.compile(r'//.*\n')
+multiline_comments_re = re.compile(r'/\*(([^/\*])|(\*[^/])|(/[^\*]))*\*/')
+
+def remove_dafny_comments(contents):
+  # Strip out multi-line comments, using a loop to deal with nested comments
+  while True:
+    (contents, substitutions_made) = re.subn(multiline_comments_re, ' ', contents)
+    if substitutions_made == 0:
+      break
+
+  # Strip out single-line comments
+  contents = re.sub(single_line_comments_re, '\n', contents)
+  return contents
 
 # helper to look up Dafny command-line arguments matching a srcpath, from the
 # source_to_args[] dictionary, dealing with POSIX and Windows pathnames, and
@@ -111,6 +143,7 @@ def recursively_scan_for_dependencies(fullpath):
   contents = File(fullpath).get_text_contents()
   dirname = os.path.dirname(fullpath)
   filename = os.path.basename(fullpath)
+  contents = remove_dafny_comments(contents)
   includes = dafny_include_re.findall(contents)
   extra_files = [os.path.abspath(os.path.join(dirname, i)) for i in includes]
   transitive_dependencies = set(extra_files)
@@ -140,25 +173,34 @@ def scan_for_more_targets(target, source, env):
 #
 ####################################################################
 
+def check_dafny(lines):
+  for line in lines:
+    if re.search("[Oo]ut of resource", line):
+      sys.stderr.write("Dafny reported an out-of-resource error\n")
+      raise Exception()
+    if re.search("proof obligations\]\s+errors", line):
+      sys.stderr.write("Dafny reported errors not in summary\n")
+      raise Exception()
+
+def check_and_print_tail(filename):
+  with open(filename, 'r') as fh:
+    lines = fh.readlines()
+    check_dafny(lines)
+    sys.stdout.write(lines[-1])
+    sys.stdout.write('Full check of Dafny output succeeded\n')
+
+CheckAndPrintTail = SCons.Action.ActionFactory(check_and_print_tail, lambda x: "Checking " + x)
+
 def generate_dafny_verifier_actions(source, target, env, for_signature):
-  env['DAFNY_VERIFIER_FLAGS'] = dafny_default_args
   abs_source = File(source[0]).abspath
   abs_target = File(target[0]).abspath
-  abs_dir = os.path.dirname(abs_source)
-  source_name = os.path.basename(abs_source)
-  temp_target_file = os.path.splitext(abs_target)[0] + '.tmp'
+  source_name = str(source[0])
+  temp_target_file = re.sub(r'\.dfy$', '.tmp', source_name)
   args = get_dafny_command_line_args(abs_source)
-  if onlyfilenames:
-      relative_source = str(source[0])
-      if relative_source not in already_printed_files:
-          already_printed_files.add(relative_source)
-          print(args + " " + relative_source)
-      return []
   return [
-      "cd %s; $MONO %s %s %s > %s" % (abs_dir, dafny_exe, args, source_name, temp_target_file),
-      "python check_dafny.py %s" % (temp_target_file),
-      "tail -n 1 %s" % (temp_target_file),
-      "mv %s %s" % (temp_target_file, abs_target)
+      dafny_invocation + args + [source_name, ">", temp_target_file],
+      CheckAndPrintTail(temp_target_file),
+      Move(abs_target, temp_target_file)
   ]
 
 
