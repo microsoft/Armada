@@ -29,7 +29,7 @@ To use Armada, you'll need the following tools:
   * .NET 5.0 (runtime for both Armada and Dafny)
   * pip (needed for installing scons)
   * scons (installable by running `pip install scons`)
-  * Dafny v3.0.0 (available at https://github.com/dafny-lang/dafny)
+  * Dafny v3.1.0 (available at https://github.com/dafny-lang/dafny)
 
 
 # Generating and testing proofs
