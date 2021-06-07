@@ -1271,6 +1271,8 @@ namespace Microsoft.Armada {
         return u is MapType && t.IsIMapType == u.IsIMapType;
       } else if (t is PointerType) {
         return u is PointerType;
+      } else if (t is SizedArrayType) {
+        return u is SizedArrayType;
       } else {
         Contract.Assert(t is UserDefinedType);
         var udtT = (UserDefinedType)t;
@@ -1464,6 +1466,9 @@ namespace Microsoft.Armada {
         return new ArrowType(s.tok, (ArrowTypeDecl)s.ResolvedClass, args);
       } else if (t is PointerType) {
         return new PointerType(new InferredTypeProxy());
+      } else if (t is SizedArrayType) {
+        var s = (SizedArrayType)t;
+        return new SizedArrayType(new InferredTypeProxy(), s.Size);
       } else {
         var s = (UserDefinedType)t;
         var args = s.TypeArgs.ConvertAll(_ => (Type)new InferredTypeProxy());
