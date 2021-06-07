@@ -930,6 +930,8 @@ proof L4_L5 {
   "
 
   extra lemma_ExpandedStraightlineBehaviorSatisfiesYieldPredicate_yp_locks_acquire_Yielded_1_Then_From_acquire_1_To_acquire_3 @"
+    reveal UserInv_inv_Q();
+    reveal UserYP_yp_nolocks();
     reveal UserYP_yp_locks();
     Q_push_facts(s3.s.ghosts.Q, tid);
   "

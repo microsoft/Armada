@@ -970,7 +970,6 @@ namespace Microsoft.Armada
             invName = $"UserInv_{invKey}";
             str = $@"
               predicate {attrs} {invName}(s: LPlusState)
-                requires InductiveInv(s)
               {{
                 var threads := s.s.threads;
                 var globals := s.s.mem.globals;
