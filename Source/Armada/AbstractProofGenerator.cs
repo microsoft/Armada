@@ -121,6 +121,7 @@ namespace Microsoft.Armada
           { GetRevelations(allInvariants) }
           ProofCustomizationGoesHere();
           { nextStepBody }
+          assert {Name}(s');
         }}
       ";
       pgp.AddLemma(str, "invariants");
