@@ -6,7 +6,7 @@ module GeneralRefinementModule {
 
     datatype StatePair<State> = StatePair(s:State, s':State)
 
-    datatype Spec<State> = Spec(init:iset<State>, next:iset<StatePair<State>>)
+    datatype Spec<!State> = Spec(init:iset<State>, next:iset<StatePair<State>>)
 
     predicate BehaviorSatisfiesSpec<State>(b:seq<State>, sm:Spec<State>)
     {
@@ -18,7 +18,7 @@ module GeneralRefinementModule {
     datatype RefinementRange = RefinementRange(first:int, last:int)
     type RefinementMap = seq<RefinementRange>
     datatype RefinementPair<L, H> = RefinementPair(low:L, high:H)
-    type RefinementRelation<L(==), H(==)> = iset<RefinementPair<L, H>>
+    type RefinementRelation<!L(==), !H(==)> = iset<RefinementPair<L, H>>
 
     predicate IsValidRefinementMap(low_level_behavior_size:int, high_level_behavior_size:int, lh_map:RefinementMap)
     {

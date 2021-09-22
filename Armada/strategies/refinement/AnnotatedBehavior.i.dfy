@@ -14,7 +14,7 @@ module AnnotatedBehaviorModule {
         trace:seq<Step>
         )
 
-    datatype AnnotatedBehaviorSpec<State(==), Step(==)> = AnnotatedBehaviorSpec(
+    datatype AnnotatedBehaviorSpec<!State(==), !Step(==)> = AnnotatedBehaviorSpec(
         init:iset<State>,
         next:iset<ActionTuple<State, Step>>
         )

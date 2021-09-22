@@ -33,7 +33,7 @@ module RefinementViaReductionSpecModule {
   import opened AnnotatedBehaviorModule
   import opened InvariantsModule
 
-  datatype RefinementViaReductionRequest<!State(==), !Actor(==), !LStep, HStep> = RefinementViaReductionRequest(
+  datatype RefinementViaReductionRequest<!State(==), !Actor(==), !LStep, !HStep> = RefinementViaReductionRequest(
     lspec:AnnotatedBehaviorSpec<State, LStep>,
     hspec:AnnotatedBehaviorSpec<State, HStep>,
     relation:RefinementRelation<State, State>,
