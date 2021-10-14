@@ -2690,8 +2690,7 @@ namespace Microsoft.Armada {
         var ll = (UnaryOpExpr) lhs;
         Contract.Assert(ll.Op == UnaryOpExpr.Opcode.Dereference);
         return "*" + (CreateLvalue(ll.E, wr));
-      }
-      else if (lhs is SeqSelectExpr) {
+      } else if (lhs is SeqSelectExpr) {
         var ll = (SeqSelectExpr)lhs;
 
         var arr_wr = new TargetWriter();
@@ -2705,6 +2704,9 @@ namespace Microsoft.Armada {
         var sw = new TargetWriter();
         EmitArraySelectAsLvalue(arr, new List<string>() { index }, ll.Type, sw);
         return sw.ToString();
+      } else if (lhs is BinaryExpr) {
+        var ll = (BinaryExpr) lhs;
+        return "(" + CreateLvalue(ll.E0, wr) + BinaryExpr.OpcodeString(ll.Op) + CreateLvalue(ll.E1, wr) + ")";
       } else {
         var ll = (MultiSelectExpr)lhs;
         string arr = StabilizeExpr(ll.Array, "_arr", wr);
