@@ -5,7 +5,7 @@ C_FLAGS := $(C_FLAGS_RELEASE)
 CC := gcc $(C_FLAGS)
 
 queue.c: queue.arm queue.patch
-	mono $(ARMADA_ROOT)/Binaries/Armada.exe /armadaPath:$(ARMADA_ROOT) queue.arm /compileTarget:clight /spillTargetCode:3
+	dotnet $(ARMADA_ROOT)/Binaries/Armada.dll /armadaPath:$(ARMADA_ROOT) queue.arm /compileTarget:clight /spillTargetCode:3
 	patch queue.c queue.patch
 
 queue.o: queue.c

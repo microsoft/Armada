@@ -71,9 +71,11 @@ level {:concrete} QueueBSS using SharedStructs {
             number_elements := (*qbss).number_elements;
             modulo := tmp_write_index % number_elements;
             (*qbss).write_index := modulo;
-            return 1;
+ret := 1;
+            return;
         }
-        return 0;
+ret := 0;
+        return;
     }
 
     method dequeue(qbss:ptr<QbssState>, k:ptr<uint64>, v:ptr<uint64>) returns (ret:uint64) {
@@ -106,9 +108,11 @@ level {:concrete} QueueBSS using SharedStructs {
             number_elements := (*qbss).number_elements;
             modulo := tmp_read_index % number_elements;
             (*qbss).read_index := modulo;
-            return 1;
+ret := 1;
+            return;
         }
-        return 0;
+ret := 0;
+        return ;
     }
 
     method main() {

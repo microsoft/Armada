@@ -4,7 +4,7 @@
  // Dafny program queue.arm compiled into ClightTSO
  #include "DafnyRuntime.h"
 +#include "liblfds711.h"
- // namespace _9_SharedStructs 
+ // namespace _12_SharedStructs 
  struct BSSQueueElement;
  typedef struct BSSQueueElement BSSQueueElement;
 @@ -88,6 +89,10 @@
