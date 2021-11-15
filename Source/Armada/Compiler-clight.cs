@@ -1144,6 +1144,7 @@ namespace Microsoft.Armada {
                                                   "typedef struct {0} {0};\n" +
                                                   "struct {0}", s.Name),
         ";");
+      var isParam = s.Name.StartsWith("_params_of_");
       foreach (string name in s.FieldNames)
       {
         var type = s.GetFieldType(name);
@@ -1152,6 +1153,9 @@ namespace Microsoft.Armada {
         if (type is SizedArrayType)
         {
           fieldWriter.Write(DeclareSizedArray(name, (SizedArrayType) type, wr, null) + ";");
+        }
+        else if (isParam) {
+          fieldWriter.WriteLine("{0} {1};", t, name);
         }
         else
         {
