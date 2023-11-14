@@ -1,0 +1,10 @@
+level A {
+    method main()
+    {
+        var p:ptr<int>;
+        var arr:int[10];
+        p := calloc(int, 1);
+        *p := 2;
+        arr[2] := 1;
+    }
+}

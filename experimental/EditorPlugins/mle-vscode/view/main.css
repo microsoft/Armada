@@ -1,0 +1,19 @@
+body {
+	background-color: transparent;
+}
+
+.op-btn {
+	display: block;
+	border: none;
+	/* margin: 0 auto; */
+}
+
+.sym {
+	font-size: large;
+}
+
+.txt {
+	display: inline-block;
+	width: 20%;
+	text-align: left;
+}

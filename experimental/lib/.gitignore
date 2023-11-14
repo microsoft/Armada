@@ -1,0 +1,5 @@
+.depend
+*.fst.checked
+*.fsti.checked
+test*.fst
+dep.graph

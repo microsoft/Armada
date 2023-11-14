@@ -1,0 +1,16 @@
+include "SharedStructs.arm"
+
+level Z using SharedStructs {
+    noaddr var x:uint32 := 0;
+
+    method {:extern} print_uint32(i:uint32)
+ 
+    method inc()
+    {
+    }
+
+    method main()
+    {
+        print_uint32(2);
+    }
+}

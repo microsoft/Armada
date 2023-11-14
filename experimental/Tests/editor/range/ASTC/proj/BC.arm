@@ -1,0 +1,7 @@
+include "B.arm"
+include "C.arm"
+
+proof BC {
+    refinement B C
+    combining l1 l2 l3
+}

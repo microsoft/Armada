@@ -1,0 +1,12 @@
+level L
+{
+  var x:int[5] := [0, 1, 2, 3, 4];
+  var arr:int[3];
+  
+  method main ()
+  {
+    var y:int;
+    x[0] := 1;
+    y := x[0];
+  }
+}

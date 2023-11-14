@@ -1,0 +1,55 @@
+include "F.arm"
+include "G.arm"
+
+proof FG {
+    refinement F G
+    assume_intro
+    
+    include_file "extra.dfy"
+    import_module sets_helpers
+    extra lemma_ExpandedStraightlineBehaviorSatisfiesGlobalInvariant_Inv1_inc_Yielded_1_Then_From_inc_1_To_inc_3
+            "sets_helpers.Cardinality(s5.s.ghosts.done, {s5.s.ghosts.inc1, s5.s.ghosts.inc2});"
+    extra lemma_ExpandedStraightlineBehaviorSatisfiesLocalInvariant_main_Yielded_9_Then_From_main_9_To_print_uint32_Start @"
+      assert s19.s.ghosts.done == {s19.s.ghosts.inc1, s19.s.ghosts.inc2} <==>
+             var hs := ConvertTotalState_LPlusH(s19); hs.ghosts.done == {hs.ghosts.inc1, hs.ghosts.inc2};
+    "
+
+    inductive_invariant no_joinable "forall jtid :: jtid in s.s.joinable_tids ==> jtid !in threads"
+
+    inductive_invariant EmptyBuffer @"
+      && (forall tid :: tid in threads ==> (threads[tid].storeBuffer == []))
+    "
+
+    inductive_invariant One_Main @"
+        forall tid :: (tid in threads && (threads[tid].top.Armada_StackFrame_main? || 
+                                     threads[tid].top.Armada_StackFrame_print_uint32? ||
+                                     threads[tid].top.Armada_StackFrame_Mutex_Init?))
+                  <==> 
+                 (tid in threads && tid == tid_init)
+    "
+
+    chl_invariant Inv1
+
+    chl_invariant no_other_threads @"
+      && (forall tid :: tid in threads ==> (tid == ghosts.inc1 || tid == ghosts.inc2 || tid == tid_init))
+    "
+
+    chl_invariant GlobalInvariant @"
+      && (ghosts.inc1 != 0 && ghosts.inc1 !in threads ==> ghosts.inc1 in ghosts.done)
+      && (ghosts.inc2 != 0 && ghosts.inc2 !in threads ==> ghosts.inc2 in ghosts.done)
+    "
+
+    chl_yield_pred {:excludeMethod inc} YP1
+    chl_yield_pred YP2
+
+    chl_yield_pred inc_threads @"
+        && (ghosts.inc1 != 0 && ghosts.inc1 !in threads ==> s'.s.ghosts.inc1 !in threads')
+        && (ghosts.inc2 != 0 && ghosts.inc2 !in threads ==> s'.s.ghosts.inc2 !in threads')
+    "
+
+    chl_yield_pred main_owns_incs @"
+        && (tid == tid_init ==> (ghosts.inc1 == s'.s.ghosts.inc1 && ghosts.inc2 == s'.s.ghosts.inc2))
+        && (tid == tid_init && ghosts.inc1 in s.s.joinable_tids ==> s'.s.ghosts.inc1 in s'.s.joinable_tids)
+        && (tid == tid_init && ghosts.inc1 in threads ==> (s'.s.ghosts.inc1 in s'.s.joinable_tids || s'.s.ghosts.inc1 in threads'))
+    "
+}

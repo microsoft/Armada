@@ -1,0 +1,19 @@
+level A
+{
+  method main ()
+  {
+    var s:seq<int> := [0, 1];
+    var set0:set<int>;
+    var set1:iset<int>;
+    var map0:map<int,int>;
+    var map1:imap<int,int>;
+    var y:int := 1;
+    var flag:bool;
+    flag := forall x:int, z:int | x == z :: x == y;
+    flag := exists x:int | x in s :: x == 1;
+    flag := exists x:int | x in set0 :: x == 1;
+    flag := exists x:int | x in set1 :: x == 1;
+    flag := exists x:int | x in map0 :: x == 1;
+    flag := exists x:int | x in map1 :: x == 1;
+  }
+}

@@ -1,0 +1,31 @@
+level A
+{
+  ghost var a: int := 0;
+  ghost var b: int := 0;
+  var lock: int := 0;
+  var tid: int := 0;
+
+  method {:extern} lock() returns (a:int)
+    reads a
+    awaits lock == 0
+    modifies lock
+    modifies tid
+    logs a
+    logs b
+    ensures lock == tid
+
+  method {:extern} unlock()
+    reads a
+    reads b
+    requires lock == tid
+    modifies lock
+    ensures lock == 0
+
+  method main ()
+  {
+    b := lock();
+    a := a + 1;
+    unlock();
+  }
+
+}

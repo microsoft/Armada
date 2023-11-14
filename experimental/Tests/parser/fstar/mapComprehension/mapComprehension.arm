@@ -1,0 +1,11 @@
+level A
+{
+  method main ()
+  {
+    var s:seq<int> := [0, 1];
+    var y:int := 3;
+    var z:int := 4;
+    var m0:imap<int,int> := imap x:int | x in s :: x + y := x + z;
+    var m1:map<int,int> := map x:int | x in s :: x := x + 1;
+  }
+}

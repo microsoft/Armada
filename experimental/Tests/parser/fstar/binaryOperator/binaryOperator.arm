@@ -1,0 +1,49 @@
+level A
+{
+  ghost var a: bool;
+  ghost var b: int := 1;
+  ghost var bounded_b: int64 := 1;
+  method main ()
+  {
+    var x:int;
+    var bounded_x:int64;
+    var k:bool;
+
+    var s:seq<int> := [0, 1];
+    var set0:set<int>;
+    var set1:iset<int>;
+    var map0:map<int,int>;
+    var map1:imap<int,int>;
+
+    a := b == b;
+    a := b != b;
+    x := b + b;
+    x := b - b;
+    x := b * b;
+    x := b / b;
+    x := b % b;
+    a := a && a;
+    a := a || a;
+    k := a <==> a;
+    k := a ==> a;
+    k := a <== a;
+    x := x << 1;
+    x := x >> 1;
+    bounded_x := bounded_b ^ bounded_b;
+    bounded_x := bounded_b & bounded_b;
+    bounded_x := bounded_b | bounded_b;
+    bounded_x := ~bounded_b;
+
+    k := x in s;
+    k := x in set0;
+    k := x in set1;
+    k := x in map0;
+    k := x in map1;
+    
+    k := x !in s;
+    k := x !in set0;
+    k := x !in set1;
+    k := x !in map0;
+    k := x !in map1;
+  }
+}

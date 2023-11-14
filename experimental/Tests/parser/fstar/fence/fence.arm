@@ -1,0 +1,10 @@
+level A
+{
+  ghost var a: bool;
+  ghost var b: int := 1;
+
+  method main ()
+  {
+    fence;
+  }
+}

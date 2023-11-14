@@ -1,0 +1,11 @@
+Tests/parser/includeTest/A.arm
+level A {
+  method main () {
+    var x:uint64_t := 0;
+    var y:uint64_t := 0;
+    var z:uint64_t := 0;
+    x := 5;
+    y := 10;
+  }
+}
+

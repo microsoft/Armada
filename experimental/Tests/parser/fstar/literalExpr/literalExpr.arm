@@ -1,0 +1,14 @@
+level A
+{
+  ghost var a: bool := false;
+  ghost var b: int := 1;
+  ghost var c: char := 'a';
+  ghost var d: string := "abc";
+  method main ()
+  {
+    a := true;
+    b := 0;
+    c := 'b';
+    d := "str";
+  }
+}

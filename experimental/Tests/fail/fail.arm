@@ -1,0 +1,18 @@
+struct int_pair {
+  var first:int;
+  var second:int;
+}
+
+level Pointer {
+  method parens() {
+    var x:int;
+    // The following two give different errors
+    // x = (1 ^ 2) & 10;
+    x := (1 ^ 2) & 10;
+  }
+
+  method main() {
+    var x:int;
+    x := 1;
+  }
+}

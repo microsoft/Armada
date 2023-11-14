@@ -1,0 +1,7 @@
+include "C.arm"
+include "D.arm"
+
+proof CD {
+    refinement C D
+    var_intro w
+}

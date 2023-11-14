@@ -1,0 +1,27 @@
+level A {
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+
+        y := 20;
+    }
+}
+
+proof AB {
+    refinement A B
+    var_intro z
+}
+
+level B {
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+
+        y := 20;
+        z := 1;
+    }
+}
+

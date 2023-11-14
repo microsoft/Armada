@@ -1,0 +1,6 @@
+struct Str {
+    var x:int64 := 18446744073709551615;
+    var y:int := 100;
+    var z:int8 := -129;
+    var w:uint64 := -128ull;
+}

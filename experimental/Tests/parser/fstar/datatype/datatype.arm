@@ -1,0 +1,13 @@
+datatype step = Acquire(x:int, y:bool) | Release(x:int) | NoStep
+
+
+level L
+{
+  method main ()
+  {
+    var s:step;
+    s := Acquire(1, true);
+    s.x := 1;
+    s.y := false;
+  }
+}

@@ -1,0 +1,9 @@
+Tests/parser/AST/state.arm
+level A {
+  method main ()
+  {
+    assert $state.initial_tid == 0;
+    assert $state.uniqs_used[0] == 0;
+  }
+}
+

@@ -1,0 +1,7 @@
+Binary/
+.sconsign.dblite
+.DS_Store
+.vscode/
+_*/
+**/TAGS
+

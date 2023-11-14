@@ -1,0 +1,24 @@
+level A
+{
+  var arr:int[3];
+
+  method main ()
+  {
+    var b:bool;
+    var x:int := 1;
+    var y:int := 4;
+    var c:uint16 := 1;
+    var d:uint16 := 2;
+    
+    b := x < y;
+    b := x <= y;
+    b := x > y;
+    b := x >= y;
+
+    b := c < d;
+    b := c <= d;
+    b := c > d;
+    b := c >= d;
+    
+  }
+}

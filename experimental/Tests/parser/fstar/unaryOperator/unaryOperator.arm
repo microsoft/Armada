@@ -1,0 +1,27 @@
+level A
+{
+  ghost var a: int;
+  ghost var b: bool;
+  ghost var pi: ptr<int>;
+  ghost var pb: ptr<bool>;
+  method main ()
+  {
+
+    var s:seq<int> := [0, 1];
+    var set0:set<int>;
+    var map0:map<int,int>;
+
+    if *
+    {
+      a := a;
+    }
+
+    pi := *;
+    *pi := -a;
+    a := -a;
+    b := !b;
+    a := |s|;
+    a := |set0|;
+    a := |map0|;
+  }
+}

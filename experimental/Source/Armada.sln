@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.810.17
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Armada", "Armada\Armada.csproj", "{9F136CC3-A181-43DA-BCDB-3E4E31DC7546}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Editor", "Editor\Editor.csproj", "{274784B6-9A3B-4051-A045-8FCD3D4D1893}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9F136CC3-A181-43DA-BCDB-3E4E31DC7546}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9F136CC3-A181-43DA-BCDB-3E4E31DC7546}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9F136CC3-A181-43DA-BCDB-3E4E31DC7546}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9F136CC3-A181-43DA-BCDB-3E4E31DC7546}.Release|Any CPU.Build.0 = Release|Any CPU
+		{274784B6-9A3B-4051-A045-8FCD3D4D1893}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{274784B6-9A3B-4051-A045-8FCD3D4D1893}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{274784B6-9A3B-4051-A045-8FCD3D4D1893}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{274784B6-9A3B-4051-A045-8FCD3D4D1893}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5FBEA11D-B071-43FF-95B3-9DC6E4BD22E0}
+	EndGlobalSection
+	GlobalSection(MonoDevelopProperties) = preSolution
+		outputpath = ../Binary/
+	EndGlobalSection
+EndGlobal

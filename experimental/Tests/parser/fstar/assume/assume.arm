@@ -1,0 +1,8 @@
+level L
+{
+  ghost var a: int := 0;
+  method main ()
+  {
+    assert a == 0;
+  }
+}

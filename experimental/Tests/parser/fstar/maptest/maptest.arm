@@ -1,0 +1,13 @@
+level L
+{
+  method main ()
+  {
+    var x:int := 5;
+    var m:imap<string, int> := imap ["a" := 1, "b" := x];
+    var m1:map<string, int> := map ["a" := 1, "b" := x];
+    var y:int := m["b"];
+    var y1:int := m1["b"];
+    m := m["b" := 0];
+    m1 := m1["b" := 0];
+  }
+}

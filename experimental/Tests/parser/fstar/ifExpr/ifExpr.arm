@@ -1,0 +1,8 @@
+level A
+{
+  method main ()
+  {
+    var x:int;
+    x := if true then 1 else 0;
+  }
+}

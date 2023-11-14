@@ -1,0 +1,7 @@
+include "G.arm"
+include "I.arm"
+
+proof GI {
+    refinement G I
+    weakening
+}

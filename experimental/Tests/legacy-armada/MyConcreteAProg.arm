@@ -1,0 +1,59 @@
+include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+structs placeholder {}
+
+level A using placeholder
+ {
+   ghost var a: int := 1;
+   noaddr var c: uint64 := 3;
+   ghost var e: int := 5;
+
+   method subroutine ()
+   {
+     a := 0;
+   }
+
+   method main ()
+   {
+     a := 10;
+     atomic {
+       c := 20;
+       e := 30;
+     }
+     subroutine();
+   }
+
+  invariant CL30 {
+     c < 30
+  }
+}
+
+level B using placeholder
+{
+  ghost var a: int := 1;
+  noaddr var c: uint64 := 3;
+  ghost var e: int := 5;
+
+  method subroutine ()
+  {
+    a := 0;
+  }
+
+  method main ()
+  {
+    a := 10;
+    atomic {
+      c := 20;
+      e := 30;
+    }
+    subroutine();
+  }
+}
+
+proof AB {
+  refinement A B
+  weakening
+  inductive_invariant SBL30 @"forall tid :: tid in threads ==> forall entry_id :: 0 <= entry_id < |threads[tid].storeBuffer| ==>
+        threads[tid].storeBuffer[entry_id] == L.Armada_StoreBufferEntry(L.Armada_StoreBufferLocation_Unaddressable(L.Armada_GlobalStaticVar_c, []), Armada_PrimitiveValue_uint64(20), L.Armada_PC_main_1)"
+  inductive_invariant CL30 depends_on SBL30
+}

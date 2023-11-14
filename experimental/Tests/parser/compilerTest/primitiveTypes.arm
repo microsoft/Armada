@@ -1,0 +1,21 @@
+level A {
+    method main()
+    {
+        var a:uint8 := 0;
+        var b:uint16 := 0;
+        var c:uint32 := 0;
+        var d:uint64 := 0;
+        var e:int8 := 0;
+        var f:int16 := 0;
+        var g:int32 := 0;
+        var h:int64 := 0;
+
+        d := d + 4;
+        f := f - 3;
+
+        var x:int64 := 50;
+        h := h + x;
+        x := x - h;
+    }
+}
+

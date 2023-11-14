@@ -1,0 +1,144 @@
+level A
+{
+  ghost var a: int := 0;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 3;
+  ghost var e: int := 0;
+  ghost var f: int := 1;
+  ghost var g: int := 2;
+  ghost var h: int := 3;
+  method main ()
+  {
+    atomic {      // Start  End
+      a := a;     // true   false
+      atomic {
+        b := b;   // false  false
+      }
+      c := c;     // false  true
+    }
+
+    atomic {
+      atomic {
+        d := d;   // true   false
+      }
+      e := e;     // false  true
+    }
+
+    atomic {
+      f := f;     // true   false
+      atomic {
+        g := g;   // false  true
+      }
+    }
+
+    atomic {
+      atomic {
+        h := h;   // true   true
+      }
+    }
+
+    atomic {
+      if true {   // true   false
+        a := a;   // false   false
+        c := c;   // false  true
+      }
+      else {
+        d := d;   // false  true
+      }
+    }
+
+    atomic {
+      if a == 1 { // true false for true case, true true for false case
+        a := 0;   // false true
+      }
+    }
+
+    atomic {
+      while a == 1 { // true false for true case, true true for false case
+        a := 0;   // false true
+      }
+    }
+
+    atomic {
+      a := 1;     // true false
+      b := 1;     // false true
+      yield;
+      c := 1;     // true false
+      d := 1;     // false true
+    }
+
+    atomic {
+      a := 1;     // true true
+      b := 1;     // false true
+      atomic {
+        atomic {
+          yield;
+        }
+        yield;
+        c := 1;     // true false
+      }
+      d := 1;     // false true
+    }
+
+    atomic {
+      a := 1;     // true true
+      yield;
+    }
+    b := 1;       // true true
+
+    atomic {
+      a := 1;         // true false
+      while a == 1 {  // false true for true case, false false for false case
+        yield;
+        c := 1;       // true false
+      }
+      d := 1;         // false true
+    }
+
+    atomic {
+      a := 1;         // true false
+      while a == 1 {  // false true for true case, false false for false case
+        yield;        // true, false extra jump to while
+      }
+      d := 1;         // false true
+    }
+
+    atomic {
+      a := 1;         // true false
+      while a == 1 {  // false false for true case, false false for false case
+        c := 1;       // false true
+        yield;        // true, false extra jump to while
+      }
+      d := 1;         // false true
+    }
+
+    atomic {
+      c := 1;     // true false
+      if a == 1 { // false true for then case, false false for else case
+        yield;
+        d := 1;   // true false
+      }
+      b := 1;     // false true
+    }
+
+    atomic {
+      c := 1;     // true false
+      if a == 1 { // false true for then case, false true for else case
+        yield;    // true true, extra jump
+      }
+    }
+
+    atomic {
+      c := 1;     // true false
+      if a == 1 { // false false for then case, false false for else case
+        a := 1;   // false true
+      }
+      else {
+        b := 1;   // false true
+        yield;    // true true, extra jump
+      }
+    }
+
+  }
+}

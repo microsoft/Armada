@@ -1,0 +1,22 @@
+level A {
+    method foo1(x:uint64, y:uint64)
+    {
+        x := x + y;
+    }
+
+    method foo2() 
+    {
+        var x:uint64 := 3;
+        x := x - 4;
+    }
+
+    method main()
+    {
+        var x:uint64 := 4;
+        var y:uint64 := 3;
+        noaddr var tid1:uint64 := 0;
+
+        foo1(x, y);
+        foo2();
+    }
+}

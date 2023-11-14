@@ -1,0 +1,19 @@
+level A
+{
+  ghost var b: int := 1;
+
+  method main ()
+  {
+    b := 0;
+    while (true) {
+      if (b != 0) {
+        break;
+      }
+      else {
+        continue;
+      }
+      b := b + 1;
+    }
+    b := 2;
+  }
+}

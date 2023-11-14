@@ -1,0 +1,10 @@
+level A {
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64[5];
+        z[4] = x;
+        z[3] = y;
+    }
+}

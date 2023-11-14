@@ -1,0 +1,33 @@
+level L
+{
+  ghost var a: int := 0;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 3;
+  ghost var e: int := 0;
+  method foo(a:int, c:int) returns (f:int)
+  {
+    f := b;
+    return f;
+  }
+
+  method {:atomic_method} fooAtomic(a:int, c:int) returns (f:int)
+  {
+    f := b;
+    yield;
+    return f;
+  }
+  method main ()
+  {
+    e := foo(a, b);
+    e := fooAtomic(c, d);
+    atomic {
+      e := fooAtomic(c, d);
+    }
+    e := 2;
+    atomic {
+      e := fooAtomic(c, d);
+      e := 3;
+    }
+  }
+}

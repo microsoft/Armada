@@ -1,0 +1,37 @@
+opam-version: "2.0"
+version: "2023.04.15~dev"
+maintainer: "taramana@microsoft.com"
+authors: "Nik Swamy <nswamy@microsoft.com>,Jonathan Protzenko <protz@microsoft.com>,Tahina Ramananandro <taramana@microsoft.com>"
+homepage: "http://fstar-lang.org"
+license: "Apache-2.0"
+depends: [
+  "ocaml" {>= "4.10.0"}
+  "batteries"
+  "zarith"
+  "stdint"
+  "yojson"
+  "dune" {build & >= "3.2.0"}
+  "menhirLib"
+  "menhir" {build & >= "2.1"}
+  "pprint"
+  "sedlex"
+  "ppxlib" {>= "0.27.0"}
+  "process"
+  "ppx_deriving" {build}
+  "ppx_deriving_yojson" {build}
+  "z3" {= "4.8.5"}
+]
+depexts: ["coreutils"] {os = "macos" & os-distribution = "homebrew"}
+build: [
+  [make "PREFIX=%{prefix}%" "-j" jobs]
+]
+install: [
+  [make "PREFIX=%{prefix}%" "install"]
+]
+dev-repo: "git://github.com/FStarLang/FStar"
+bug-reports: "https://github.com/FStarLang/FStar/issues"
+synopsis: "Verification system for effectful programs"
+url {
+  src: "https://github.com/FStarLang/FStar/archive/V0.9.7.0-alpha1.zip"
+  checksum: "md5=78414a6a5a0ca0c7770a43a36c5f31f7"
+}

@@ -1,0 +1,7 @@
+include "I.arm"
+include "J.arm"
+
+proof IJ {
+    refinement I J
+    var_hiding done, inc1, inc2, main_reading
+}

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "cocor": {
+      "version": "2014.12.24",
+      "commands": [
+        "coco"
+      ]
+    }
+  }
+}
+

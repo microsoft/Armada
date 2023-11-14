@@ -1,0 +1,9 @@
+level L
+{
+  method main ()
+  {
+    var a:uint8 := 2;
+    var b:uint16;
+    b := a as uint16;
+  }
+}

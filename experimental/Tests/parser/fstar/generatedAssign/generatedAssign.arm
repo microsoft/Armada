@@ -1,0 +1,10 @@
+level A
+{
+  method main ()
+  {
+    var b:int;
+    var a:int := 1 + 1;
+    var c:int;
+    a := 1;
+  }
+}

@@ -1,0 +1,23 @@
+level A {
+    method foo() {
+        return;
+    }
+
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+        var _p:ptr<uint64> := &x;
+        //var tid:tid_t;
+
+        create_thread foo();
+
+        x := 5;
+        y := 10;
+
+        // TODO: Cannot dereference pointer here?
+        *_p := 4;
+        foo();
+    }
+}

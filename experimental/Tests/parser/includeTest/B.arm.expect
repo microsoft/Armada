@@ -1,0 +1,22 @@
+Tests/parser/includeTest/B.arm
+level B {
+  method main () {
+    var x:uint64_t := 0;
+    var y:uint64_t := 0;
+    var z:uint64_t := 0;
+    x := 5;
+    label l1:
+    y := 10;
+    label l2:
+    z := 1;
+  }
+}
+level A {
+  method main () {
+    var x:uint64_t := 0;
+    var y:uint64_t := 0;
+    var z:uint64_t := 0;
+    x := 5;
+    y := 10;
+  }
+}

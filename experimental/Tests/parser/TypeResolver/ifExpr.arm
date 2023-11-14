@@ -1,0 +1,10 @@
+level C {
+    method main()
+    {
+        var x:uint64 := 5;
+        var y:uint64 := 10;
+        var z:uint64;
+
+        z := if z < 0 then x else y;
+    }
+}

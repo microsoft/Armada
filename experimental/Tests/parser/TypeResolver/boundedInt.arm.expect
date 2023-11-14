@@ -1,0 +1,12 @@
+Tests/parser/TypeResolver/boundedInt.arm
+struct Str {
+  var x:int64_t := 18446744073709551615;
+  var y:int := 100;
+  var z:int8_t := -129;
+  var w:uint64_t := -128;
+}
+
+18446744073709551615(2,19): Warning: 18446744073709551615 doesn't fit in int64!
+-129(4,18): Warning: -129 doesn't fit in int8!
+-128ull(5,20): Warning: -128ull doesn't fit in uint64!
+-128ull(5,20): Warning: -128ull is both negative and unsigned! It will be casted to uint64_t

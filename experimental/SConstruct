@@ -1,0 +1,236 @@
+# -*- python -*-
+import filecmp
+import re
+import sys
+import os, os.path
+import subprocess
+import traceback
+import pdb
+import SCons.Util
+import atexit
+import platform
+import argparse
+import glob
+
+Import("*")
+
+env = Environment(ENV = {'PATH' : os.environ['PATH']})
+if sys.platform != 'win32' and sys.platform != 'cygwin':
+  env['DOTNET'] = 'dotnet'
+
+# def check_test_output(filename, expected):
+#     if not filecmp.cmp(filename, expected):
+#         os.system("rm %s" % (filename))
+#         raise Exception("FAILURE: %s did not match expected %s" % (filename, expected))
+#     os.system("rm %s" % (filename))
+
+# CheckOutput = SCons.Action.ActionFactory(check_test_output, lambda x, y: "Checking " + x)
+
+####################################################################
+#
+#   Define Armada Builders
+#
+####################################################################
+
+armada_proj = os.path.abspath('Source/Armada.sln')
+
+def build_armada(env):
+    if env.Execute("DOTNET_CLI_HOME=/tmp dotnet build %s" % (armada_proj)):
+        print('A problem occurred while building Starmada.')
+        Exit(1)
+
+def generate_armada_actions(source, target, env, for_signature):
+    source_path = File(source[0]).path
+
+    output_path = source_path + ".out"
+    expect_path = source_path + ".expect"
+    if diff_check :
+        return [
+            "DOTNET_CLI_HOME=/tmp dotnet ./Binary/Armada.dll %s --verbose > %s" % (source_path, output_path),
+            "diff -wB %s %s" % (output_path, expect_path),
+            "rm %s" % (output_path)
+        ]
+    elif fstar_output:
+        return [
+            "DOTNET_CLI_HOME=/tmp dotnet ./Binary/Armada.dll %s -f -a > /dev/null" % (source_path),
+        ]
+    else:
+        return [
+            "DOTNET_CLI_HOME=/tmp dotnet ./Binary/Armada.dll %s > /dev/null" % (source_path),
+        ]
+
+def generate_fstar_actions(source, target, env, for_signature):
+    actions = []
+    for f in source:
+        actions.append(f"fstar.exe --include lib/ --include {os.path.dirname(str(f))} {f}")
+    return actions
+
+def generate_verify_lib_actions(source, target, env, for_signature):
+    actions = [f"cd lib; make verify-all"]
+    return actions
+
+def add_armada(env):
+    armada = Builder(generator=generate_armada_actions)
+    env.Append(BUILDERS = {'Armada' : armada})
+
+def add_fstar(env):
+    fstar = Builder(generator=generate_fstar_actions)
+    env.Append(BUILDERS = {'FStar' : fstar})
+
+def add_verify_lib(env):
+    verify_lib = Builder(generator=generate_verify_lib_actions)
+    env.Append(BUILDERS = {'VerifyLib' : verify_lib})
+
+def add_diff_checker(env):
+    diff_checker = Builder(generator=generate_diff_checker)
+    env.Append(BUILDERS = {'CheckOutput' : diff_checker})
+
+####################################################################
+#
+#   Put it all together
+#
+####################################################################
+
+# If you want to run diff for a test, you need to set diff_check
+# to True
+diff_check = False
+AddOption('--parser-tests',
+          dest='parser_tests',
+          action='store_true',
+          help='run parser tests')
+
+AddOption('--editor-tests',
+          dest='editor_tests',
+          action='store_true',
+          help='run editor tests')
+
+fstar_output = False
+AddOption('--run-fstar',
+          dest='run_fstar',
+          action='store_true',
+          help='run fstar tests')
+
+generate_fstar = False
+AddOption('--generate-fstar',
+          dest='generate_fstar',
+          action='store_true',
+          help='generate fstar files')
+
+verify_lib = False
+AddOption('--verify-lib',
+          dest='verify_lib',
+          action='store_true',
+          help='verify the Starmada library')
+
+AddOption('--build',
+          action='store_true',
+          help='enable building of Starmada')
+
+AddOption('--all',
+          action='store_true',
+          help='build and check everything')
+
+add_armada(env)
+add_fstar(env)
+add_verify_lib(env)
+
+####################################################################
+#
+#   Create dependencies
+#
+####################################################################
+
+def run_parser_test(dir_name, entries):
+  for armada_file in entries:
+    source = "Tests/parser/%s/%s.arm" % (dir_name, armada_file)
+    # target = "Tests/parser/%s/%s" % (dir_name, test_name)
+    env.Armada(source)
+
+def run_editor_test(dir_name, entries):
+  for test_name in entries:
+    target = f"Tests/editor/{dir_name}/{test_name}"
+    test_item = target
+    proj_root = f"{test_item}/proj"
+    dump_root = f"{test_item}/dump"
+    expect_root = f"{test_item}/expect"
+    test_input = f"{test_item}/in"
+    test_arg = f"{test_item}/arg"
+
+    with open(test_arg, 'r') as f:
+      arguments = "-f " + proj_root + "/" + " ".join(f.readlines())
+
+    cmds = [
+      f"DOTNET_CLI_HOME=/tmp dotnet ./Binary/Editor.dll shoot {proj_root} -o {dump_root} {arguments} < {test_input}",
+      f"diff -r {dump_root} {expect_root}",
+      f"rm -rf {dump_root}",
+    ]
+
+    for cmd in cmds:
+      os.system(cmd)
+
+def run_fstar(dir_name):
+  env.FStar(glob.glob(dir_name + '/*.fst'))
+
+def generate_fstar(dir_name):
+  files_list = glob.glob(dir_name + '/*.arm')
+  for f in files_list:
+    print(f)
+    env.Armada(f)
+
+def verify_lib(target, source):
+  env.VerifyLib(target, source)
+
+def shouldRun(taskName):
+  return (GetOption('all') == True) or (GetOption(taskName) == True)
+
+if shouldRun('build'):
+  build_armada(env)
+
+if shouldRun('clean'):
+  find_cmd = "find Tests -iname '*.fst'"
+  git_ls_cmd = "xargs git ls-files"
+  guard_cmd = f"[ `{find_cmd} | {git_ls_cmd} | wc -l` = 0 ]"
+  env.Execute(f"{guard_cmd} && {find_cmd} | xargs rm")
+
+if shouldRun('generate_fstar'):
+  fstar_output = True
+  for f in glob.glob("Tests/parser/fstar/*"):
+    generate_fstar(f)
+  generate_fstar("Tests/proof/globalVarsUnmodifiable")
+
+if shouldRun('run_fstar'):
+  for f in glob.glob("Tests/parser/fstar/*"):
+    run_fstar(f)
+  run_fstar("Tests/proof/globalVarsUnmodifiable")
+
+if shouldRun('parser_tests'):
+  diff_check = True
+  run_parser_test("includeTest", [
+    "A",
+    "B",
+    "C"
+  ])
+  run_parser_test("AST", [
+    "A",
+    # "AB",
+    "B",
+    # "BC",
+    "C",
+    # "CD",
+    "D",
+    # "EndlessExpression",
+    "Statement",
+    "state",
+    "struct",
+    "suffix"
+  ])
+  run_parser_test("TypeResolver", [
+    "boundedInt"
+  ])
+
+if shouldRun('verify_lib'):
+  verify_lib("lib/MyProgramProof.fst.checked", "lib/MyProgramProof.fst")
+
+if shouldRun('editor_tests'):
+  run_editor_test("basic", ["ab", "if", "ifcond", "while"])
+  run_editor_test("range", ["AST", "ASTC", "ASTS"])

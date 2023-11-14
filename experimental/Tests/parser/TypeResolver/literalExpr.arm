@@ -1,0 +1,12 @@
+level A {
+    method main()
+    {
+        var x:bool;
+        var y:char;
+        var z:string;
+
+        x := false;
+        y := 'c';
+        z := "string";
+    }
+}

@@ -1,0 +1,97 @@
+struct C1 {
+  var a:int32;
+  var b:int64 := 10;
+}
+
+level impl_level {
+  var x := 0;
+
+  var lock := 0;
+  method acquire () 
+    awaits lock == 0
+    modifies lock
+    ensures lock == 1
+
+  method release ()
+    requires lock == 1
+    modifies lock
+    ensures lock == 0
+
+  method {:opague} foo(a:int32) {
+    acquire();
+    x := x + a;
+    release();
+  }
+
+  method main() {
+    var t1 := create_thread foo(1);
+    var t2 := create_thread foo(1);
+    t1.join();
+    t2.join();
+    print (x);
+  }
+}
+
+level L2 {
+  var x := 0;
+
+  // var lock := 0;
+  // method acquire () 
+  //   awaits lock == 0
+  //   modifies lock
+  //   ensures lock == 1
+
+  // method release ()
+  //   requires lock == 1
+  //   modifies lock
+  //   ensures lock == 0
+
+  method {:opague} foo(a:int32) {
+    // acquire();
+    atomic {
+      x := x + a;
+    }
+    // release();
+  }
+
+  method main() {
+    var t1 := create_thread foo(1);
+    var t2 := create_thread foo(1);
+    t1.join();
+    t2.join();
+    print (x);
+  }
+}
+
+
+level L3 {
+  var x := 0;
+
+  method {:opague} foo(a:int32)
+  requires a == 1
+  {
+    atomic {
+      x := x + a;
+    }
+  }
+
+  method main() {
+    var t1 := create_thread foo(1);
+    var t2 := create_thread foo(1);
+    t1.join();
+    t2.join();
+    assume x == 2; // This is added
+    print (x);
+  }
+}
+
+proof L1_L2 
+{
+  refinement impl_level L2
+  var_hiding lock
+}
+
+proof L2_L3 {
+  refinement L2 L3
+  assume_intro
+}

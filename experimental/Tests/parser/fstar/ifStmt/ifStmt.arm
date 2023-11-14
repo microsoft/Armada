@@ -1,0 +1,22 @@
+level A
+{
+  ghost var a: bool;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 4;
+  ghost var e: int := 5;
+
+  method main ()
+  {
+    var cond: bool := b == b;
+    if b == b {
+        b := c;
+    }
+    else {
+        b := d;
+    }
+    if b == b {
+        b := e;
+    }
+  }
+}

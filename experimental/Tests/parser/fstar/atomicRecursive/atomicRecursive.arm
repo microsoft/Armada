@@ -1,0 +1,17 @@
+level A
+{
+  ghost var a: int := 0;
+  ghost var b: int := 0;
+
+  method {:atomic_method} foo()
+  {
+    if a == 1 {
+      foo();
+    }
+  }
+
+  method main ()
+  {
+    foo();
+  }
+}

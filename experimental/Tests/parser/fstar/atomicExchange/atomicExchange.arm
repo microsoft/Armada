@@ -1,0 +1,10 @@
+level L
+{
+  ghost var x: int := 0;
+  ghost var y: int := 0;
+
+  method main ()
+  {
+    x := atomic_exchange(y, 30);
+  }
+}

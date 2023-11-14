@@ -1,0 +1,24 @@
+struct Point {
+    var x:int64;
+//    var y:int;
+    var z:int8;
+}
+
+datatype Option<T> = Some(val:T) | None()
+
+level B {
+    var x:int := 10;
+    method main()
+    {
+        var x:set<uint64> := {};
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+        var p:Option<Point>;
+        assert forall y:int | y > 0 :: y == 0;
+
+        //x := foo(y);
+        x := create_thread foo(x);
+        //y := 10;
+//        p.val.z := 666;
+    }
+}

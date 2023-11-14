@@ -1,0 +1,18 @@
+datatype step = Acquire(x:int, y:int) | Release(x:int) | NoStep
+level L
+{
+  method foo(s:step) returns (a:int)
+  {
+    a := match s
+    {
+      case Acquire(x, y) => y
+      case Release(x)    => x
+      case NoStep        => 0
+    };
+    return a;
+  }
+  method main ()
+  {
+    var x: int := foo(Acquire(1, 1));
+  }
+}

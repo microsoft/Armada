@@ -1,0 +1,11 @@
+level A
+{
+  method main ()
+  {
+    var s:seq<int> := [0, 1];
+    var y:int := 3;
+    var z:int := 4;
+    var s0:iset<int> := iset x:int | x in s :: 2 + x + y + z;
+    var s1:set<int> := set x:int | x in s :: x * 2;
+  }
+}

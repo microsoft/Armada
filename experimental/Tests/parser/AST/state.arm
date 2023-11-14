@@ -1,0 +1,8 @@
+level A {
+    method main()
+    {
+        assert $state.initial_tid == 0;
+        assert $state.uniqs_used[0] == 0;
+        // assert $state.stop_reason == Armada.State.NotStopped;
+    }
+}

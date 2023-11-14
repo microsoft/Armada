@@ -1,0 +1,17 @@
+level A
+{
+  method main ()
+  {
+    var a:int;
+
+    if *
+    {
+        a := a;
+    }
+
+    while *
+    {
+        a := a;
+    }
+  }
+}

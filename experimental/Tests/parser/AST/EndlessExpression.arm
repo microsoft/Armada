@@ -1,0 +1,26 @@
+level X {
+    method main() {
+        var x:int;
+        x := if 0 == 1 then 1 else 1 + 2;
+        x := assert x == 1; 1 + 2;
+        x := reveal 1 + 2;
+        // MatchCaseExpr
+        x := match x {
+            case ident (id, id:type, id(casepattern_id)) => 1
+        };
+        // QuantifierExpr
+        x := forall id0:int, id1:int, id2:int {: id expr0, expr1} | expr :: 3;
+        x := exists id:int :: expr;
+        // SetComprehensionExpr
+        x := iset id:int {: id expr0, expr1} | rangeExpr :: bodyExpr;
+        x := set id:int | rangeExpr;
+        // MapDisplayExpr
+        x := map [1:= 2, 3:=4];
+        x := imap [];
+        // MapComprehensionExpr
+        x := map id:int {: id expr0, expr1} | rangeExpr :: bodyExpr := valueExpr;
+        x := imap id:int {: id expr0, expr1} :: bodyExpr;
+        // LabelExpr
+        x := label id: expr;
+    }
+}

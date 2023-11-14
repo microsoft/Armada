@@ -1,0 +1,62 @@
+level B
+{
+  ghost var a: int := 1;
+  ghost var b: int := 2;
+  ghost var c: int := 3;
+  ghost var d: int := 4;
+  ghost var e: int := 5;
+
+  method subroutine ()
+  {
+    a := 0;
+    b := a;
+    d := 2;
+  }
+
+  method main ()
+  {
+    atomic {
+      d := 5;
+      a := 10;
+      b := 15;
+    }
+    atomic {
+      c := 20;
+      b := 25;
+      e := 30;
+    }
+    subroutine();
+    atomic {
+      b := 35;
+      d := 40;
+    }
+  }
+}
+
+level A
+{
+  ghost var a: int := 1;
+  ghost var c: int := 3;
+  ghost var e: int := 5;
+
+  method subroutine ()
+  {
+    a := 0;
+  }
+
+  method main ()
+  {
+    a := 10;
+    atomic {
+      c := 20;
+      e := 30;
+    }
+    subroutine();
+  }
+}
+
+
+proof BtoA { 
+  refinement B A var_hiding b, d 
+}
+

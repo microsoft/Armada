@@ -1,0 +1,13 @@
+Tests/parser/AST/struct.arm
+struct st {
+  var a:nat;
+  var b:bool;
+}
+level A {
+  method main ()
+  {
+    var x:st;
+    x.a := 10;
+    x.b := true;
+  }
+}

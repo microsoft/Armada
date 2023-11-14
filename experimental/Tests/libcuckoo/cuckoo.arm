@@ -1,0 +1,2413 @@
+# include "../../Armada/ArmadaCommonDefinitions.dfy"
+
+#define SLOT_PER_BUCKET 4
+
+#define KeyType int64
+#define ValueType int64
+
+// cuckoohash_util.hh:66
+#define ERROR_NONE                         0
+#define ERROR_INVALID_ARGUMENT             1
+#define ERROR_OUT_OF_RANGE                 2
+#define ERROR_HASHPOWER_CHANGED            3
+#define ERROR_LOAD_FACTOR_TOO_LOW          4
+#define ERROR_MAXIMUM_HASH_POWER_EXCEEDED  5
+
+#define mapped_type ValueType
+#define key_type KeyType
+#define CuckooRecords CuckooRecord[MAX_BFS_PATH_LEN]
+
+// cuckoohash_map.hh:52
+#define partial_t uint8
+#define size_type uint64
+#define counter_type int64
+#define IS_SIMPLE false
+
+// cuckoohash_config.hh:26
+#define LIBCUCKOO_NO_MAXIMUM_HASHPOWER 0xffffffffffffffff
+
+// cuckoohash_map.hh:161
+#define kMaxNumLocks 65536
+
+// cuckoohash_map.hh:202
+#define MAX_BFS_PATH_LEN 5
+
+// cuckoohash_map.hh:265
+// 2 * (const_pow(SLOT_PER_BUCKET, MAX_BFS_PATH_LEN) - 1) / (SLOT_PER_BUCKET - 1)
+// 2 * (const_pow(4, 5) - 1) / (4 - 1)
+#define MAX_CUCKOO_COUNT 682
+
+#define lock_ind(bucket_ind) (bucket_ind & (kMaxNumLocks - 1))
+
+#define vector_bracket(v, idx) (v).data + idx
+#define vector_size(this) (this).len
+
+
+// Found declaration of `LockManager::LockManager' at 128:3
+#define LockManager_LockManager_default(this) \
+  (this).lock := nullptr;
+
+// Found declaration of `LockManager::LockManager' at 129:3
+#define LockManager_LockManager(this, i_lock)  \
+  (this).lock := i_lock;
+
+// Found declaration of `LockManager::~LockManager' at 140:3
+#define LockManager_destroy_LockManager(this) \
+  if (this.lock != nullptr)                \
+  {                                               \
+    spinlock_unlock(this.lock);            \
+  }
+
+// Found declaration of `TwoBuckets::TwoBuckets' at 170:3
+#define TwoBuckets_TwoBuckets_default(this) \
+    LockManager_LockManager_default((this).first_manager_)   \
+    LockManager_LockManager_default((this).second_manager_)
+
+// Found declaration of `TwoBuckets::TwoBuckets' at 171:3
+#define TwoBuckets_TwoBuckets(this, locks_ptr, i1_, i2_, tmp0) \
+    (this).i1 := i1_;                                    \
+    (this).i2 := i2_;                                    \
+    tmp0 := vector_bracket(*locks_ptr, lock_ind(i1_));        \
+    LockManager_LockManager((this).first_manager_, tmp0) \
+    tmp0 := vector_bracket(*locks_ptr, lock_ind(i2_));        \
+    LockManager_LockManager((this).second_manager_, if lock_ind(i1_) != lock_ind(i2_) then tmp0 else nullptr)
+
+#define TwoBuckets_destroy_TwoBuckets(this) \
+    LockManager_destroy_LockManager(this.first_manager_)  \
+    LockManager_destroy_LockManager(this.second_manager_)
+
+// Found declaration of `b_slot::b_slot' at 227:3
+#define b_slot_b_slot(this, b, p, d) \
+  this.bucket := b;         \
+  this.pathcode := p;       \
+  this.depth := d;
+
+
+// Found declaration of `b_queue::b_queue' at 236:3
+#define b_queue_b_queue(this) \
+  this.first_ := 0;   \
+  this.last_ := 0;
+
+// Found declaration of `b_queue::enqueue' at 238:3
+#define b_queue_enqueue(this, x)  \
+  this.slots_[this.last_] := x;    \
+  this.last_ := this.last_ + 1;
+
+// Found declaration of `b_queue::dequeue' at 243:3
+#define b_queue_dequeue(this, ret)  \
+  ret := this.slots_[this.first_];  \
+  this.first_ := this.first_ + 1;
+
+// Found declaration of `b_queue::empty' at 250:3
+#define b_queue_empty(this) \
+  this.first_ == this.last_
+
+// Found declaration of `AllLocksManager::AllLocksManager' at 289:3
+#define AllLocksManager_AllLocksManager(this, i_first_locked) \
+  (this).first_locked := i_first_locked;  \
+  (this).active := TRUE;
+
+// #define copy_hash_value(lv, rv) \
+//   lv.hash := rv.hash; \
+//   lv.partial := rv.partial;
+
+#define copy_LockManager(lv, rv) \
+  (lv).lock := (rv).lock;
+
+#define copy_TwoBuckets(lv, rv) \
+  (lv).i1 := (rv).i1; \
+  (lv).i2 := (rv).i2; \
+  copy_LockManager((lv).first_manager_, (rv).first_manager_) \
+  copy_LockManager((lv).second_manager_, (rv).second_manager_)
+
+#define copy_spinlock(lv, rv) \
+  (lv).lock_ := (rv).lock_; \
+  (lv).elem_counter_ := (rv).elem_counter_;
+
+#define bool_t uint8
+#define FALSE 0
+#define TRUE 1
+
+#define nullptr null
+
+// cuckoohash_map:318
+#define cuckoo_status uint8
+#define ok 0
+#define failure 1
+#define failure_key_not_found 2
+#define failure_key_duplicated 3
+#define failure_table_full 4
+#define failure_under_expansion 5
+
+// FIXME(double): Need to have double/floats on the heap
+#define double uint64
+
+structs SharedStructs {
+
+    struct storage_value_type {
+        var first: KeyType;
+        var second: ValueType;
+    }
+
+    struct bucket {
+        // std::array<typename std::aligned_storage<sizeof(storage_value_type),
+                                                // alignof(storage_value_type)>::type,
+                // SLOT_PER_BUCKET>
+            // values_;
+        // std::array<partial_t, SLOT_PER_BUCKET> partials_;
+        // std::array<bool, SLOT_PER_BUCKET> occupied_;
+
+        var values_:storage_value_type[SLOT_PER_BUCKET]
+        var partials_:partial_t[SLOT_PER_BUCKET];
+        var occupied_:bool_t[SLOT_PER_BUCKET];
+    }
+
+    // cuckoohash_map.hh:59
+    struct spinlock {
+      // std::atomic_flag
+        var lock_:bool_t;
+        var elem_counter_:counter_type;
+    }
+
+    // cuckoohash_map.hh:92
+    struct locks_t {
+        var data:ptr<spinlock>;
+        var len:uint64;
+    }
+
+    // cuckoohash_map.hh:94
+    struct all_locks_list_node {
+        var elt:locks_t;
+        var next:ptr<all_locks_list_node>;
+    }
+
+    // cuckoohash_map.hh:101
+    struct all_locks_t {
+        var head_:ptr<all_locks_list_node>;
+        var tail_:ptr<all_locks_list_node>;
+    }
+
+    // cuckoohash_map.hh:126
+    struct LockManager {
+        var lock:ptr<spinlock>;
+    }
+
+    // cuckoohash_map.hh:168
+    struct TwoBuckets {
+        var i1:size_type;
+        var i2:size_type;
+        var first_manager_:LockManager;
+        var second_manager_:LockManager;
+    }
+
+    // cuckoohash_map.hh:205
+    struct b_slot{
+      var bucket: size_type;
+      var pathcode: uint16;
+      var depth: int8;
+    }
+
+    // cuckoohash_map.hh:233
+    struct b_queue {
+      var slots_: b_slot[MAX_CUCKOO_COUNT];
+      var first_: size_type;
+      var last_: size_type;
+    }
+
+    // cuckoohash_map:282
+    struct hash_value {
+        var hash:size_type;
+        var partial:partial_t;
+    }
+
+    // cuckoohash_map:282
+    struct AllLocksManager {
+      var active: bool_t;
+      var first_locked: ptr<all_locks_list_node>;
+    }
+
+    // cuckoohash_map.hh:327
+    struct table_position {
+        var index:size_type;
+        var slot:size_type;
+        var status:cuckoo_status;
+    }
+
+    // cuckoohash_map.hh:339
+    struct CuckooRecord {
+      var bucket: size_type;
+      var slot: size_type;
+      var hv: hash_value;
+    }
+
+    // libcuckoo_bucket_container.hh:89
+    struct bucket_container {
+        var hashpower_:size_type; //atomic
+        var buckets_:ptr<bucket>;
+    }
+
+    // cuckoohash_map.hh:351
+    struct cuckoohash_map {
+        // The hash function
+        // hasher hash_fn_;
+
+        // The equality function
+        // key_equal eq_fn_;
+
+        var buckets_:bucket_container;
+        var all_locks_:all_locks_t;
+        var minimum_load_factor_num: uint64;
+        var minimum_load_factor_dec: uint64; //double
+        var maximum_hashpower_:size_type; //atomic
+    }
+
+}
+
+level {:concrete} CuckooHashMap using SharedStructs {
+
+////////////////////////////////////////////////////////////////////////////////
+// external methods
+////////////////////////////////////////////////////////////////////////////////
+method {:extern} ext_hash_function(k:KeyType) returns (ret:size_type)
+method {:extern} ext_key_eq(k1:KeyType, k2:KeyType) returns (ret:bool_t)
+method {:extern} ext_hardware_concurrency() returns (ret: size_type)
+
+
+////////////////////////////////////////////////////////////////////////////////
+// libcuckoo_bucket_container.hh
+////////////////////////////////////////////////////////////////////////////////
+
+
+// // Found declaration of `bucket::bucket' at 38:3
+// method bucket_bucket(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `bucket::kvpair' at 40:3
+// method bucket_kvpair(TODO_method_params)
+// {
+//   return *TODO_expr__CXXStaticCastExpr:TODO_type_Pointer;
+// }
+// 
+// 
+// // Found declaration of `bucket::kvpair' at 44:3
+// method bucket_kvpair(TODO_method_params)
+// {
+//   return *TODO_expr__CXXStaticCastExpr:TODO_type_Pointer;
+// }
+// 
+
+// Found declaration of `bucket::key' at 48:3
+method bucket_key(this_ptr:ptr<bucket>, ind:size_type) returns (ret:ptr<key_type>)
+{
+  noaddr var temp0:ptr<storage_value_type>;
+  temp0 := bucket_storage_kvpair(this_ptr, ind);
+  ret := &((*temp0).first);
+}
+
+
+// Found declaration of `bucket::mapped' at 52:3
+method bucket_mapped(this_ptr:ptr<bucket>, ind:size_type) returns (ret:ptr<mapped_type>)
+{
+  noaddr var temp0:ptr<storage_value_type>;
+  temp0 := bucket_storage_kvpair(this_ptr, ind);
+  ret := &((*temp0).second);
+}
+
+
+// Found declaration of `bucket::partial' at 57:3
+method bucket_partial_const(this_ptr:ptr<bucket>, ind:size_type) returns (ret:partial_t)
+{
+  ret := (*this_ptr).partials_[ind];
+}
+
+
+// Found declaration of `bucket::partial' at 58:3
+method bucket_partial(this_ptr:ptr<bucket>, ind:size_type) returns (ret:ptr<partial_t>)
+{
+  ret := &(*this_ptr).partials_[ind];
+}
+
+
+// Found declaration of `bucket::occupied' at 60:3
+method bucket_occupied_const(this_ptr:ptr<bucket>, ind:size_type) returns (ret:bool_t)
+{
+  ret := (*this_ptr).occupied_[ind];
+}
+
+
+// Found declaration of `bucket::occupied' at 61:3
+method bucket_occupied(this_ptr:ptr<bucket>, ind:size_type) returns (ret:ptr<bool_t>)
+{
+  ret := &(*this_ptr).occupied_[ind];
+}
+
+
+// Found declaration of `bucket::storage_kvpair' at 66:3
+method bucket_storage_kvpair(this_ptr:ptr<bucket>, ind:size_type) returns (ret:ptr<storage_value_type>)
+{
+  ret := &((*this_ptr).values_[ind]);
+}
+
+
+// Found declaration of `libcuckoo_bucket_container::libcuckoo_bucket_container' at 92:3
+method bucket_container_bucket_container(this_ptr: ptr<bucket_container>, hp: size_type)
+{
+  noaddr var temp0: size_type;
+  (*this_ptr).hashpower_ := hp;
+  temp0 := libcuckoo_bucket_container_size(this_ptr);
+  (*this_ptr).buckets_ := calloc(bucket, temp0);
+}
+
+// 
+// // Found declaration of `libcuckoo_bucket_container::~libcuckoo_bucket_container' at 102:3
+// method libcuckoo_bucket_container_~libcuckoo_bucket_container(TODO_method_params)
+// {
+//   (*this).destroy_buckets();
+// }
+// 
+// 
+// // Found declaration of `libcuckoo_bucket_container::operator=' at 104:3
+// method libcuckoo_bucket_container_operator=(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `libcuckoo_bucket_container::libcuckoo_bucket_container' at 105:3
+// method libcuckoo_bucket_container_libcuckoo_bucket_container(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `libcuckoo_bucket_container::swap' at 107:3
+// method libcuckoo_bucket_container_swap(TODO_method_params)
+// {
+//   noaddr var bc_hashpower:size_t;
+//   noaddr var temp0:TODO_return_type;
+//   bc_hashpower := *(bc_ptr).hashpower();
+//   temp0 := (*this).hashpower();
+//   *(bc_ptr).hashpower(temp0);
+//   (*this).hashpower(bc_hashpower);
+//   swap((*this).buckets_, *(bc_ptr).buckets_);
+// }
+// 
+
+// Found declaration of `libcuckoo_bucket_container::hashpower' at 120:3
+method libcuckoo_bucket_container_hashpower(this_ptr:ptr<bucket_container>) returns (ret:size_type)
+{
+  ret := (*this_ptr).hashpower_;
+}
+
+// 
+// // Found declaration of `libcuckoo_bucket_container::hashpower' at 124:3
+// method libcuckoo_bucket_container_hashpower(TODO_method_params)
+// {
+//   (*this).hashpower_.store(val, memory_order_release);
+// }
+// 
+
+// Found declaration of `libcuckoo_bucket_container::size' at 128:3
+method libcuckoo_bucket_container_size(this_ptr:ptr<bucket_container>) returns (ret:size_type)
+{
+  noaddr var temp0: size_type;
+  temp0 := libcuckoo_bucket_container_hashpower(this_ptr);
+  ret := 1 << temp0;
+}
+
+// 
+// // Found declaration of `libcuckoo_bucket_container::operator[]' at 130:3
+// method libcuckoo_bucket_container_operator[](TODO_method_params)
+// {
+//   return i[(*this).buckets_];
+// }
+// 
+// 
+// // Found declaration of `libcuckoo_bucket_container::operator[]' at 131:3
+// method libcuckoo_bucket_container_operator[](TODO_method_params)
+// {
+//   return i[(*this).buckets_];
+// }
+
+
+// Found declaration of `libcuckoo_bucket_container::setKV' at 134:3
+method libcuckoo_bucket_container_setKV(this_ptr: ptr<bucket_container>, ind: size_type, slot: size_type, p: partial_t, k_ptr: ptr<KeyType>, value_ptr: ptr<ValueType>)
+{
+  noaddr var b_ptr:ptr<bucket>;
+  noaddr var temp0:ptr<partial_t>;
+  noaddr var kv_ptr:ptr<storage_value_type>;
+  noaddr var temp1:ptr<bool_t>;
+  noaddr var k: KeyType := *k_ptr;
+  noaddr var value: ValueType := *value_ptr;
+  b_ptr := (*this_ptr).buckets_ + ind;
+  // assert(!b.occupied(slot));
+  temp0 := bucket_partial(b_ptr, slot);
+  *temp0 := p;
+  kv_ptr := bucket_storage_kvpair(b_ptr, slot);
+  (*kv_ptr).first := k;
+  (*kv_ptr).second := value;
+  temp1 := bucket_occupied(b_ptr, slot);
+  *temp1 := TRUE;
+}
+
+
+// Found declaration of `libcuckoo_bucket_container::eraseKV' at 147:3
+method libcuckoo_bucket_container_eraseKV(this_ptr: ptr<bucket_container>, ind: size_type, slot: size_type)
+{
+  noaddr var b_ptr:ptr<bucket>;
+  noaddr var temp0: ptr<bool_t>;
+
+  b_ptr := (*this_ptr).buckets_ + ind;
+//  assert(b.occupied(slot));
+  temp0 := bucket_occupied(b_ptr, slot);
+  *temp0 := FALSE;
+}
+
+
+// Found declaration of `libcuckoo_bucket_container::clear' at 154:3
+method libcuckoo_bucket_container_clear(this_ptr: ptr<bucket_container>)
+{
+  noaddr var temp0: size_type;
+  noaddr var i: size_type;
+  noaddr var b_ptr: ptr<bucket>;
+  noaddr var j: size_type;
+  noaddr var temp1: bool_t;
+
+  temp0 := libcuckoo_bucket_container_size(this_ptr);
+  i := 0;
+  while (i < temp0)
+  {
+    b_ptr := (*this_ptr).buckets_ + i;
+    j := 0;
+    while (j < SLOT_PER_BUCKET)
+    {
+      temp1 := bucket_occupied_const(b_ptr, j);
+      if (temp1 != FALSE)
+      {
+        libcuckoo_bucket_container_eraseKV(this_ptr, i, j);
+      }
+      j := j + 1;
+    }
+    i := i + 1;
+  }
+}
+
+
+// Found declaration of `libcuckoo_bucket_container::destroy_buckets' at 171:3
+method libcuckoo_bucket_container_destroy_buckets(this_ptr: ptr<bucket_container>)
+{
+  if ((*this_ptr).buckets_ == null)
+  {
+    return;
+  }
+
+  libcuckoo_bucket_container_clear(this_ptr);
+  dealloc (*this_ptr).buckets_;
+  (*this_ptr).buckets_ := null;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// cuckoohash_map.hh
+////////////////////////////////////////////////////////////////////////////////
+
+// Found declaration of `spinlock::spinlock' at 61:3
+method spinlock_spinlock(this_ptr:ptr<spinlock>) returns ()
+{
+  (*this_ptr).elem_counter_ := 0;
+  (*this_ptr).lock_ := FALSE;
+}
+
+// 
+// // Found declaration of `spinlock::spinlock' at 63:3
+// method spinlock_spinlock(TODO_method_params)
+// {
+//   atomic_flag_clear(&((*this).lock_), TODO_expr__CXXDefaultArgExpr:TODO_type_Enum);
+// }
+// 
+// 
+// // Found declaration of `spinlock::operator=' at 67:3
+// method spinlock_operator=(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   noaddr var temp1:TODO_return_type;
+//   temp0 := spinlock_elem_counter(this);
+//   temp1 := spinlock_elem_counter(other_ptr);
+//   temp0 := temp1;
+//   return *TODO_expr__CXXThisExpr:TODO_type_Pointer;
+// }
+// 
+
+// Found declaration of `spinlock::lock' at 72:3
+method spinlock_lock(this_ptr:ptr<spinlock>) returns ()
+{
+  noaddr var temp0:bool_t;
+  temp0 := compare_and_swap(((*this_ptr).lock_), FALSE, TRUE);
+  while (temp0 == FALSE)
+  {
+    temp0 := compare_and_swap(((*this_ptr).lock_), FALSE, TRUE);
+  }
+
+}
+
+
+// Found declaration of `spinlock::unlock' at 77:3
+method spinlock_unlock(this_ptr:ptr<spinlock>)
+{
+    (*this_ptr).lock_ := FALSE;
+}
+
+// 
+// // Found declaration of `spinlock::try_lock' at 79:3
+// method spinlock_try_lock(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := atomic_flag_test_and_set(&((*this).lock_), memory_order_acq_rel);
+//   return !temp0;
+// }
+
+
+// Found declaration of `spinlock::elem_counter' at 83:3
+method spinlock_elem_counter(this_ptr: ptr<spinlock>) returns (ret: ptr<counter_type>)
+{
+  ret := &(*this_ptr).elem_counter_;
+}
+
+
+// // Found declaration of `spinlock::elem_counter' at 85:3
+// method spinlock_elem_counter(TODO_method_params)
+// {
+//   return (*this).elem_counter_;
+// }
+// 
+
+// Found declaration of `all_locks_list_node::all_locks_list_node' at 95:3
+method all_locks_list_node_all_locks_list_node(this_ptr: ptr<all_locks_list_node>, lock_count: size_type)
+{
+  (*this_ptr).elt.len := lock_count;
+  (*this_ptr).elt.data := calloc(spinlock, lock_count);
+  (*this_ptr).next := null;
+}
+
+// 
+// // Found declaration of `all_locks_t::all_locks_t' at 103:3
+// method all_locks_t_all_locks_t(TODO_method_params)
+// {
+//   (*this).tail_ := TODO_expr__CXXNewExpr:TODO_type_Pointer;
+//   (*this).head_ := (*this).tail_;
+// }
+// 
+
+// Found declaration of `all_locks_t::append' at 108:3
+method all_locks_t_append(this_ptr: ptr<all_locks_t>, new_tail: ptr<all_locks_list_node>)
+{
+  noaddr var tail: ptr<all_locks_list_node>;
+  tail := (*this_ptr).tail_;
+  (*tail).next := new_tail;
+  (*this_ptr).tail_ := new_tail;
+}
+
+
+// Found declaration of `all_locks_t::get_tail' at 113:3
+method all_locks_t_get_tail(this_ptr:ptr<all_locks_t>) returns (ret:ptr<all_locks_list_node>)
+{
+  ret := (*this_ptr).tail_;
+}
+
+
+
+
+
+// 
+// // Found declaration of `LockManager::LockManager' at 131:3
+// method LockManager_LockManager(TODO_method_params)
+// {
+//   swap((*this).lock, *(other_ptr).lock);
+// }
+// 
+// 
+// // Found declaration of `LockManager::operator=' at 135:3
+// method LockManager_operator=(TODO_method_params)
+// {
+//   swap((*this).lock, *(other_ptr).lock);
+//   return *TODO_expr__CXXThisExpr:TODO_type_Pointer;
+// }
+// 
+
+
+
+// Found declaration of `LockManager::reset' at 146:3
+method LockManager_reset(this_ptr: ptr<LockManager>)
+{
+  if ((*this_ptr).lock != null)
+  {
+    spinlock_unlock((*this_ptr).lock);
+    (*this_ptr).lock := null;
+  }
+}
+
+
+// // Found declaration of `LockManager::swap' at 153:3
+// method LockManager_swap(TODO_method_params)
+// {
+//   swap((*this).lock, *(other_ptr).lock);
+// }
+// 
+
+// Found declaration of `LockManager::swap' at 164:3
+//function lock_ind(bucket_ind:size_type): size_type
+//{
+//  bucket_ind & (kMaxNumLocks - 1)
+//}
+
+
+
+// 
+// // Found declaration of `TwoBuckets::TwoBuckets' at 175:3
+// method TwoBuckets_TwoBuckets(TODO_method_params)
+// {
+//   LockManager_swap(&((*this).first_manager_), *(other_ptr).first_manager_);
+//   LockManager_swap(&((*this).second_manager_), *(other_ptr).second_manager_);
+// }
+// 
+// 
+// // Found declaration of `TwoBuckets::operator=' at 181:3
+// method TwoBuckets_operator=(TODO_method_params)
+// {
+//   (*this).i1 := *(other_ptr).i1;
+//   (*this).i2 := *(other_ptr).i2;
+//   LockManager_swap(&((*this).first_manager_), *(other_ptr).first_manager_);
+//   LockManager_swap(&((*this).second_manager_), *(other_ptr).second_manager_);
+//   return *TODO_expr__CXXThisExpr:TODO_type_Pointer;
+// }
+// 
+
+// Found declaration of `TwoBuckets::unlock' at 189:3
+method TwoBuckets_unlock(this_ptr: ptr<TwoBuckets>)
+{
+  LockManager_reset(&((*this_ptr).first_manager_));
+  LockManager_reset(&((*this_ptr).second_manager_));
+}
+
+// 
+// // Found declaration of `b_slot::b_slot' at 226:3
+// method b_slot_b_slot(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `b_queue::full' at 252:3
+// method b_queue_full(TODO_method_params)
+// {
+//   return (*this).last_ == MAX_CUCKOO_COUNT;
+// }
+// 
+// 
+
+// 
+// // Found declaration of `AllLocksManager::AllLocksManager' at 293:3
+// method AllLocksManager_AllLocksManager(TODO_method_params)
+// {
+//   *(other_ptr).active := false;
+// }
+// 
+// 
+// // Found declaration of `AllLocksManager::operator=' at 298:3
+// method AllLocksManager_operator=(TODO_method_params)
+// {
+// }
+
+
+// Found declaration of `AllLocksManager::~AllLocksManager' at 300:3
+method AllLocksManager_destroy_AllLocksManager(this_ptr: ptr<AllLocksManager>)
+{
+  noaddr var it: ptr<all_locks_list_node>;
+  noaddr var locks_ptr: ptr<locks_t>;
+  noaddr var idx: size_type;
+
+  if ((*this_ptr).active != FALSE)
+  {
+    it := (*this_ptr).first_locked;
+    while (it != nullptr)
+    {
+      locks_ptr := &((*it).elt);
+      idx := 0;
+      while (idx < (*locks_ptr).len)
+      {
+        spinlock_unlock(vector_bracket(*locks_ptr, idx));
+        idx := idx + 1;
+      }
+      it := (*it).next;
+    }
+  }
+}
+
+// 
+// // Found declaration of `cuckoohash_map::cuckoohash_map' at 368:3
+// method cuckoohash_map_cuckoohash_map(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::cuckoohash_map' at 380:3
+// method cuckoohash_map_cuckoohash_map(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::operator=' at 381:3
+// method cuckoohash_map_operator=(TODO_method_params)
+// {
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::hash_function' at 401:3
+// method cuckoohash_map_hash_function(TODO_method_params)
+// {
+//   return TODO_expr__CXXConstructExpr:hasher;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::key_eq' at 408:3
+// method cuckoohash_map_key_eq(TODO_method_params)
+// {
+//   return TODO_expr__CXXConstructExpr:key_equal;
+// }
+// 
+
+// Found declaration of `cuckoohash_map::hashpower' at 416:3
+method cuckoohash_map_hashpower(this_ptr:ptr<cuckoohash_map>) returns (ret:size_type)
+{
+  ret := libcuckoo_bucket_container_hashpower(&((*this_ptr).buckets_));
+}
+
+
+// Found declaration of `cuckoohash_map::bucket_count' at 423:3
+method cuckoohash_map_bucket_count(this_ptr:ptr<cuckoohash_map>) returns (ret: size_type)
+{
+  ret := libcuckoo_bucket_container_size(&(*this_ptr).buckets_);
+}
+
+
+// // Found declaration of `cuckoohash_map::empty' at 430:3
+// method cuckoohash_map_empty(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := cuckoohash_map_size(this);
+//   return temp0 == 0;
+// }
+// 
+
+// Found declaration of `cuckoohash_map::size' at 437:3
+method cuckoohash_map_size(this_ptr:ptr<cuckoohash_map>) returns (ret: size_type)
+{
+  noaddr var counter_ptr: ptr<counter_type>;
+  noaddr var idx: uint64;
+  noaddr var locks: ptr<locks_t>;
+  idx := 0;
+  locks := cuckoohash_map_get_current_locks(this_ptr);
+  while (idx < (*locks).len) {
+    counter_ptr := spinlock_elem_counter((*locks).data + idx);
+    ret := ret + ((*counter_ptr) as size_type);
+  }
+  //assert(s >= 0);
+}
+
+
+// Found declaration of `cuckoohash_map::capacity' at 451:3
+method cuckoohash_map_capacity(this_ptr:ptr<cuckoohash_map>) returns (ret: size_type)
+{
+  noaddr var temp0: size_type;
+  temp0 := cuckoohash_map_bucket_count(this_ptr);
+  ret := temp0 * SLOT_PER_BUCKET;
+}
+
+
+// Found declaration of `cuckoohash_map::load_factor' at 459:3
+method cuckoohash_map_load_factor(this_ptr:ptr<cuckoohash_map>) returns (ret_num: uint64, ret_dec: uint64)
+{
+  ret_num := cuckoohash_map_size(this_ptr);
+  ret_dec := cuckoohash_map_capacity(this_ptr);
+}
+
+// 
+// // Found declaration of `cuckoohash_map::minimum_load_factor' at 473:3
+// method cuckoohash_map_minimum_load_factor(TODO_method_params)
+// {
+//   if (mlf < TODO_expr__FloatingLiteral:double)
+//   {
+//     *(error_ptr) := 1;
+//   }
+//   else
+//   if (mlf > TODO_expr__FloatingLiteral:double)
+//   {
+//     *(error_ptr) := 1;
+//   }
+//   else
+//   {
+//     TODO_type_TemplateSpecialization_store(&((*this).minimum_load_factor_), mlf, memory_order_release);
+//     *(error_ptr) := 0;
+//   }
+// 
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::minimum_load_factor' at 490:3
+// method cuckoohash_map_minimum_load_factor(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := TODO_type_TemplateSpecialization_load(&((*this).minimum_load_factor_), memory_order_acquire);
+//   return temp0;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::maximum_hashpower' at 504:3
+// method cuckoohash_map_maximum_hashpower(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := cuckoohash_map_hashpower(this);
+//   if (temp0 > mhp)
+//   {
+//     *(error_ptr) := 1;
+//   }
+//   else
+//   {
+//     __atomic_base_store(&((*this).maximum_hashpower_), mhp, memory_order_release);
+//     *(error_ptr) := 0;
+//   }
+// 
+// }
+// 
+
+// Found declaration of `cuckoohash_map::maximum_hashpower' at 519:3
+method cuckoohash_map_maximum_hashpower(this_ptr:ptr<cuckoohash_map>) returns (ret: size_type)
+{
+  ret := (*this_ptr).maximum_hashpower_;
+}
+
+
+// Found declaration of `cuckoohash_map::find' at 529:3
+method cuckoohash_map_find(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>, val_ptr:ptr<ValueType>) returns (ret:bool_t)
+{
+  var hv:hash_value;
+  noaddr var b:TwoBuckets;
+  noaddr var pos:table_position;
+  noaddr var temp_bucket_ptr:ptr<bucket>;
+  noaddr var temp_value_ptr:ptr<mapped_type>;
+  noaddr var temp_v: mapped_type;
+
+  cuckoohash_map_hashed_key(this_ptr, key_ptr, &hv);
+  b := cuckoohash_map_snapshot_and_lock_two(this_ptr, &hv);
+  pos := cuckoohash_map_cuckoo_find(this_ptr, key_ptr, hv.partial, b.i1, b.i2);
+  if (pos.status == ok)
+  {
+    // *(val_ptr) := libcuckoo_bucket_container_get(pos.index).mapped(pos.slot);
+    temp_bucket_ptr := (*this_ptr).buckets_.buckets_ + pos.index;
+    temp_value_ptr := bucket_mapped(temp_bucket_ptr, pos.slot);
+    temp_v := *temp_value_ptr;
+    *val_ptr := temp_v;
+    TwoBuckets_destroy_TwoBuckets(b)
+    ret := TRUE;
+  }
+  else
+  {
+    TwoBuckets_destroy_TwoBuckets(b)
+    ret := FALSE;
+  }
+}
+
+// 
+// // Found declaration of `cuckoohash_map::find' at 548:3
+// method cuckoohash_map_find(TODO_method_params)
+// {
+//   noaddr var hv:hash_value;
+//   noaddr var b:TODO_type_Auto;
+//   noaddr var pos:table_position;
+//   noaddr var temp0:TODO_return_type;
+//   hv := TODO_expr__ExprWithCleanups:hash_value;
+//   b := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   pos := TODO_expr__ExprWithCleanups:table_position;
+//   if (pos.status == ok)
+//   {
+//     *(error_ptr) := 0;
+//     temp0 := bucket_mapped(&(TODO_expr__CXXOperatorCallExpr:bucket), pos.slot);
+//     return temp0;
+//   }
+//   else
+//   {
+//     *(error_ptr) := 2;
+//     return TODO_expr__CXXScalarValueInitExpr:mapped_type;
+//   }
+// 
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::contains' at 564:3
+// method cuckoohash_map_contains(TODO_method_params)
+// {
+//   noaddr var hv:hash_value;
+//   noaddr var b:TODO_type_Auto;
+//   noaddr var pos:table_position;
+//   hv := TODO_expr__ExprWithCleanups:hash_value;
+//   b := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   pos := TODO_expr__ExprWithCleanups:table_position;
+//   if (pos.status == ok)
+//   {
+//     return true;
+//   }
+//   else
+//   {
+//     return false;
+//   }
+// 
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::update' at 580:3
+// method cuckoohash_map_update(TODO_method_params)
+// {
+//   noaddr var hv:hash_value;
+//   noaddr var b:TODO_type_Auto;
+//   noaddr var pos:table_position;
+//   noaddr var temp0:TODO_return_type;
+//   hv := TODO_expr__ExprWithCleanups:hash_value;
+//   b := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   pos := TODO_expr__ExprWithCleanups:table_position;
+//   if (pos.status == ok)
+//   {
+//     temp0 := bucket_mapped(&(TODO_expr__CXXOperatorCallExpr:bucket), pos.slot);
+//     temp0 := *(val_ptr);
+//     return true;
+//   }
+//   else
+//   {
+//     return false;
+//   }
+// 
+// }
+// 
+
+// Found declaration of `cuckoohash_map::insert' at 595:3
+method cuckoohash_map_insert(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>, val_ptr:ptr<ValueType>, error: ptr<uint8>) returns (ret:bool_t)
+{
+  var hv:hash_value;
+  var b:TwoBuckets;
+  noaddr var pos:table_position;
+  noaddr var tmp_b: TwoBuckets;
+  cuckoohash_map_hashed_key(this_ptr, key_ptr, &hv);
+  tmp_b := cuckoohash_map_snapshot_and_lock_two(this_ptr, &hv);
+  copy_TwoBuckets(b, tmp_b)
+  pos := cuckoohash_map_cuckoo_insert_loop(this_ptr, &hv, &b, key_ptr, error);
+  if (pos.status == ok)
+  {
+    cuckoohash_map_add_to_bucket(this_ptr, pos.index, pos.slot, hv.partial, key_ptr, val_ptr);
+    TwoBuckets_destroy_TwoBuckets(b)
+    ret := TRUE;
+  }
+  else
+  {
+    TwoBuckets_destroy_TwoBuckets(b)
+    ret := FALSE;
+  }
+
+}
+
+
+// // Found declaration of `cuckoohash_map::insert_or_assign' at 611:3
+// method cuckoohash_map_insert_or_assign(TODO_method_params)
+// {
+//   noaddr var hv:hash_value;
+//   noaddr var b:TODO_type_Auto;
+//   noaddr var pos:table_position;
+//   noaddr var temp0:TODO_return_type;
+//   hv := TODO_expr__ExprWithCleanups:hash_value;
+//   b := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   pos := TODO_expr__ExprWithCleanups:table_position;
+//   if (pos.status == ok)
+//   {
+//     cuckoohash_map_add_to_bucket(this, pos.index, pos.slot, hv.partial, *(key_ptr), *(val_ptr));
+//     return true;
+//   }
+//   else
+//   if (*(error_ptr) == 0)
+//   {
+//     temp0 := bucket_mapped(&(TODO_expr__CXXOperatorCallExpr:bucket), pos.slot);
+//     temp0 := *(val_ptr);
+//     return false;
+//   }
+//   else
+//   {
+//     return false;
+//   }
+// 
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::erase' at 631:3
+// method cuckoohash_map_erase(TODO_method_params)
+// {
+//   noaddr var hv:hash_value;
+//   noaddr var b:TODO_type_Auto;
+//   noaddr var pos:table_position;
+//   hv := TODO_expr__ExprWithCleanups:hash_value;
+//   b := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   pos := TODO_expr__ExprWithCleanups:table_position;
+//   if (pos.status == ok)
+//   {
+//     cuckoohash_map_del_from_bucket(this, pos.index, pos.slot);
+//     return true;
+//   }
+//   else
+//   {
+//     return false;
+//   }
+// 
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::rehash' at 652:3
+// method cuckoohash_map_rehash(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := cuckoohash_map_cuckoo_rehash(this, n, *(error_ptr));
+//   return temp0;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::reserve' at 663:3
+// method cuckoohash_map_reserve(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   temp0 := cuckoohash_map_cuckoo_reserve(this, n, *(error_ptr));
+//   return temp0;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::clear' at 668:3
+// method cuckoohash_map_clear(TODO_method_params)
+// {
+//   noaddr var all_locks_manager:TODO_type_Auto;
+//   all_locks_manager := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   cuckoohash_map_cuckoo_clear(this);
+// }
+// 
+
+// Found declaration of `cuckoohash_map::hashed_key' at 683:3
+// method cuckoohash_map_hashed_key(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>, out: ptr<hash_value>)
+// {
+//   noaddr var hash:size_type;
+//   hash := ext_hash_function(*key_ptr);
+//   (*out).hash := hash;
+//   (*out).partial := cuckoohash_map_partial_key(hash);
+// }
+
+method cuckoohash_map_hashed_key_const(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>) returns (out: hash_value)
+{
+  noaddr var hash:size_type;
+  hash := ext_hash_function(*key_ptr);
+  out.hash := hash;
+  out.partial := cuckoohash_map_partial_key(hash);
+}
+
+method cuckoohash_map_hashed_key(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>, out_ptr: ptr<hash_value>)
+{
+  noaddr var hash:size_type;
+  hash := ext_hash_function(*key_ptr);
+  (*out_ptr).hash := hash;
+  (*out_ptr).partial := cuckoohash_map_partial_key(hash);
+}
+
+// Found declaration of `cuckoohash_map::hashed_key_only_hash' at 688:3
+method cuckoohash_map_hashed_key_only_hash(key_ptr:ptr<KeyType>) returns (ret:size_type)
+{
+  ret := ext_hash_function(*key_ptr);
+}
+
+
+// Found declaration of `cuckoohash_map::hashsize' at 694:3
+method cuckoohash_map_hashsize(hp:size_type) returns (ret:size_type)
+{
+  ret := (1 as size_type) << hp;
+}
+
+
+// Found declaration of `cuckoohash_map::hashmask' at 700:3
+method cuckoohash_map_hashmask(hp:size_type) returns (ret:size_type)
+{
+  noaddr var temp0:size_type;
+  temp0 := cuckoohash_map_hashsize(hp);
+  ret := temp0 - 1;
+}
+
+
+// Found declaration of `cuckoohash_map::partial_key' at 708:3
+method cuckoohash_map_partial_key(hash:size_type) returns (ret:partial_t)
+{
+  noaddr var hash_64bit:uint64;
+  noaddr var hash_32bit:uint32;
+  noaddr var hash_16bit:uint16;
+  noaddr var hash_8bit:uint8;
+  hash_64bit := hash;
+  hash_32bit := ((hash_64bit as uint32) ^ ((hash_64bit >> 32) as uint32));
+  hash_16bit := ((hash_32bit as uint16) ^ ((hash_32bit >> 16) as uint16));
+  hash_8bit := ((hash_16bit as uint8) ^ ((hash_16bit >> 8) as uint8));
+  ret := hash_8bit;
+}
+
+
+// Found declaration of `cuckoohash_map::index_hash' at 721:3
+method cuckoohash_map_index_hash(hp:size_type, hv:size_type) returns (ret:size_type)
+{
+  noaddr var temp0:size_type;
+  temp0 := cuckoohash_map_hashmask(hp);
+  ret := hv & temp0;
+}
+
+
+// Found declaration of `cuckoohash_map::alt_index' at 730:3
+method cuckoohash_map_alt_index(hp:size_type, partial:partial_t, index:size_type) returns (ret:size_type)
+{
+  noaddr var nonzero_tag:size_type;
+  noaddr var temp0:size_type;
+  nonzero_tag := (partial as size_type) + 1;
+  temp0 := cuckoohash_map_hashmask(hp);
+  ret := (index ^ (nonzero_tag * 0xc6a4a7935bd1e995)) & temp0;
+}
+
+
+// Found declaration of `cuckoohash_map::check_hashpower' at 742:3
+method cuckoohash_map_check_hashpower(this_ptr:ptr<cuckoohash_map>, hp:size_type, lock_ptr:ptr<spinlock>) returns (ret:int32)
+{
+  noaddr var temp0:size_type;
+  temp0 := cuckoohash_map_hashpower(this_ptr);
+  if (temp0 != hp)
+  {
+    spinlock_unlock(lock_ptr);
+    ret := ERROR_HASHPOWER_CHANGED;
+  }
+  else
+  {
+    ret := ERROR_NONE;
+  }
+}
+
+
+// Found declaration of `cuckoohash_map::lock_one' at 756:3
+method cuckoohash_map_lock_one(this_ptr: ptr<cuckoohash_map>, hp: size_type, i: size_type, error_ptr: ptr<int32>) returns (ret: LockManager)
+{
+  noaddr var locks_ptr: ptr<locks_t>;
+  noaddr var lock_ptr: ptr<spinlock>;
+  noaddr var temp0: int32;
+  locks_ptr := cuckoohash_map_get_current_locks(this_ptr);
+  lock_ptr := vector_bracket(*locks_ptr, lock_ind(i));
+  spinlock_lock(lock_ptr);
+  temp0 := cuckoohash_map_check_hashpower(this_ptr, hp, lock_ptr);
+  *(error_ptr) := temp0;
+  if ((*error_ptr) != ERROR_NONE)
+  {
+    ret.lock := null;
+  }
+
+  ret.lock := lock_ptr;
+}
+
+
+// Found declaration of `cuckoohash_map::lock_two' at 772:3
+method cuckoohash_map_lock_two(this_ptr:ptr<cuckoohash_map>, hp:size_type, i1:size_type, i2:size_type, error_ptr:ptr<int32>) returns (ret:TwoBuckets)
+{
+  noaddr var l1:size_type;
+  noaddr var l2:size_type;
+  noaddr var templ:size_type;
+  noaddr var locks_ptr:ptr<locks_t>;
+  noaddr var temp0:int32;
+  noaddr var tmpv: ptr<spinlock>;
+
+  l1 := lock_ind(i1);
+  l2 := lock_ind(i2);
+  if (l2 < l1)
+  {
+    templ := l2;
+    l2 := l1;
+    l1 := templ;
+  }
+
+  locks_ptr := cuckoohash_map_get_current_locks(this_ptr);
+  spinlock_lock(vector_bracket(*locks_ptr, l1));
+  temp0 := cuckoohash_map_check_hashpower(this_ptr, hp, vector_bracket(*locks_ptr, l1));
+  *(error_ptr) := temp0;
+  if ((*error_ptr) != 0)
+  {
+    TwoBuckets_TwoBuckets_default(ret)
+    return;
+  }
+
+  if (l2 != l1)
+  {
+    spinlock_lock(vector_bracket(*locks_ptr, l2));
+  }
+
+  TwoBuckets_TwoBuckets(ret, locks_ptr, i1, i2, tmpv)
+  return;
+}
+
+
+// Found declaration of `cuckoohash_map::lock_three' at 795:3
+method cuckoohash_map_lock_three(this_ptr: ptr<cuckoohash_map>, hp: size_type, i1: size_type, i2: size_type, i3: size_type, error_ptr: ptr<int32>) returns (ret1: TwoBuckets, ret2: LockManager)
+{
+  noaddr var l: size_type[3];
+  noaddr var locks_ptr:ptr<locks_t>;
+  noaddr var temp0: int32;
+  noaddr var tmpv: ptr<spinlock>;
+  l[0] := lock_ind(i1);
+  l[1] := lock_ind(i2);
+  l[2] := lock_ind(i3);
+  if (l[2] < l[1]) {
+    i1 := l[2];
+    l[2] := l[1];
+    l[1] := i1;
+  }
+  if (l[2] < l[0]) {
+    i1 := l[2];
+    l[2] := l[0];
+    l[0] := i1;
+  }
+  if (l[1] < l[0]) {
+    i1 := l[1];
+    l[1] := l[0];
+    l[0] := i1;
+  }
+  locks_ptr := cuckoohash_map_get_current_locks(this_ptr);
+  spinlock_lock(vector_bracket(*locks_ptr, l[0]));
+  temp0 := cuckoohash_map_check_hashpower(this_ptr, hp, vector_bracket(*locks_ptr, l[0]));
+  *error_ptr := temp0;
+  if ((*error_ptr) != ERROR_NONE)
+  {
+    TwoBuckets_TwoBuckets_default(ret1)
+    LockManager_LockManager_default(ret2)
+    return;
+  }
+
+  if (l[1] != l[0])
+  {
+    spinlock_lock(vector_bracket(*locks_ptr, l[1]));
+  }
+
+  if (l[2] != l[1])
+  {
+    spinlock_lock(vector_bracket(*locks_ptr, l[2]));
+  }
+
+  TwoBuckets_TwoBuckets(ret1, locks_ptr, i1, i2, tmpv)
+  LockManager_LockManager(ret2, if (lock_ind(i3) == lock_ind(i1) || lock_ind(i3) == lock_ind(i2))
+                                  then nullptr
+                                  else vector_bracket(*locks_ptr, lock_ind(i3)))
+}
+
+// Found declaration of `cuckoohash_map::snapshot_and_lock_two' at 832:3
+method cuckoohash_map_snapshot_and_lock_two(this_ptr:ptr<cuckoohash_map>, hv_ptr:ptr<hash_value>) returns (ret:TwoBuckets)
+{
+  noaddr var hp:size_type;
+  noaddr var i1:size_type;
+  noaddr var i2:size_type;
+  var error:int32;
+  noaddr var tb:TwoBuckets;
+  while (true)
+  {
+    hp := cuckoohash_map_hashpower(this_ptr);
+    i1 := cuckoohash_map_index_hash(hp, (*hv_ptr).hash);
+    i2 := cuckoohash_map_alt_index(hp, (*hv_ptr).partial, i1);
+    tb := cuckoohash_map_lock_two(this_ptr, hp, i1, i2, &error);
+    if (error == ERROR_HASHPOWER_CHANGED)
+    {
+      continue;
+    }
+    else
+    {
+      ret := tb;
+      return;
+    }
+  }
+}
+
+
+// Found declaration of `cuckoohash_map::snapshot_and_lock_all' at 857:3
+method cuckoohash_map_snapshot_and_lock_all(this_ptr:ptr<cuckoohash_map>) returns (ret: AllLocksManager)
+{
+  noaddr var first_locked: ptr<all_locks_list_node>;
+  noaddr var current_locks: ptr<all_locks_list_node>;
+  noaddr var locks_ptr:ptr<locks_t>;
+  noaddr var i: uint64;
+
+  first_locked := all_locks_t_get_tail(&(*this_ptr).all_locks_);
+  current_locks := first_locked;
+  while (current_locks != null)
+  {
+    locks_ptr := &((*current_locks).elt);
+    i := 0;
+    while (i < vector_size(*locks_ptr)) {
+      spinlock_lock(vector_bracket(*locks_ptr, i));
+    }
+    current_locks := (*current_locks).next;
+  }
+
+  AllLocksManager_AllLocksManager(ret, first_locked)
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoo_find' at 877:3
+method cuckoohash_map_cuckoo_find(this_ptr:ptr<cuckoohash_map>, key_ptr:ptr<KeyType>, partial:partial_t, i1:size_type, i2:size_type) returns (ret:table_position)
+{
+  noaddr var slot:int32;
+  slot := cuckoohash_map_try_read_from_bucket(this_ptr, (*this_ptr).buckets_.buckets_ + i1, partial, key_ptr);
+  if (slot != -1)
+  {
+    ret.index := i1;
+    ret.slot := slot as size_type;
+    ret.status := ok;
+    return;
+  }
+
+  slot := cuckoohash_map_try_read_from_bucket(this_ptr, (*this_ptr).buckets_.buckets_ + i2, partial, key_ptr);
+  if (slot != -1)
+  {
+    ret.index := i2;
+    ret.slot := slot as size_type;
+    ret.status := ok;
+    return;
+  }
+
+  ret.index := 0;
+  ret.slot := 0;
+  ret.status := failure_key_not_found;
+  return;
+}
+
+
+// Found declaration of `cuckoohash_map::try_read_from_bucket' at 892:3
+method cuckoohash_map_try_read_from_bucket(this_ptr:ptr<cuckoohash_map>, b_ptr:ptr<bucket>, partial:partial_t, key_ptr:ptr<KeyType>)
+    returns (ret:int32)
+{
+  noaddr var i:int32;
+  noaddr var temp0:bool_t;
+  noaddr var temp1:partial_t;
+  noaddr var temp_key_ptr:ptr<KeyType>;
+  noaddr var temp_key:KeyType;
+  i := 0;
+  while (i < SLOT_PER_BUCKET)
+  {
+    temp0 := bucket_occupied_const(b_ptr, i as uint64);
+    temp1 := bucket_partial_const(b_ptr, i as uint64);
+    if (temp0 == FALSE || (!IS_SIMPLE && partial != temp1))
+    {
+      continue;
+    }
+    else
+    {
+      temp_key_ptr := bucket_key(b_ptr, i as uint64);
+      temp_key := *temp_key_ptr;
+      temp0 := ext_key_eq(temp_key, *key_ptr);
+      if (temp0 == TRUE) {
+        ret := i;
+        return;
+      }
+    }
+    i := i + 1;
+  }
+  ret := -1;
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoo_insert_loop' at 922:3
+method cuckoohash_map_cuckoo_insert_loop(this_ptr:ptr<cuckoohash_map>, hv_ptr: ptr<hash_value>, b_ptr: ptr<TwoBuckets>, key_ptr: ptr<KeyType>, error_ptr: ptr<uint8>) returns (ret: table_position)
+{
+  noaddr var pos:table_position;
+  noaddr var hp:size_type;
+  noaddr var tmp_b: TwoBuckets;
+  noaddr var tmp: cuckoo_status;
+  *(error_ptr) := 0;
+  while (true)
+  {
+    hp := cuckoohash_map_hashpower(this_ptr);
+    pos := cuckoohash_map_cuckoo_insert(this_ptr, *hv_ptr, b_ptr, key_ptr);
+    if (pos.status == ok || pos.status == failure_key_duplicated)
+    {
+      ret := pos;
+      return;
+    }
+    else if (pos.status == failure_table_full)
+    {
+      tmp := cuckoohash_map_cuckoo_fast_double(this_ptr, hp, TRUE, error_ptr);
+      if ((*error_ptr) != ERROR_NONE) {
+        ret := pos;
+        return;
+      }
+      TwoBuckets_destroy_TwoBuckets((*b_ptr))
+      tmp_b := cuckoohash_map_snapshot_and_lock_two(this_ptr, hv_ptr);
+      copy_TwoBuckets((*b_ptr), tmp_b)
+    }
+    else if (pos.status == failure_under_expansion)
+    {
+      TwoBuckets_destroy_TwoBuckets((*b_ptr))
+      tmp_b := cuckoohash_map_snapshot_and_lock_two(this_ptr, hv_ptr);
+      copy_TwoBuckets((*b_ptr), tmp_b)
+    }
+//    else {
+//      assert FALSE;
+//    }
+  }
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoo_insert' at 969:3
+method cuckoohash_map_cuckoo_insert(this_ptr:ptr<cuckoohash_map>, hv: hash_value, b_ptr: ptr<TwoBuckets>, key_ptr: ptr<KeyType>) returns (ret: table_position)
+{
+  noaddr var b1_ptr: ptr<bucket>;
+  noaddr var temp1: bool_t;
+  noaddr var b2_ptr: ptr<bucket>;
+  noaddr var temp2: bool_t;
+  noaddr var insert_bucket_ptr: ptr<size_type>;
+  noaddr var insert_slot_ptr: ptr<size_type>;
+  noaddr var st:cuckoo_status;
+  noaddr var pos:table_position;
+  noaddr var tmp_v: size_type;
+  noaddr var res1_ptr: ptr<int32>;
+  noaddr var res2_ptr: ptr<int32>;
+  tmp_v := (*b_ptr).i1;
+  b1_ptr := (*this_ptr).buckets_.buckets_ + tmp_v;
+  temp1 := cuckoohash_map_try_find_insert_bucket(this_ptr, b1_ptr, res1_ptr, hv.partial, key_ptr);
+  if (temp1 != 0)
+  {
+    ret.index := (*b_ptr).i1;
+    ret.slot := (*res1_ptr) as size_type;
+    ret.status := failure_key_duplicated;
+    return;
+  }
+
+  tmp_v := (*b_ptr).i2;
+  b2_ptr := (*this_ptr).buckets_.buckets_ + tmp_v;
+  temp2 := cuckoohash_map_try_find_insert_bucket(this_ptr, b2_ptr, res2_ptr, hv.partial, key_ptr);
+  if (temp2 != 0)
+  {
+    ret.index := (*b_ptr).i2;
+    ret.slot := (*res2_ptr) as size_type;
+    ret.status := failure_key_duplicated;
+    return;
+  }
+
+  if ((*res1_ptr) != -1)
+  {
+    ret.index := (*b_ptr).i1;
+    ret.slot := *res1_ptr as size_type;
+    ret.status := ok;
+    return;
+  }
+
+  if ((*res2_ptr) != -1)
+  {
+    ret.index := (*b_ptr).i2;
+    ret.slot := *res2_ptr as size_type;
+    ret.status := ok;
+    return;
+  }
+
+  *insert_bucket_ptr := 0;
+  *insert_slot_ptr := 0;
+  st := cuckoohash_map_run_cuckoo(this_ptr, b_ptr, insert_bucket_ptr, insert_slot_ptr);
+  if (st == failure_under_expansion)
+  {
+    ret.index := 0;
+    ret.slot := 0;
+    ret.status := failure_under_expansion;
+    return;
+  }
+  else
+  if (st == ok)
+  {
+//      assert(!get_current_locks()[lock_ind(b.i1)].try_lock());
+//      assert(!get_current_locks()[lock_ind(b.i2)].try_lock());
+//      assert(!buckets_[insert_bucket].occupied(insert_slot));
+//      assert(insert_bucket == index_hash(hashpower(), hv.hash) ||
+//             insert_bucket == alt_index(hashpower(), hv.partial,
+//                                        index_hash(hashpower(), hv.hash)));
+
+    tmp_v := (*b_ptr).i2;
+    pos := cuckoohash_map_cuckoo_find(this_ptr, key_ptr, hv.partial, (*b_ptr).i1, tmp_v);
+    if (pos.status == ok)
+    {
+      ret.index := pos.index;
+      ret.slot := pos.slot;
+      ret.status := failure_key_duplicated;
+      return;
+    }
+
+    ret.index := *insert_bucket_ptr;
+    ret.slot := *insert_slot_ptr;
+    ret.status := ok;
+    return;
+  }
+
+//  assert(st == failure);
+  ret.index := 0;
+  ret.slot := 0;
+  ret.status := failure_table_full;
+}
+
+
+// Found declaration of `cuckoohash_map::add_to_bucket' at 1024:3
+method cuckoohash_map_add_to_bucket(this_ptr:ptr<cuckoohash_map>, bucket_ind: size_type, slot: size_type, partial: partial_t, key_ptr:ptr<KeyType>, val_ptr:ptr<ValueType>)
+{
+  noaddr var temp0: ptr<counter_type>;
+  noaddr var locks_ptr: ptr<locks_t>;
+  noaddr var tmp_v: counter_type;
+  
+  libcuckoo_bucket_container_setKV(&((*this_ptr).buckets_), bucket_ind, slot, partial, key_ptr, val_ptr);
+  locks_ptr := cuckoohash_map_get_current_locks(this_ptr);
+  temp0 := spinlock_elem_counter(vector_bracket(*locks_ptr, lock_ind(bucket_ind)));
+  tmp_v := *temp0 + 1;
+  *temp0 := tmp_v;
+}
+
+
+// Found declaration of `cuckoohash_map::try_find_insert_bucket' at 1035:3
+method cuckoohash_map_try_find_insert_bucket(this_ptr:ptr<cuckoohash_map>, b_ptr: ptr<bucket>, slot_ptr: ptr<int32>, partial: partial_t, key_ptr: ptr<KeyType>) returns (ret: bool_t)
+{
+  noaddr var i:int32;
+  noaddr var temp0:bool_t;
+  noaddr var temp1:partial_t;
+  noaddr var temp2: ptr<KeyType>;
+  noaddr var temp3: bool_t;
+  noaddr var key: KeyType := *key_ptr;
+
+  *slot_ptr := -1;
+  i := 0;
+  while (i < SLOT_PER_BUCKET)
+  {
+    temp0 := bucket_occupied_const(b_ptr, i as size_type);
+    if (temp0 == TRUE)
+    {
+      temp1 := bucket_partial_const(b_ptr, i as size_type);
+      if (!IS_SIMPLE && partial != temp1)
+      {
+        continue;
+      }
+
+      temp2 := bucket_key(b_ptr, i as size_type);
+      temp3 := ext_key_eq(*temp2, key);
+      if (temp3 == TRUE)
+      {
+        *slot_ptr := i;
+        ret := FALSE;
+        return;
+      }
+    }
+    else
+    {
+      *slot_ptr := i;
+    }
+    i := i + 1;
+  }
+
+  ret := TRUE;
+}
+
+
+// Found declaration of `cuckoohash_map::run_cuckoo' at 1064:3
+method cuckoohash_map_run_cuckoo(this_ptr:ptr<cuckoohash_map>, b_ptr: ptr<TwoBuckets>, insert_bucket_ptr: ptr<size_type>, insert_slot_ptr: ptr<size_type>) returns (ret: cuckoo_status)
+{
+  noaddr var hp:size_type;
+  var cuckoo_path: CuckooRecords;
+  noaddr var done:bool_t;
+  var error:int32;
+  noaddr var depth:int8;
+  noaddr var temp0:bool_t;
+  noaddr var tmp1: size_type;
+
+  hp := cuckoohash_map_hashpower(this_ptr);
+  TwoBuckets_unlock(b_ptr);
+  done := FALSE;
+  while (done == failure_under_expansion)
+  {
+    tmp1 := (*b_ptr).i1;
+    depth := cuckoohash_map_cuckoopath_search(this_ptr, hp, &cuckoo_path[0], tmp1, (*b_ptr).i2, &error);
+    if (error == ERROR_HASHPOWER_CHANGED)
+    {
+      ret := failure_under_expansion;
+      return;
+    }
+
+    if (depth < 0)
+    {
+      break;
+    }
+
+    temp0 := cuckoohash_map_cuckoopath_move(this_ptr, hp, &cuckoo_path[0], depth as size_type, b_ptr, &error);
+    if (temp0 == TRUE)
+    {
+      tmp1 := cuckoo_path[0].bucket;
+      *insert_bucket_ptr := tmp1;
+      tmp1 := cuckoo_path[0].slot;
+      *insert_slot_ptr := tmp1;
+//       assert(insert_bucket == b.i1 || insert_bucket == b.i2);
+//       assert(!get_current_locks()[lock_ind(b.i1)].try_lock());
+//       assert(!get_current_locks()[lock_ind(b.i2)].try_lock());
+//       assert(!buckets_[insert_bucket].occupied(insert_slot));
+      done := TRUE;
+      break;
+    }
+
+    if (error == ERROR_HASHPOWER_CHANGED)
+    {
+      ret := failure_under_expansion;
+      return;
+    }
+  }
+
+  ret := if done == TRUE then ok else failure;
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoopath_search' at 1123:3
+method cuckoohash_map_cuckoopath_search(this_ptr: ptr<cuckoohash_map>, hp: size_type, cuckoo_path: ptr<CuckooRecord>, i1: size_type, i2: size_type, error_ptr: ptr<int32>) returns (ret: int8)
+{
+  noaddr var x:b_slot;
+  noaddr var i:int8;
+  noaddr var first_ptr:ptr<CuckooRecord>;
+  noaddr var lock_manager:LockManager;
+  noaddr var b_ptr:ptr<bucket>;
+  noaddr var temp0:bool_t;
+  noaddr var curr_ptr:ptr<CuckooRecord>;
+  noaddr var prev_ptr:ptr<CuckooRecord>;
+  noaddr var tmp: ptr<key_type>;
+  noaddr var tmp1: size_type;
+  noaddr var tmp2: partial_t;
+
+  *(error_ptr) := ERROR_NONE;
+  x := cuckoohash_map_slot_search(this_ptr, hp, i1, i2, error_ptr);
+  if (x.depth == -1)
+  {
+    ret := -1;
+    return;
+  }
+
+  i := x.depth;
+  while (i >= 0)
+  {
+    (*(cuckoo_path + i)).slot := (x.pathcode % SLOT_PER_BUCKET) as uint64;
+    x.pathcode := x.pathcode / SLOT_PER_BUCKET;
+    i := i - 1;
+  }
+
+  first_ptr := cuckoo_path;
+  if (x.pathcode == 0)
+  {
+    (*first_ptr).bucket := i1;
+  }
+  else
+  {
+//     assert(x.pathcode == 1);
+    (*first_ptr).bucket := i2;
+  }
+
+  {
+    lock_manager := cuckoohash_map_lock_one(this_ptr, hp, (*first_ptr).bucket, error_ptr);
+    if ((*error_ptr) != ERROR_NONE)
+    {
+      LockManager_destroy_LockManager(lock_manager)
+      ret := -1;
+      return;
+    }
+
+    tmp1 := (*first_ptr).bucket;
+    b_ptr := (*this_ptr).buckets_.buckets_ + tmp1;
+    temp0 := bucket_occupied_const(b_ptr, (*first_ptr).slot);
+    if (temp0 == FALSE)
+    {
+      LockManager_destroy_LockManager(lock_manager)
+      ret := 0;
+      return;
+    }
+
+    tmp := bucket_key(b_ptr, (*first_ptr).slot);
+    cuckoohash_map_hashed_key(this_ptr, tmp, &(*first_ptr).hv);
+
+    LockManager_destroy_LockManager(lock_manager)
+  }
+
+  i := 1;
+  while (i <= x.depth)
+  {
+    curr_ptr := cuckoo_path + i;
+    prev_ptr := cuckoo_path + (i - 1);
+
+//     assert(prev.bucket == index_hash(hp, prev.hv.hash) ||
+//        prev.bucket ==
+//            alt_index(hp, prev.hv.partial, index_hash(hp, prev.hv.hash)));
+
+    tmp2 := (*prev_ptr).hv.partial;
+    tmp1 := (*prev_ptr).bucket;
+    (*curr_ptr).bucket := cuckoohash_map_alt_index(hp, tmp2, tmp1);
+    lock_manager := cuckoohash_map_lock_one(this_ptr, hp, (*curr_ptr).bucket, error_ptr);
+    if ((*error_ptr) != ERROR_NONE)
+    {
+      LockManager_destroy_LockManager(lock_manager)
+      ret := -1;
+      return;
+    }
+
+    tmp1 := (*curr_ptr).bucket;
+    b_ptr := (*this_ptr).buckets_.buckets_ + tmp1;
+    temp0 := bucket_occupied_const(b_ptr, (*curr_ptr).slot);
+    if (temp0 == FALSE)
+    {
+      LockManager_destroy_LockManager(lock_manager)
+      ret := i;
+      return;
+    }
+
+    tmp := bucket_key(b_ptr, (*curr_ptr).slot);
+    cuckoohash_map_hashed_key(this_ptr, tmp, &(*curr_ptr).hv);
+    
+    LockManager_destroy_LockManager(lock_manager)
+    i := i + 1;
+  }
+
+  ret := x.depth;
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoopath_move' at 1190:3
+method cuckoohash_map_cuckoopath_move(this_ptr: ptr<cuckoohash_map>, hp: size_type, cuckoo_path: ptr<CuckooRecord>, depth: size_type, b_ptr: ptr<TwoBuckets>, error_ptr: ptr<int32>) returns (ret: bool_t)
+{
+  noaddr var bucket: size_type;
+  noaddr var temp0: bool_t;
+  noaddr var from_ptr: ptr<CuckooRecord>;
+  noaddr var to_ptr: ptr<CuckooRecord>;
+  noaddr var fs: size_type;
+  noaddr var ts: size_type;
+  noaddr var twob: TwoBuckets;
+  noaddr var extra_manager: LockManager;
+  noaddr var fb_ptr: ptr<bucket>;
+  noaddr var tb_ptr: ptr<bucket>;
+  noaddr var temp1: bool_t;
+  noaddr var temp2: bool_t;
+  noaddr var temp3: ptr<key_type>;
+  noaddr var temp4: size_type;
+  noaddr var temp5: partial_t;
+  noaddr var temp6: ptr<key_type>;
+  noaddr var temp7: ptr<mapped_type>;
+  noaddr var temp8: ptr<bucket>;
+
+  noaddr var tmp_i1: size_type;
+  noaddr var tmp_i2: size_type;
+  noaddr var tmp_b: TwoBuckets;
+
+  *error_ptr := ERROR_NONE;
+  if (depth == 0)
+  {
+    bucket := (*cuckoo_path).bucket;
+//      assert(bucket == b.i1 || bucket == b.i2);
+
+    tmp_i1 := (*b_ptr).i1;
+    tmp_b := cuckoohash_map_lock_two(this_ptr, hp, tmp_i1, (*b_ptr).i2, error_ptr);
+    copy_TwoBuckets(*b_ptr, tmp_b)
+
+    if ((*error_ptr) != ERROR_NONE)
+    {
+      ret := FALSE;
+      return;
+    }
+    
+    temp8 := (*this_ptr).buckets_.buckets_ + bucket;
+    temp0 := bucket_occupied_const(temp8, (*cuckoo_path).slot);
+    if (temp0 == FALSE)
+    {
+      ret := TRUE;
+      return;
+    }
+    else
+    {
+      TwoBuckets_unlock(b_ptr);
+      ret := FALSE;
+      return;
+    }
+  }
+
+  while (depth > 0)
+  {
+    from_ptr := cuckoo_path + (depth - 1);
+    to_ptr := cuckoo_path + depth;
+    fs := (*from_ptr).slot;
+    ts := (*to_ptr).slot;
+
+    LockManager_LockManager_default(extra_manager)
+
+    if (depth == 1)
+    {
+      tmp_i1 := (*b_ptr).i1;
+      tmp_i2 := (*b_ptr).i2;
+      twob, extra_manager := cuckoohash_map_lock_three(this_ptr, hp, tmp_i1, tmp_i2, (*to_ptr).bucket, error_ptr);
+    }
+    else
+    {
+      temp4 := (*from_ptr).bucket;
+      twob := cuckoohash_map_lock_two(this_ptr, hp, temp4, (*to_ptr).bucket, error_ptr);
+    }
+
+    if ((*error_ptr) != ERROR_NONE)
+    {
+      ret := FALSE;
+      return;
+    }
+
+    temp4 := (*from_ptr).bucket;
+    fb_ptr := (*this_ptr).buckets_.buckets_ + temp4;
+    temp4 := (*to_ptr).bucket;
+    tb_ptr := (*this_ptr).buckets_.buckets_ + temp4;
+
+    temp1 := bucket_occupied_const(tb_ptr, ts);
+    temp2 := bucket_occupied_const(fb_ptr, fs);
+    temp3 := bucket_key(fb_ptr, fs);
+    temp4 := cuckoohash_map_hashed_key_only_hash(temp3);
+    if (temp1 != FALSE || temp2 == FALSE || temp4 != (*from_ptr).hv.hash)
+    {
+      ret := FALSE;
+      return;
+    }
+
+    temp5 := bucket_partial_const(fb_ptr, fs);
+    temp6 := bucket_key(fb_ptr, fs);
+    temp7 := bucket_mapped(fb_ptr, fs);
+    libcuckoo_bucket_container_setKV(&((*this_ptr).buckets_), (*to_ptr).bucket, ts, temp5, temp6, temp7);
+    libcuckoo_bucket_container_eraseKV(&((*this_ptr).buckets_), (*from_ptr).bucket, fs);
+
+    if (depth == 1)
+    {
+      TwoBuckets_destroy_TwoBuckets((*b_ptr))
+      copy_TwoBuckets((*b_ptr), twob)
+    } else {
+      TwoBuckets_destroy_TwoBuckets(twob)
+    }
+
+    LockManager_destroy_LockManager(extra_manager)
+
+    depth := depth - 1;
+
+  }
+
+  ret := TRUE;
+}
+
+
+// Found declaration of `cuckoohash_map::slot_search' at 1270:3
+method cuckoohash_map_slot_search(this_ptr: ptr<cuckoohash_map>, hp: size_type, i1: size_type, i2: size_type, error_ptr: ptr<int32>) returns (ret: b_slot)
+{
+  noaddr var q: b_queue;
+  noaddr var temp0: bool_t;
+  noaddr var x: b_slot;
+  noaddr var lock_manager: LockManager;
+  noaddr var b_ptr: ptr<bucket>;
+  noaddr var starting_slot: size_type;
+  noaddr var i: size_type;
+  noaddr var slot: uint16;
+  noaddr var temp1: bool_t;
+  noaddr var partial: partial_t;
+  noaddr var y:b_slot;
+  noaddr var tmp_b : b_slot;
+  
+  b_queue_b_queue(q)
+  b_slot_b_slot(tmp_b, i1, 0, 0)
+  b_queue_enqueue(q, tmp_b)
+  b_slot_b_slot(tmp_b, i2, 1, 0)
+  b_queue_enqueue(q, tmp_b)
+  temp0 := if b_queue_empty(q) then TRUE else FALSE;
+  while (temp0 == FALSE)
+  {
+    b_queue_dequeue(q, x)
+    lock_manager := cuckoohash_map_lock_one(this_ptr, hp, x.bucket, error_ptr);
+    if ((*error_ptr) != ERROR_NONE)
+    {
+      b_slot_b_slot(tmp_b, 0, 0, -1)
+      ret := tmp_b;
+      return;
+    }
+
+    b_ptr := (*this_ptr).buckets_.buckets_ + x.bucket;
+    starting_slot := (x.pathcode % SLOT_PER_BUCKET) as size_type;
+    i := 0;
+    while (i < SLOT_PER_BUCKET)
+    {
+      slot := ((starting_slot + i) % SLOT_PER_BUCKET) as uint16;
+      temp1 := bucket_occupied_const(b_ptr, slot as uint64);
+      if (temp1 == FALSE)
+      {
+        x.pathcode := x.pathcode * SLOT_PER_BUCKET + slot;
+        ret := x;
+        return;
+      }
+
+      partial := bucket_partial_const(b_ptr, slot as uint64);
+      if (x.depth < MAX_BFS_PATH_LEN - 1)
+      {
+//          assert(!q.full());
+        b_slot_b_slot(y, cuckoohash_map_alt_index(hp, partial, x.bucket), x.pathcode * SLOT_PER_BUCKET + slot, x.depth + 1)
+        b_queue_enqueue(q, y)
+      }
+
+      i := i + 1;
+    }
+    temp0 := if b_queue_empty(q) then TRUE else FALSE;
+  }
+  b_slot_b_slot(tmp_b, 0, 0, -1)
+  ret := tmp_b;
+}
+
+
+// Found declaration of `cuckoohash_map::cuckoo_fast_double' at 1315:3
+method cuckoohash_map_cuckoo_fast_double(this_ptr:ptr<cuckoohash_map>, current_hp: size_type, auto_resize: bool_t, error_ptr: ptr<uint8>) returns (ret: cuckoo_status)
+{
+  noaddr var new_hp:size_type;
+  noaddr var all_locks_manager: AllLocksManager;
+  noaddr var st: cuckoo_status;
+  var new_buckets: bucket_container;
+  noaddr var start:size_type;
+  noaddr var end:size_type;
+  noaddr var num_threads: size_type;
+  noaddr var work_per_thread: size_type;
+  noaddr var threads_ptr: ptr<uint64>;
+  noaddr var errors_ptr: ptr<uint8>;
+  noaddr var i:size_type;
+  noaddr var temp0: uint8;
+
+  noaddr var tmp_buckets: bucket_container;
+
+  *error_ptr := ERROR_NONE;
+//    if (!std::is_nothrow_move_constructible<key_type>::value ||
+//        !std::is_nothrow_move_constructible<mapped_type>::value) {
+//      LIBCUCKOO_DBG("%s", "cannot run cuckoo_fast_double because key-value"
+//                          " pair is not nothrow move constructible");
+//      return cuckoo_expand_simple(current_hp + 1, auto_resize, error);
+//    }
+
+  new_hp := current_hp + 1;
+  all_locks_manager := cuckoohash_map_snapshot_and_lock_all(this_ptr);
+  st := cuckoohash_map_check_resize_validity(this_ptr, current_hp, new_hp, auto_resize, error_ptr);
+  if (st != ok)
+  {
+    ret := st;
+    return;
+  }
+
+  bucket_container_bucket_container(&new_buckets, new_hp);
+  
+  start := 0;
+  end := cuckoohash_map_hashsize(current_hp);
+  num_threads := ext_hardware_concurrency();
+  num_threads := if num_threads < 1 then 1 else num_threads;
+
+  work_per_thread := (end - start) / num_threads;
+  threads_ptr := calloc(uint64, num_threads);
+  errors_ptr := calloc(uint8, num_threads);
+  i := 0;
+  while (i < num_threads - 1)
+  {
+    *(errors_ptr + i) := ERROR_NONE;
+    *(threads_ptr + i) := create_thread cuckoohash_map_move_buckets(this_ptr, &new_buckets, current_hp, new_hp, start, start + work_per_thread, errors_ptr + i);
+    start := start + work_per_thread;
+    i := i + 1;
+  }
+
+  *(errors_ptr + i) := ERROR_NONE;
+  *(threads_ptr + i) := create_thread cuckoohash_map_move_buckets(this_ptr, &new_buckets, current_hp, new_hp, start, end, errors_ptr + i);
+  i := 0;
+  while (i < num_threads)
+  {
+    join *(threads_ptr + i);
+    i := i + 1;
+  }
+
+  *error_ptr := ERROR_NONE;
+  i := 0;
+  while (i < num_threads)
+  {
+    if ((*(errors_ptr + i)) != ERROR_NONE)
+    {
+      temp0 := *(errors_ptr + i);
+      *error_ptr := temp0;
+      ret := failure;
+      return;
+    }
+    i := i + 1;
+  }
+
+  dealloc threads_ptr;
+  dealloc errors_ptr;
+
+  cuckoohash_map_maybe_resize_locks(this_ptr, 1 << new_hp);
+  libcuckoo_bucket_container_destroy_buckets(&(*this_ptr).buckets_);
+
+  tmp_buckets.hashpower_ := new_buckets.hashpower_;
+  tmp_buckets.buckets_ := new_buckets.buckets_;
+
+  (*this_ptr).buckets_.hashpower_ := tmp_buckets.hashpower_;
+  (*this_ptr).buckets_.buckets_ := tmp_buckets.buckets_;
+  ret := ok;
+}
+
+
+// // Found declaration of `cuckoohash_map::cuckoo_expand_simple_thread_routine' at 1378:3
+// method cuckoohash_map_cuckoo_expand_simple_thread_routine(TODO_method_params)
+// {
+//   noaddr var j:size_type;
+//   noaddr var temp0:TODO_return_type;
+//   noaddr var temp1:TODO_return_type;
+//   noaddr var temp2:TODO_return_type;
+//   *(error_ptr) := 0;
+//   while (i < end)
+//   {
+//     j := 0;
+//     while (j < SLOT_PER_BUCKET)
+//     {
+//       temp0 := bucket_occupied(&(TODO_expr__CXXOperatorCallExpr:bucket), j);
+//       if (temp0)
+//       {
+//         temp1 := bucket_key(&(TODO_expr__CXXOperatorCallExpr:bucket), j);
+//         temp2 := bucket_mapped(&(TODO_expr__CXXOperatorCallExpr:bucket), j);
+//         TODO_type_Pointer_insert(&(new_map), temp1, temp2, *(error_ptr));
+//         if (*(error_ptr) != 0)
+//         {
+//           TODO_BreakStmt
+//         }
+// 
+//       }
+// 
+//       ++j;
+//     }
+// 
+//     ++i;
+//   }
+// 
+// }
+// 
+
+// Found declaration of `cuckoohash_map::move_buckets' at 1397:3
+method cuckoohash_map_move_buckets(this_ptr: ptr<cuckoohash_map>, new_buckets_ptr: ptr<bucket_container>, current_hp: size_type, new_hp: size_type, start_ind: size_type, end_ind: size_type, error_ptr: ptr<uint8>)
+{
+  noaddr var old_bucket_ind: size_type;
+  noaddr var old_bucket_ptr: ptr<bucket>;
+  noaddr var new_bucket_ind: size_type;
+  noaddr var temp0: size_type;
+  noaddr var new_bucket_slot:size_type;
+  noaddr var old_bucket_slot:size_type;
+  noaddr var temp1: bool_t;
+  noaddr var t_k: ptr<key_type>;
+  noaddr var hv: hash_value;
+  noaddr var old_ihash: size_type;
+  noaddr var old_ahash: size_type;
+  noaddr var new_ihash:size_type;
+  noaddr var new_ahash:size_type;
+  noaddr var temp2:partial_t;
+  noaddr var temp3:ptr<KeyType>;
+  noaddr var temp4:ptr<ValueType>;
+  noaddr var dst_bucket_ind: size_type;
+  noaddr var dst_bucket_slot: size_type;
+
+  *error_ptr := ERROR_NONE;
+  old_bucket_ind := start_ind;
+  while (old_bucket_ind < end_ind)
+  {
+    old_bucket_ptr := (*this_ptr).buckets_.buckets_ + old_bucket_ind;
+    temp0 := cuckoohash_map_hashsize(current_hp);
+    new_bucket_ind := old_bucket_ind + temp0;
+    new_bucket_slot := 0;
+    old_bucket_slot := 0;
+    while (old_bucket_slot < SLOT_PER_BUCKET)
+    {
+      temp1 := bucket_occupied_const(old_bucket_ptr, old_bucket_slot);
+      if (temp1 == FALSE)
+      {
+        continue;
+      }
+
+      t_k := bucket_key(old_bucket_ptr, old_bucket_slot);
+      hv := cuckoohash_map_hashed_key_const(this_ptr, t_k);
+      old_ihash := cuckoohash_map_index_hash(current_hp, hv.hash);
+      old_ahash := cuckoohash_map_alt_index(current_hp, hv.partial, old_ihash);
+      new_ihash := cuckoohash_map_index_hash(new_hp, hv.hash);
+      new_ahash := cuckoohash_map_alt_index(new_hp, hv.partial, new_ihash);
+      if ((old_bucket_ind == old_ihash && new_ihash == new_bucket_ind) || 
+          (old_bucket_ind == old_ahash && new_ahash == new_bucket_ind))
+      {
+        dst_bucket_ind := new_bucket_ind;
+        dst_bucket_slot := new_bucket_slot;
+        new_bucket_slot := new_bucket_slot + 1;
+      }
+      else
+      {
+//         assert((old_bucket_ind == old_ihash && new_ihash == old_ihash) ||
+//                (old_bucket_ind == old_ahash && new_ahash == old_ahash));
+        dst_bucket_ind := old_bucket_ind;
+        dst_bucket_slot := old_bucket_slot;
+      }
+
+      temp2 := bucket_partial_const(old_bucket_ptr, old_bucket_slot);
+      temp3 := bucket_key(old_bucket_ptr, old_bucket_slot);
+      temp4 := bucket_mapped(old_bucket_ptr, old_bucket_slot);
+      libcuckoo_bucket_container_setKV(new_buckets_ptr, dst_bucket_ind, dst_bucket_slot, temp2, temp3, temp4);
+
+      dst_bucket_slot := dst_bucket_slot + 1;
+      old_bucket_slot := old_bucket_slot + 1;
+    }
+    old_bucket_ind := old_bucket_ind + 1;
+  }
+}
+
+// 
+// // Found declaration of `cuckoohash_map::move_buckets_static' at 1447:3
+// method cuckoohash_map_move_buckets_static(TODO_method_params)
+// {
+//   TODO_type_Pointer_move_buckets(&(m), *(new_buckets_ptr), current_hp, new_hp, start_ind, end_ind, *(error_ptr));
+// }
+// 
+
+// Found declaration of `cuckoohash_map::check_resize_validity' at 1453:3
+method cuckoohash_map_check_resize_validity(this_ptr: ptr<cuckoohash_map>, orig_hp: size_type,  new_hp: size_type, auto_resize: bool_t, error_ptr: ptr<uint8>) returns (ret: cuckoo_status)
+{
+  noaddr var mhp: size_type;
+  noaddr var temp_num: uint64;
+  noaddr var temp_dec: uint64;
+  noaddr var lf_num: uint64;
+  noaddr var lf_dec: uint64;
+  noaddr var temp2: size_type;
+
+  *error_ptr := 0;
+  mhp := cuckoohash_map_maximum_hashpower(this_ptr);
+  if (mhp != LIBCUCKOO_NO_MAXIMUM_HASHPOWER && new_hp > mhp)
+  {
+    *error_ptr := ERROR_MAXIMUM_HASH_POWER_EXCEEDED;
+    ret := failure;
+    return;
+  }
+
+  temp_num, temp_dec := cuckoohash_map_load_factor(this_ptr);
+  lf_num := (*this_ptr).minimum_load_factor_num;
+  lf_dec := (*this_ptr).minimum_load_factor_dec;
+  if (auto_resize != FALSE && temp_num * lf_dec < lf_num * temp_dec)
+  {
+    *error_ptr := ERROR_LOAD_FACTOR_TOO_LOW;
+    ret := failure;
+    return;
+  }
+
+  temp2 := cuckoohash_map_hashpower(this_ptr);
+  if (temp2 != orig_hp)
+  {
+    // LIBCUCKOO_DBG("%s", "another expansion is on-going\n");
+    ret := failure_under_expansion;
+    return;
+  }
+
+  ret := ok;
+}
+
+
+// Found declaration of `cuckoohash_map::maybe_resize_locks' at 1486:3
+method cuckoohash_map_maybe_resize_locks(this_ptr: ptr<cuckoohash_map>, new_bucket_count: size_type)
+{
+  noaddr var current_locks_ptr:ptr<locks_t>;
+  noaddr var temp0: uint64;
+  noaddr var temp1: uint64;
+  noaddr var new_tail: ptr<all_locks_list_node>;
+  noaddr var new_locks_ptr:ptr<locks_t>;
+  noaddr var i: uint64;
+  noaddr var tmp: ptr<spinlock>;
+  noaddr var t1: bool_t;
+  noaddr var t2: counter_type;
+
+  current_locks_ptr := cuckoohash_map_get_current_locks(this_ptr);
+  temp0 := vector_size(*current_locks_ptr);
+  temp1 := vector_size(*current_locks_ptr);
+  if (!(temp0 < kMaxNumLocks && temp1 < new_bucket_count))
+  {
+    return;
+  }
+
+  new_tail := malloc(all_locks_list_node);
+  all_locks_list_node_all_locks_list_node(new_tail, if kMaxNumLocks < new_bucket_count then kMaxNumLocks else new_bucket_count);
+  new_locks_ptr := &((*new_tail).elt);
+  i := 0;
+  while (i < vector_size(*new_locks_ptr)) {
+    spinlock_lock(vector_bracket(*new_locks_ptr, i));
+  }
+//  assert(new_locks.size() > current_locks.size());
+//  std::copy(current_locks.begin(), current_locks.end(), new_locks.begin());
+  i := 0;
+  while (i < vector_size(*current_locks_ptr)) {
+    tmp := vector_bracket(*current_locks_ptr, i);
+    t1 := (*tmp).lock_;
+    t2 := (*tmp).elem_counter_;
+
+    tmp := vector_bracket(*new_locks_ptr, i);
+    (*tmp).lock_ := t1;
+    (*tmp).elem_counter_ := t2;
+  }
+  all_locks_t_append(&((*this_ptr).all_locks_), new_tail);
+}
+
+// 
+// // Found declaration of `cuckoohash_map::cuckoo_expand_simple' at 1510:3
+// method cuckoohash_map_cuckoo_expand_simple(TODO_method_params)
+// {
+//   noaddr var all_locks_manager:TODO_type_Auto;
+//   noaddr var hp:size_type;
+//   noaddr var st:TODO_type_Enum;
+//   noaddr var new_map:cuckoohash_map;
+//   noaddr var start:size_type;
+//   noaddr var end:size_type;
+//   noaddr var num_threads:size_type;
+//   noaddr var work_per_thread:size_type;
+//   noaddr var threads:TODO_type_TemplateSpecialization;
+//   noaddr var errors:TODO_type_TemplateSpecialization;
+//   noaddr var i:size_type;
+//   noaddr var i:size_type;
+//   noaddr var i:size_type;
+//   noaddr var temp0:TODO_return_type;
+//   all_locks_manager := TODO_expr__ExprWithCleanups:TODO_type_Auto;
+//   hp := cuckoohash_map_hashpower(this);
+//   st := cuckoohash_map_check_resize_validity(this, hp, new_hp, auto_resize, *(error_ptr));
+//   if (st != ok)
+//   {
+//     return st;
+//   }
+// 
+//   new_map := TODO_expr__ExprWithCleanups:cuckoohash_map;
+//   start := 0;
+//   end := hashsize(new_hp);
+//   num_threads := TODO_expr__ExprWithCleanups:size_type;
+//   work_per_thread := (end - start) / num_threads;
+//   threads := TODO_expr__CXXConstructExpr:TODO_type_TemplateSpecialization;
+//   TODO_type_TemplateSpecialization_reserve(&(threads), num_threads);
+//   errors := TODO_expr__ExprWithCleanups:TODO_type_TemplateSpecialization;
+//   i := 0;
+//   while (i < num_threads - 1)
+//   {
+//     TODO_ExprWithCleanups
+//     TODO_CompoundAssignOperator
+//     ++i;
+//   }
+// 
+//   TODO_ExprWithCleanups
+//   i := 0;
+//   while (i < num_threads)
+//   {
+//     value_type_join(&(TODO_expr__CXXOperatorCallExpr:value_type));
+//     ++i;
+//   }
+// 
+//   *(error_ptr) := 0;
+//   i := 0;
+//   while (i < num_threads)
+//   {
+//     if (TODO_expr__CXXOperatorCallExpr:value_type != 0)
+//     {
+//       *(error_ptr) := TODO_expr__CXXOperatorCallExpr:value_type;
+//       return failure;
+//     }
+// 
+//     ++i;
+//   }
+// 
+//   temp0 := cuckoohash_map_bucket_count(&(new_map));
+//   cuckoohash_map_maybe_resize_locks(this, temp0);
+//   libcuckoo_bucket_container_swap(&((*this).buckets_), new_map.buckets_);
+//   return ok;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::del_from_bucket' at 1560:3
+// method cuckoohash_map_del_from_bucket(TODO_method_params)
+// {
+//   noaddr var temp0:TODO_return_type;
+//   libcuckoo_bucket_container_eraseKV(&((*this).buckets_), bucket_ind, slot);
+//   temp0 := value_type_elem_counter(&(TODO_expr__CXXOperatorCallExpr:value_type));
+//   --temp0;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::cuckoo_clear' at 1567:3
+// method cuckoohash_map_cuckoo_clear(TODO_method_params)
+// {
+//   libcuckoo_bucket_container_clear(&((*this).buckets_));
+//   TODO_CXXForRangeStmt
+//   return ok;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::cuckoo_rehash' at 1577:3
+// method cuckoohash_map_cuckoo_rehash(TODO_method_params)
+// {
+//   noaddr var hp:size_type;
+//   noaddr var temp0:TODO_return_type;
+//   hp := cuckoohash_map_hashpower(this);
+//   if (n == hp)
+//   {
+//     *(error_ptr) := 0;
+//     return false;
+//   }
+// 
+//   temp0 := cuckoohash_map_cuckoo_expand_simple(this, n, false, *(error_ptr));
+//   return temp0 == ok;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::cuckoo_reserve' at 1586:3
+// method cuckoohash_map_cuckoo_reserve(TODO_method_params)
+// {
+//   noaddr var hp:size_type;
+//   noaddr var new_hp:size_type;
+//   noaddr var temp0:TODO_return_type;
+//   hp := cuckoohash_map_hashpower(this);
+//   new_hp := reserve_calc(n);
+//   if (new_hp == hp)
+//   {
+//     *(error_ptr) := 0;
+//     return false;
+//   }
+// 
+//   temp0 := cuckoohash_map_cuckoo_expand_simple(this, new_hp, false, *(error_ptr));
+//   return temp0 == ok;
+// }
+// 
+// 
+// // Found declaration of `cuckoohash_map::reserve_calc' at 1600:3
+// method cuckoohash_map_reserve_calc(TODO_method_params)
+// {
+//   noaddr var buckets:size_type;
+//   noaddr var blog2:size_type;
+//   buckets := (n + SLOT_PER_BUCKET - 1) / SLOT_PER_BUCKET;
+//   blog2 := 0;
+//   while ((TODO_expr__CXXFunctionalCastExpr:size_type << blog2) < buckets)
+//   {
+//     TODO_NullStmt
+//     ++blog2;
+//   }
+// 
+//   TODO_ParenExpr
+//   return blog2;
+// }
+// 
+
+// Found declaration of `cuckoohash_map::get_current_locks' at 1609:3
+method cuckoohash_map_get_current_locks(this_ptr:ptr<cuckoohash_map>) returns (ret:ptr<locks_t>)
+{
+  noaddr var temp0:ptr<all_locks_list_node>;
+  temp0 := all_locks_t_get_tail(&((*this_ptr).all_locks_));
+  ret := &(*temp0).elt;
+}
+
+
+    method main ()
+    {
+    }
+// 
+}
+

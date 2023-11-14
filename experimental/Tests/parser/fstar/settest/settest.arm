@@ -1,0 +1,19 @@
+level L
+{
+  method main ()
+  {
+    var s0:set<int>;
+    var s1:set<int> := {};
+    var s2:set<int> := {1};
+
+    var s3:iset<int>;
+    var s4:iset<int> := iset {};
+    var s5:iset<int> := iset {1};
+    var s6:iset<int> := iset {1, 2};
+
+    var b:bool := false;
+
+    b := s0 !! s1;
+    b := s3 !! s4;
+  }
+}

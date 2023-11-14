@@ -1,0 +1,14 @@
+level A
+{
+    ghost var a: int := 0;
+    ghost var b: int := 1;
+
+    method main () {
+        atomic {
+            while a == 0 {
+                a := 1;
+            }
+            b := 1;
+        }
+    }
+}

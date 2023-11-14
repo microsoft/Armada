@@ -1,0 +1,12 @@
+level L
+{
+  method main ()
+  {
+    var x:int := 1;
+    var s0:seq<int> := [];
+    var s1:seq<int> := [0, x];
+    var s2:seq<int> := s1[1..2];
+    x := s1[0];
+    s1 := s1[0 := 1];
+  }
+}

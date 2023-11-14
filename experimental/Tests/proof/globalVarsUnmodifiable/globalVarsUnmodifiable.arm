@@ -1,0 +1,21 @@
+level A
+{
+  ghost var a: int := 1;
+  var c: uint64 := 3;
+  ghost var e: int := 5;
+
+  method subroutine ()
+  {
+    a := 0;
+  }
+
+  method main ()
+  {
+    a := 10;
+    atomic {
+      c := 20;
+      e := 30;
+    }
+    subroutine();
+  }
+}

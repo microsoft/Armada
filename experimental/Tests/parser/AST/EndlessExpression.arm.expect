@@ -1,0 +1,21 @@
+Tests/parser/AST/EndlessExpression.arm
+level X {
+  method main ()
+  {
+    var x:int;
+    x := if 0 == 1 then 1 else 1 + 2;
+    x := assert x == 1; 1 + 2;
+    x := reveal 1 + 2;
+    x := match x {case ident (id, id, id(casepattern_id)) => 1};
+    x := forall id0, id1, id2 {: id expr0, expr1} | expr :: 3;
+    x := exists id :: expr;
+    x := iset id {: id expr0, expr1} | rangeExpr :: bodyExpr;
+    x := set id | rangeExpr :: id;
+    x := map [1:=2, 3:=4];
+    x := imap [];
+    x := map id {: id expr0, expr1} | rangeExpr :: bodyExpr := valueExpr;
+    x := imap id {: id expr0, expr1} :: bodyExpr;
+    x := label id: expr;
+  }
+}
+

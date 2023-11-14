@@ -1,0 +1,20 @@
+// This first part is about whether the model for arrays in a struct is sound.  In
+// particular, it looks like x is modeled as a pointer, so that passing in the
+// struct to a function would be passing in a reference
+
+struct ArrayOfInts {
+  var x: int[8];
+}
+
+level A {
+  method m1(b:ArrayOfInts) {
+    b.x[1] := 10;
+  }
+
+  method main() {
+    var a:ArrayOfInts;
+    a.x[1] := 0;
+    m1(a);
+    assert (a.x[1] == 0);
+  }
+}

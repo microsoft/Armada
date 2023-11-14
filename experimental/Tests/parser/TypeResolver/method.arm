@@ -1,0 +1,36 @@
+level A {
+    method foo(x:int, y:int) returns (z:int) {
+        x := x + 4;
+        z := y;
+        return x + y;
+    }
+
+    method foo(x:int) returns (z:int) {
+        z := x;
+    }
+
+    method bar(x:int) {
+        x := x + 4;
+    }
+
+    invariant inv1{x}
+
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+        noaddr var tid1:uint64 := 0;
+
+        x := 5;
+        y := 10;
+
+        var p:ptr<int64> := calloc(int64, 3);
+        tid1 := create_thread foo(3, 4);
+        tid1 := create_thread bar(3);
+        z := foo(3, 4) + foo(3) + foo(1, 2, 3);
+
+        assert inv1(true)
+        *p := 4;
+    }
+}

@@ -1,0 +1,31 @@
+struct C1 {
+  var a:int8;
+  var b:int64 := 10;
+}
+
+struct C2 {
+  var a:C1;
+  var b:int64 := 10;
+}
+
+level L1 {
+  method {:opague} foo(a:int32, b:int8, c:int32) {
+    a := a + 1;
+    c := a + b;
+  }
+}
+
+level L2 {
+  method {:opague} foo(a:int32, b, c:int64) {
+    atomic
+    {
+      a := a + 1;
+      c := a + b;
+    }
+  }
+}
+
+proof L1_L2 {
+  refinement L1 L2
+  weakening
+}

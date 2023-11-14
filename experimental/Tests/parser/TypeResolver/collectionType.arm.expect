@@ -1,0 +1,7 @@
+level A {
+    var A:map<int, int>;
+    var B:seq<bool>;
+    var C:set<int>;
+    var D:iset<int>;
+    var E:ptr<int>;
+}

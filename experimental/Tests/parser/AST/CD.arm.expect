@@ -1,0 +1,36 @@
+Tests/parser/AST/CD.arm
+level C {
+  method main () {
+    var x:uint64_t := 0;
+    var y:uint64_t := 0;
+    var z:uint64_t := 0;
+    x := 5;
+    label l3:
+    atomic
+    {
+      y := 10;
+      z := 1;
+    }
+  }
+}
+level D {
+  method main () {
+    var x:uint64_t := 0;
+    var y:uint64_t := 0;
+    var z:uint64_t := 0;
+    var w:uint64_t := 0;
+    x := 5;
+    label l3:
+    atomic
+    {
+      y := 10;
+      w := 2;
+      z := 1;
+    }
+  }
+}
+proof CD {
+  refinement C D
+  var_intro w
+}
+

@@ -1,0 +1,17 @@
+level A
+{
+  ghost var a: bool;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 4;
+  ghost var e: int := 5;
+
+  method main ()
+  {
+    ghost var cond:bool := b == 1;
+    while cond {
+        b := b + 1;
+    }
+    c := b;
+  }
+}

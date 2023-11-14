@@ -1,0 +1,14 @@
+level A {
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+
+        ptr<uint64> p1 := malloc(uint64);
+        *p1 = 4;
+        ptr<uint64> p2 := calloc(uint64, 3);
+        p2[2] = 4;
+    }
+}
+

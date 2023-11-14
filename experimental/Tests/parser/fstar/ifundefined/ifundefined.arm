@@ -1,0 +1,8 @@
+level A
+{
+  method main ()
+  {
+    var x:int := 0;
+    var y:int := if_undefined(1 - x, 1 + x);
+  }
+}

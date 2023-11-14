@@ -1,0 +1,14 @@
+level A {
+    struct S {
+        var a:int32;
+        var b:int64 := 10;
+    }
+
+    method main()
+    {
+        var a:uint8 := 0;
+        var b:uint16 := 0;
+        var c:S;
+    }
+}
+

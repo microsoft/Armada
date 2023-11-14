@@ -1,0 +1,59 @@
+T = "uint8" | ... | "int64"
+    | "ptr<" T ">"
+    | T "["  N "]"           !! Left recursion
+    | "struct" "{" { "var" ident ":" T";" } "}"
+;
+
+e = lit | ident
+    | uop e
+    | e bop e                !! Left recursion
+    | "&" e
+    | "*" e
+    | e "." ident
+    | "*"
+    | "old(" e ")"
+;
+
+----------------------------------------------------------------------
+Scratch notes
+
+e = lit | ident | e bop e;
+
+e'  =  lit er | ident er
+er  =  bop e  | ϵ
+
+
+
+Q: (1 + 2) * (3 + 4) parsed to an expression with the old Armada.atg?
+A:
+Using https://github.com/microsoft/Armada/issues/33 to figure out.
+MulOp only referenced in Factor.
+So, need a factor with (1 + 2) and (3 + 4) as descendants.
+ParensExpression shows up in ConstAtomExpression, which shows up in AsExpression,
+which shows up in BitVectorFactor, which shows up in Factor.
+Whew! That's a lot of non-terminals.
+
+----------------------------------------------------------------------
+Minimal grammar to experiment with a recursive descent + precedence climbing parser:
+
+stmt = lvalue_list ":=" rhs_list.
+lhs_list = lvalue {"," lhs}
+lhs = ident
+rhs_list = expr {"," expr}
+
+expr = | (expr)
+       | &expr
+       | *expr
+       | expr0
+
+expr0 =  expr + expr
+       | expr * expr
+       | expr ^ expr
+       | expr && expr
+       | expr || expr
+       | expr[expr]
+       | expr as type
+       | ident
+       | lit
+
+expr as type is an expression

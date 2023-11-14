@@ -1,0 +1,20 @@
+include "A.arm"
+include "B.arm"
+level C {
+    method main()
+    {
+        var x:uint64 := 0;
+        var y:uint64 := 0;
+        var z:uint64 := 0;
+
+        x := 5;
+        label l3:
+        
+        atomic
+        {
+            y := 10;
+            z := 1;
+        }
+    }
+}
+

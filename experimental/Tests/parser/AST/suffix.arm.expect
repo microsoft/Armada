@@ -1,0 +1,25 @@
+Tests/parser/AST/suffix.arm
+level A {
+  method f (a:int) returns (z:int) {
+    return a;
+  }
+  method f (a:int, b:int) returns (z:int) {
+    return a + b;
+  }
+  method main () {
+    var arr:seq<int>;
+    var x:int := 0;
+    var y:int := 1;
+    f(x);
+    f(0);
+    f(x + y);
+    f(x, x + y);
+    arr[0];
+    arr[x..y];
+    arr[..y];
+    arr[x..];
+    arr[x + y..];
+    arr[x:= x + y];
+  }
+}
+

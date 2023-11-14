@@ -1,0 +1,23 @@
+datatype abc = AB(a:int, b:int) | C(c:int)
+datatype step = Acquire(x:int, y:abc) | Release(x:int) | NoStep
+
+level L
+{
+  method foo(s:step) returns (a:int)
+  {
+    a := match s
+    {
+      case Acquire(x, AB(a, b)) => a
+      case Acquire(x, C(c))     => x
+      case Release(x)           => x
+      case NoStep               => 1
+    };
+    return a;
+  }
+  method main ()
+  {
+    // recursive match is not fully implemented
+    var x: int := 1;
+    var y: int := x + x;
+  }
+}

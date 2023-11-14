@@ -1,0 +1,19 @@
+Tests/parser/AST/Statement.arm
+level X {
+  method main ()
+  {
+    var x:uint64 := 0;
+    if x == 0
+    {
+      x := 1;
+    }
+    while x == 1
+    {
+      x := x + 2;
+    }
+    assert x == 1;
+    assume x == 1;
+    wait_until x == 1;
+  }
+}
+

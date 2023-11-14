@@ -1,0 +1,14 @@
+level A
+{
+  ghost var a: bool := false;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 4;
+
+  method main ()
+  {
+    compare_and_swap(b, c, d);
+    a := compare_and_swap(b, c, d);
+    a ::= compare_and_swap(b, c, d);
+  }
+}

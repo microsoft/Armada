@@ -1,0 +1,15 @@
+level A
+{
+  ghost var a: int := 0;
+  method main ()
+  {
+    var b: int := 0;
+    somehow {:bwb}
+      modifies a, b 
+      undefined_unless a == 0
+      undefined_unless b == 0
+      ensures a == 1
+      ensures b == 2;
+  }
+
+}

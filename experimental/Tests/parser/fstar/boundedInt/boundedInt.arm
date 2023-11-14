@@ -1,0 +1,15 @@
+level L
+{
+  method main ()
+  {
+    var b:uint16;
+    var c:uint16;
+    var d:uint32;
+    b := b + c;
+    b := b - c;
+    b := b / c;
+    b := b + 1;
+    b := 1 + b;
+    d := b * c;
+  }
+}

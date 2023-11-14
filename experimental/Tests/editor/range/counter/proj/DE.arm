@@ -1,0 +1,14 @@
+include "D.arm"
+include "E.arm"
+
+proof DE {
+    refinement D E
+    reduction phase1 inc_lb1
+    use_address_invariant
+
+    inductive_invariant EmptyBuffer @"
+      && (forall tid :: tid in threads ==> (threads[tid].storeBuffer == []))
+    "
+
+    inductive_invariant zero_is_not_a_mutex "0 !in ghosts.acquire_map"
+}

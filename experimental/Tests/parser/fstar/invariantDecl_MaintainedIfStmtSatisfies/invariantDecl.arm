@@ -1,0 +1,24 @@
+level L
+{
+  ghost var a: int := 0;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 3;
+  ghost var e: int;
+  ghost var f: int := 1;
+  ghost var g: int := 1;
+  ghost var h: int := 0;
+  method foo(a:int, c:int)
+  {
+    a := c;
+    d := e;
+  }
+  method main ()
+  {
+    var t1:tid_t;
+    t1 := create_thread foo(a, b);
+    join t1;
+    create_thread foo(a, c);
+  }
+  invariant a_doesnt_change { a == 0 } by maintained_if_statement_satisfies
+}

@@ -1,0 +1,13 @@
+level A
+{
+  ghost var b: int := 1;
+
+  method main ()
+  {
+    b := 0;
+    goto lbl1;
+    b := 2;
+label lbl1:
+    assert b == 0;
+  }
+}

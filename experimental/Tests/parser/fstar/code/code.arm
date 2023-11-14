@@ -1,0 +1,55 @@
+level L
+{
+  ghost var a: int := 0;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 3;
+  ghost var e: int;
+  ghost var f: int := 1;
+  ghost var g: int := 1;
+  ghost var h: int := 0;
+
+  method main ()
+  {
+    ghost var x: int := 0;
+
+    e := 2;
+    atomic {
+      a := c;
+      d := b;
+      e := e;
+    }
+    f := f / f;
+  }
+}
+level H
+{
+  ghost var a: int := 0;
+  ghost var b: int := 1;
+  ghost var c: int := 2;
+  ghost var d: int := 3;
+  ghost var e: int;
+  ghost var f: int := 1;
+  ghost var g: int := 1;
+  ghost var h: int := 0;
+
+  method main ()
+  {
+    ghost var x: int := 0;
+    
+    e := 1 + 1;  // This is the only statement differing from level L
+    atomic {
+      a := c;
+      d := b;
+      e := e;
+    }
+    f := f / f;
+  }
+}
+
+/*
+proof LtoH {
+  refinement L H weakening
+}
+*/
+

@@ -1,0 +1,1631 @@
+using System.Collections.Generic;
+using System.Numerics;
+using System.IO;
+using System.Text;
+COMPILER Starmada
+
+public StarmadaProgram program;
+
+// Trigger build
+public Parser(Scanner/*!*/ scanner, string name)
+  : this(scanner)
+{
+  this.reporter = new ConsoleErrorReporter();
+  this.errors = new Errors(name, this.reporter);
+  Token tmpTok = new Token();
+  program = new StarmadaProgram(tmpTok, name, this.errors, this.reporter);
+}
+
+bool IsIdentParen() {
+  scanner.ResetPeek();
+  Token x = scanner.Peek();
+  return la.kind == _ident && x.kind == _openparen;
+}
+
+bool IsDigit() {
+  return (la.kind == _digits);
+}
+
+bool IsOpenAngleBracket() {
+  return la.kind == _openAngleBracket;
+}
+
+bool StarFollowedByCommaSemiOrOpenBrace() {
+  if (la.kind != _star) {
+    return false;
+  }
+  Token x = scanner.Peek();
+  return (x.kind == _comma || x.kind == _semi || x.kind == _lbrace);
+}
+
+bool IsParenStar() {
+  scanner.ResetPeek();
+  Token x = scanner.Peek();
+  return la.kind == _openparen && x.kind == _star;
+}
+
+bool IsEqualSign() {
+  return la.kind == _equalsign;
+}
+bool IsEquivOp() {
+  return la.val == "<==>" || la.val == "\u21d4";
+}
+bool IsImpliesOp() {
+  return la.val == "==>" || la.val == "\u21d2";
+}
+bool IsExpliesOp() {
+  return la.val == "<==" || la.val == "\u21d0";
+}
+bool IsAndOp() {
+  return la.val == "&&" || la.val == "\u2227";
+}
+bool IsOrOp() {
+  return la.val == "||" || la.val == "\u2228";
+}
+bool IsBitwiseAndOp() {
+  return la.val == "&";
+}
+bool IsBitwiseOrOp() {
+  return la.val == "|";
+}
+bool IsBitwiseXorOp() {
+  return la.val == "^";
+}
+bool IsBitwiseOp() {
+  return IsBitwiseAndOp() || IsBitwiseOrOp() || IsBitwiseXorOp();
+}
+bool IsAs() {
+  return la.kind == _as;
+}
+bool IsRelOp() {
+  return la.val == "=="
+      || la.val == "<"
+      || la.val == ">"
+      || la.val == "<="
+      || la.val == ">="
+      || la.val == "!="
+      || la.val == "in"
+      || la.kind == _notIn
+      || la.val =="!!";
+}
+bool IsShiftOp() {
+  if (la.kind == _openAngleBracket) {
+  } else if (la.kind == _closeAngleBracket) {
+  } else {
+    return false;
+  }
+  scanner.ResetPeek();
+  var x = scanner.Peek();
+  if (x.kind != la.kind) {
+    return false;
+  }
+  return x.pos == la.pos + 1;  // return true only if the tokens are adjacent to each other
+}
+bool IsAddOp() {
+  return la.val == "+" || la.val == "-";
+}
+bool IsMulOp() {
+  return la.kind == _star || la.val == "/" || la.val == "%";
+}
+bool IsQSep() {
+  return la.kind == _doublecolon || la.kind == _bullet;
+}
+bool IsMapDisplay() {
+  scanner.ResetPeek();
+  return la.kind == _map && scanner.Peek().kind == _lbracket;
+}
+bool IsIMapDisplay() {
+  scanner.ResetPeek();
+  return la.kind == _imap && scanner.Peek().kind == _lbracket;
+}
+bool IsISetDisplay() {
+  scanner.ResetPeek();
+  return la.kind == _iset && scanner.Peek().kind == _lbrace;
+}
+bool IsNotEndOfCase() {
+  return la.kind != _EOF && la.kind != _rbrace && la.kind != _case;
+}
+
+
+/*--------------------------------------------------------------------------*/
+CHARACTERS
+  letter = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".
+  digit = "0123456789".
+  posDigit = "123456789".
+  hexdigit = "0123456789ABCDEFabcdef".
+  special = "'_?".
+  glyph = "`~!@#$%^&*()-_=+[{]}|;:',<.>/?\\".
+  cr        = '\r'.
+  lf        = '\n'.
+  tab       = '\t'.
+  space = ' '.
+  nondigit = letter + special.
+  idchar = nondigit + digit.
+  nonidchar = ANY - idchar.
+  /* exclude the characters in 'array' and '\'' */
+  nondigitMinusBTick = nondigit - 'b' - '\''.
+  nondigitMinusQuery = nondigit - '?'.
+  idcharMinusV = idchar - 'v'.
+  idcharMinusPosDigitMinusQuery = idchar - posDigit - '?'.
+  idcharMinusTick = idchar - '\''.
+  /* string literals */
+  charChar = ANY - '\'' - '\\' - cr - lf.
+  stringChar = ANY - '"' - '\\' - cr - lf.
+  verbatimStringChar = ANY - '"'.
+
+/*------------------------------------------------------------------------*/
+TOKENS
+  ident =  nondigitMinusBTick {idchar}       /* if char 0 is not an 'a' or '\'', then anything else is fine */
+        |  'b' [ idcharMinusV {idchar} ]
+        |  'b' 'v' [ nondigit {idchar} ]
+        |  'b' 'v' '0' idchar {idchar}
+        |  'b' 'v' posDigit {idchar} nondigit {idchar}
+        |  "'" [ idchar ]                        /* if char 0 is a '\'' and length is 1 or 2, then it is an identifier */
+        |  "'" idchar idcharMinusTick            /* if char 0 is '\'' and length is 3, then it is an identifier provided char 2 is not '\'' */
+        |  "'" idchar idchar idchar { idchar }   /* if char 0 is '\'' and length exceeds 3, then it is an identifier */
+        .
+  digits = digit {['_'] digit} [ "u" | "U" | "ll" | "LL" | "ull" | "ULL" | "u8" | "U8" | "i8" | "I8" | "u16" | "U16" | "i16" | "I16"].
+  hexdigits = "0x" hexdigit {['_'] hexdigit}.
+  decimaldigits = digit {['_'] digit} '.' digit {['_'] digit}.
+  bvToken = "bv" ( '0' | posDigit {digit} ).
+  bool = "bool".
+  char = "char".
+  int = "int".
+  nat = "nat".
+  real = "real".
+  string = "string".
+  set = "set".
+  iset = "iset".
+  multiset = "multiset".
+  seq = "seq".
+  map = "map".
+  imap = "imap".
+  ptr = "ptr".
+  charToken =
+      "'"
+      ( charChar
+        | "\\\'" | "\\\"" | "\\\\" | "\\0" | "\\n" | "\\r" | "\\t"
+        | "\\u" hexdigit hexdigit hexdigit hexdigit
+      )
+      "'".
+  stringToken =
+      '"'
+      { stringChar
+        | "\\\'" | "\\\"" | "\\\\" | "\\0" | "\\n" | "\\r" | "\\t"
+        | "\\u" hexdigit hexdigit hexdigit hexdigit
+      }
+      '"'
+    | '@' '"' { verbatimStringChar | "\"\"" } '"'.
+  colon = ':'.
+  comma = ','.
+  verticalbar = '|'.
+  doublecolon = "::".
+  equal = "=".
+  equalsign = ":=".
+  seqEqualSign = "::=".
+  boredSmiley = ":|".
+  bullet = '\u2022'.
+  dot = '.'.
+  dotdot = "..".
+  semi = ';'.
+  darrow = "=>".
+  assume = "assume".
+  calc = "calc".
+  case = "case".
+  if = "if".
+  then = "then".
+  else = "else".
+  as = "as".
+  by = "by".
+  in = "in".
+  decreases = "decreases".
+  invariant = "invariant".
+  datatype = "datatype".
+  codatatype = "codatatype".
+  var = "var".
+  const = "const".
+  method = "method".
+  malloc = "malloc".
+  calloc = "calloc".
+  create_thread = "create_thread".
+  join = "join".
+  compare_and_swap = "compare_and_swap".
+  atomic_exchange = "atomic_exchange".
+  new = "new".
+  awaits = "awaits".
+  modifies = "modifies".
+  reads = "reads".
+  requires = "requires".
+  ensures = "ensures".
+  ghost = "ghost".
+  noaddr = "noaddr".
+  sc = "sc".
+  reveal = "reveal".
+  label = "label".
+  lbrace = '{'.
+  rbrace = '}'.
+  lbracket = '['.
+  rbracket = ']'.
+  openparen = '('.
+  closeparen = ')'.
+  openAngleBracket = '<'.
+  closeAngleBracket = '>'.
+  eq = "==".
+  neq = "!=".
+  neqAlt = '\u2260'.
+  star = '*'.
+  notIn = "!in" CONTEXT (nonidchar).
+COMMENTS FROM "/*" TO "*/" NESTED
+COMMENTS FROM "//" TO lf
+IGNORE cr + lf + tab
+
+PRODUCTIONS
+/*------------------------------------------------------------------------*/
+
+// Factor<out Expr expr>
+// = (.
+//     expr = null;
+//     Expr firstOp = null;
+//     Opcode op = Opcode.Nop;
+//   .)
+//   ( (. Ident leaf; .) Ident<out leaf>  (. expr = leaf; .)
+//   | (. Ident leaf; .) Digits<out leaf> (. expr = leaf; .)
+//   | (. op = Opcode.Neg; .)        '-' Factor<out firstOp> (. expr = new Expr(firstOp, null, op, true); .)
+//   | (. op = Opcode.BitwiseNot; .) '!' Factor<out firstOp> (. expr = new Expr(firstOp, null, op, true); .)
+//   | openparen Expr<out firstOp> closeparen (. expr = firstOp; .)
+//   )
+// .
+
+MapLiteralExpressions<.out Dictionary<Expr, Expr> elements.>
+(. Expr key, value; elements = new Dictionary<Expr, Expr>(); .)
+= Expr<out key>
+  equalsign
+  Expr<out value>         (. elements.Add(key, value); .)
+  { comma
+    Expr<out key> equalsign Expr<out value> (. elements.Add(key, value); .)
+  }.
+
+MapDisplayExpr<Token mapToken, bool finite, out Expr expr>
+= (.
+     Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Dictionary<Expr, Expr> elements = new Dictionary<Expr, Expr>();
+  .)
+  lbracket
+  [ MapLiteralExpressions<out elements> ]
+  rbracket
+  (. expr = new MapDisplayExpr(mapToken, finite, elements);
+     expr.LastTok = t;
+  .)
+.
+
+ISetDisplayExpr<Token setToken, bool finite, out Expr expr>
+= (.
+     Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     List<Expr> elements = new List<Expr>();
+  .)
+  lbrace 
+  [ Expressions<out elements> ]
+  rbrace
+  (. expr = new SetDisplayExpr(setToken, finite, elements);
+     expr.LastTok = t;
+  .)
+.
+
+GenericInstantiation<.out List<Type> types.>
+= (.
+    types = new List<Type>();
+    Type ty;
+  .)
+  openAngleBracket
+    Type<out ty>         (. types.Add(ty); .)
+    { comma Type<out ty> (. types.Add(ty); .) 
+    }
+  closeAngleBracket
+.
+
+OptGenericInstantiation<.out List<Type> typeList.> =
+  (. typeList = new List<Type>(); .)
+  [ IF(IsOpenAngleBracket()) 
+    GenericInstantiation<out typeList>
+  ]
+.
+
+// HashCall<.out List<Type> types, out List<Expr> exprs.>
+// = '#'
+//   [ GenericInstantiation<out types> ]
+//   lbracket Expr<out expr> rbracket (. exprs.add(expr); .)
+//   openparen [ Expressions<out exprs> ] closeparen.
+
+NameSegment<out Expr expr>
+= (. 
+    Ident id;
+    // List<Type> types;
+    // List<Expr> exprs;
+  .)
+  Ident<out id> (. expr = id; .)
+  // [ (. types = new List<Type>(); .) GenericInstantiation<out types>
+  // | HashCall<out types, out exprs>
+  // ] // TODO: create a new class for namesegment expr
+.
+
+DisplayExpr<out Expr expr> (. expr = null; Token x; List<Expr> elements = new List<Expr>(); .)
+= ( lbrace   (. x = t; .)
+    [ Expressions<out elements> ] 
+    rbrace
+    (. expr = new SetDisplayExpr(x, true, elements);
+       expr.LastTok = t;
+    .)
+  )
+  |
+  ( lbracket (. x = t; .)
+    [ Expressions<out elements> ]
+    rbracket
+    (. expr = new SeqDisplayExpr(x, elements); 
+       expr.LastTok = t;
+    .)
+  )
+.
+
+MultiSetExpr<out Expr expr>
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Token x = null;
+     List<Expr> elements = new List<Expr>();
+     expr = null;
+  .)
+  multiset                                             (. x = t; .)
+  ( lbrace    [ Expressions<out elements> ] rbrace     (. expr = new MultiSetDisplayExpr(x, elements); expr.LastTok = t; .)
+    |
+    openparen Expr<out expr>                closeparen (. expr = new MultiSetFormingExpr(x, expr); expr.LastTok = t; .)
+  )
+.
+
+SeqConstructionExpr<out Expr expr> 
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Token x = null;
+     Expr e1, e2; 
+     expr = null; 
+  .)
+  seq (. x = t; .)
+  openparen Expr<out e1> comma Expr<out e2> closeparen (. expr = new SeqConstructionExpr(x, e1, e2); expr.LastTok = t; .)
+.
+
+// Nat<out BigInteger n>
+// = (. n = BigInteger.Zero;
+//      string S;
+//   .)
+//   ( digits
+//     (. S = Util.RemoveUnderscores(t.val);
+//        try {
+//          n = BigIntegerParser.Parse(S);
+//        } catch (System.FormatException) {
+//          SemErr("incorrectly formatted number");
+//          n = BigInteger.Zero;
+//        }
+//     .)
+//   | hexdigits
+//     (. S = Util.RemoveUnderscores(t.val.Substring(2));
+//        try {
+//          // note: leading 0 required when parsing positive hex numbers
+//          n = BigIntegerParser.Parse("0" + S, System.Globalization.NumberStyles.HexNumber);
+//        } catch (System.FormatException) {
+//          SemErr("incorrectly formatted number");
+//          n = BigInteger.Zero;
+//        }
+//     .)
+//   ).
+
+// Dec<out BaseTypes.BigDec d>
+// = (. d = BaseTypes.BigDec.ZERO; .)
+//   (decimaldigits
+//     (. var S = Util.RemoveUnderscores(t.val);
+//        try {
+//          d = BaseTypes.BigDec.FromString(S);
+//        } catch (System.FormatException) {
+//          SemErr("incorrectly formatted number");
+//          d = BaseTypes.BigDec.ZERO;
+//        }
+//     .)
+//   ).
+
+Digits<out Ident x>
+=
+  digits (. x = new Ident(t, t.val); x.LastTok = t; .)
+  (. if (t.val.ToLower().EndsWith("ull"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.UInt64);
+       x.Name = x.Name.Substring(0, x.Name.Length - 3);
+     }
+     else if (t.val.ToLower().EndsWith("ll"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.Int64);
+       x.Name = x.Name.Substring(0, x.Name.Length - 2);
+     }
+     else if (t.val.ToLower().EndsWith("u"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.UInt32);
+       x.Name = x.Name.Substring(0, x.Name.Length - 1);
+     }
+     else if (t.val.ToLower().EndsWith("i8"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.Int8);
+       x.Name = x.Name.Substring(0, x.Name.Length - 2);
+     }
+     else if (t.val.ToLower().EndsWith("u8"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.UInt8);
+       x.Name = x.Name.Substring(0, x.Name.Length - 2);
+     }
+     else if (t.val.ToLower().EndsWith("i16"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.Int16);
+       x.Name = x.Name.Substring(0, x.Name.Length - 3);
+     }
+     else if (t.val.ToLower().EndsWith("u16"))
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.UInt16);
+       x.Name = x.Name.Substring(0, x.Name.Length - 3);
+     }
+     else
+     {
+       x.Ty = new PredefinedType(PredefinedTypeEnum.Int);
+     }
+  .)
+.
+
+LabelIdent<out Ident id> (. id = null; .)
+=
+  Ident<out id>
+  | Digits<out id>
+.
+
+ConstAtomExpression<out Expr expr> (. expr = null; .)
+= (.
+    Expr firstOp;
+    Expr secondOp = null;
+    Token x = null;
+  .)
+  ( "false"       (. expr = new LiteralExpr(t, false); expr.LastTok = t; .)
+  | "true"        (. expr = new LiteralExpr(t, true); expr.LastTok = t; .)
+  | "null"        (. expr = new NullPointerExpr(t); expr.LastTok = t; .)
+  | (. Ident d; .) Digits<out d> (. expr = new ConstantExpr(t, d); expr.LastTok = t; .) // TODO: use LiteralExpr, Digits or Digits and hex and decimal
+  // | Nat<out n>    (. expr = new LiteralExpr(n); .)
+  // | Dec<out d>    (. expr = new LiteralExpr(d); .)
+  | charToken     (. expr = new CharLiteralExpr(t, t.val.Substring(1, t.val.Length - 2)); expr.LastTok = t; .)
+  | stringToken   (. 
+                     bool isVerbatim = false;
+                     string s = Util.RemoveParsedStringQuotes(t.val, out isVerbatim);
+                     expr = new StringLiteralExpr(t, s, isVerbatim);
+                     expr.LastTok = t;
+                  .)
+  | "$me"         (. expr = new MeExpr(t); expr.LastTok = t; .)
+  | "$state"      (. expr = new Ident(t, t.val); expr.LastTok = t; .)
+  | ( "allocated"                                       (. x = t; .)
+      openparen Expr<out firstOp> closeparen            (. expr = new UnaryExpr(x, firstOp, Opcode.Allocated, false); expr.LastTok = t; .) )
+  | ( "allocated_array"                                 (. x = t; .)
+      openparen Expr<out firstOp> closeparen            (. expr = new UnaryExpr(x, firstOp, Opcode.AllocatedArray, false); expr.LastTok = t; .) )
+  | ( "global_view"                                     (. x = t; .)
+      openparen Expr<out firstOp> closeparen            (. expr = new UnaryExpr(x, firstOp, Opcode.GlobalView, false); expr.LastTok = t; .) )
+  | ( verticalbar                                       (. x = t; .)
+      Expr<out firstOp, false> verticalbar              (. expr = new UnaryExpr(x, firstOp, Opcode.Cardinality, false); expr.LastTok = t; .) ) 
+  | ( "if_undefined"                                    (. x = t; .)
+      openparen Expr<out firstOp> comma Expr<out secondOp> closeparen (. expr = new IfUndefinedExpr(x, firstOp, secondOp); expr.LastTok = t; .) )
+  | ( (. Type ty = null; .)
+      ( 
+        int (. x = t; ty = new PredefinedType(PredefinedTypeEnum.Int); .)
+      | real (. x = t; ty = new PredefinedType(PredefinedTypeEnum.Real); .)
+      )
+      openparen Expr<out firstOp, false> closeparen (. expr = new ConversionExpr(x, firstOp, ty); expr.LastTok = t; .)
+    )
+  | openparen (. x = t; .)
+    Expr<out expr, true>
+    closeparen (. expr.FirstTok = x; expr.LastTok = t; .)
+  )
+.
+
+// UnaryExpression<out Expr expr>
+// = Ident<out _> (. expr = null; .).
+
+// TODO: add C# codes
+UnaryExpression<out Expr expr, bool allowBitwiseOps>
+  (.
+    // Expr firstOp;
+    // Expr secondOp = null;
+    expr = null;
+    Opcode op = Opcode.Nop;
+    Token x;
+  .)
+=
+    ( (. op = Opcode.Neg; .)         '-' (. x = t; .)
+      ( IF(IsDigit()) (. Ident d; .) Digits<out d>
+        (. 
+          d.Name = '-' + d.Name;
+          d.FirstTok.pos = x.pos;
+          d.FirstTok.charPos = x.charPos;
+          d.FirstTok.col = x.col;
+          d.FirstTok.line = x.line;
+          d.FirstTok.val = '-' + d.FirstTok.val;
+          expr = new ConstantExpr(d.FirstTok, d);
+          expr.LastTok = d.LastTok;
+        .)
+      | UnaryExpression<out expr, allowBitwiseOps> 
+      (.
+        expr = new UnaryExpr(x, expr, op, false);
+        expr.LastTok = t;
+      .)
+      )
+    )
+  | ( (. op = Opcode.Not; .)         '!' (. x = t; .) UnaryExpression<out expr, allowBitwiseOps> (. expr = new UnaryExpr(x, expr, op, false); expr.LastTok = t; .) )
+  | ( (. op = Opcode.BitwiseNot; .)  '~' (. x = t; .) UnaryExpression<out expr, allowBitwiseOps> (. expr = new UnaryExpr(x, expr, op, false); expr.LastTok = t; .) )
+  | ( (. op = Opcode.AddressOf; .)   '&' (. x = t; .) UnaryExpression<out expr, allowBitwiseOps> (. expr = new UnaryExpr(x, expr, op, false); expr.LastTok = t; .) )
+  | ( (. op = Opcode.Dereference; .) '*' (. x = t; .) UnaryExpression<out expr, allowBitwiseOps> (. expr = new UnaryExpr(x, expr, op, false); expr.LastTok = t; .) )
+  | ( IF(IsMapDisplay())  map  (. x = t; .) MapDisplayExpr<x, true, out expr>     { Suffix<ref expr> } )
+  | ( IF(IsIMapDisplay()) imap (. x = t; .) MapDisplayExpr<x, false, out expr>    { Suffix<ref expr> } )
+  | ( IF(IsISetDisplay()) iset (. x = t; .) ISetDisplayExpr<x, false, out expr>   { Suffix<ref expr> } )
+  | ( NameSegment<out expr>                                       { Suffix<ref expr> } )
+  | ( DisplayExpr<out expr>                                       { Suffix<ref expr> } )
+  | ( MultiSetExpr<out expr>                                      { Suffix<ref expr> } )
+  | ( SeqConstructionExpr<out expr>                               { Suffix<ref expr> } )
+  | ( ConstAtomExpression<out expr>                               { Suffix<ref expr> } )
+  | ( EndlessExpression<out expr, allowBitwiseOps> )
+.
+
+AsExpression<out Expr expr, bool allowBitwiseOps>
+= UnaryExpression<out expr, allowBitwiseOps>
+  (. Type ty; .)
+  { IF(IsAs())
+    "as" Type<out ty> (. expr = new ConversionExpr(expr.FirstTok, expr, ty); expr.LastTok = t; .)
+  }.
+
+BitvectorFactor<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp;
+    Opcode op;
+  .)
+  AsExpression<out expr, allowBitwiseOps>
+  [ IF(allowBitwiseOps && IsBitwiseOp()) /* read a BitvectorFactor as far as possible, but not in the context inside a |.| size expression */
+    (
+      (. op = Opcode.BitwiseAnd; .)
+      "&"
+      AsExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      { IF(IsBitwiseAndOp())
+        "&"
+        AsExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      }
+      [ IF(IsBitwiseOp()) ( "|" | "^" )  (. SemErr(la, "Ambiguous use of &, |, ^. Use parentheses to disambiguate."); .) ]
+    | (. op = Opcode.BitwiseOr; .)
+      "|"
+      AsExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      { IF(IsBitwiseOrOp())
+        "|"
+        AsExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      }
+      [ IF(IsBitwiseOp()) ( "^" | "&" )  (. SemErr(la, "Ambiguous use of &, |, ^. Use parentheses to disambiguate."); .) ]
+    | (. op = Opcode.BitwiseXor; .)
+      "^"
+      AsExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      { IF(IsBitwiseXorOp())
+        "^"
+        AsExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      }
+      [ IF(IsBitwiseOp()) ( "&" | "|" )  (. SemErr(la, "Ambiguous use of &, |, ^. Use parentheses to disambiguate."); .) ]
+    )
+  ]
+.
+
+Factor<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp = null;
+    Opcode op = Opcode.Nop;
+  .)
+  BitvectorFactor<out expr, allowBitwiseOps>
+  { IF(IsMulOp())
+    ( (. op = Opcode.Mul; .) "*"
+    | (. op = Opcode.Div; .) "/"
+    | (. op = Opcode.Mod; .) "%"
+    ) 
+    BitvectorFactor<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  }.
+
+Term<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp = null;
+    Opcode op = Opcode.Nop;
+  .)
+  Factor<out expr, allowBitwiseOps>
+  { IF(IsAddOp())
+    ( (. op = Opcode.Add; .) "+"
+    | (. op = Opcode.Sub; .) "-"
+    ) 
+    Factor<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  }.
+
+// TODO: perhaps change to read a Term as far as possible
+ShiftTerm<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp = null;
+    Opcode op = Opcode.Nop;
+  .)
+  Term<out expr, allowBitwiseOps>
+  { IF(IsShiftOp())
+    ( (. op = Opcode.LeftShift; .) '<' '<'
+    | (. op = Opcode.RightShift; .) '>' '>'
+    ) 
+    Term<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  }.
+
+RelOp<out Opcode op> (. op = Opcode.Add; .)
+= ( eq    (. op = Opcode.Equal; .)
+  | neq   (. op = Opcode.NotEqual; .)
+  | '<'   (. op = Opcode.Lt; .)
+  | '>'   (. op = Opcode.Gt; .)
+  | "<="  (. op = Opcode.Le; .)
+  | ">="  (. op = Opcode.Ge; .)
+  | "in"  (. op = Opcode.In; .)
+  | notIn (. op = Opcode.NotIn; .)
+  | "!!"  (. op = Opcode.Disjoint; .) 
+  ).
+
+RelationalExpression<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp = null;
+    Opcode op = Opcode.Nop;
+  .)
+  ShiftTerm<out expr, allowBitwiseOps>
+  { IF(IsRelOp())
+    RelOp<out op> 
+    ShiftTerm<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  }
+.
+
+LogicalExpression<out Expr expr, bool allowBitwiseOps> (. expr = null; .)
+= (.
+    Expr secondOp;
+    Opcode op = Opcode.Nop;
+  .)
+  // TODO(Armin): Need to take care of the special case of only one RelationalExpression
+  // Look at Dafny.atg file comments
+  ( ( "&&" RelationalExpression<out expr, allowBitwiseOps>
+      { IF(IsAndOp())
+        "&&"
+        RelationalExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, Opcode.And, false); expr.LastTok = t; .)
+      }
+      [ IF(IsOrOp()) "||" (. SemErr(t, "Ambiguous use of && and ||. Use parentheses to disambiguate."); .) ]
+    )
+  | ( "||" RelationalExpression<out expr, allowBitwiseOps>
+      { IF(IsOrOp()) 
+        "||"
+        RelationalExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, Opcode.Or, false); expr.LastTok = t; .)
+      }
+      [ IF(IsAndOp()) "&&" (. SemErr(t, "Ambiguous use of && and ||. Use parentheses to disambiguate."); .) ]
+    )
+  | ( RelationalExpression<out expr, allowBitwiseOps>
+      [ IF(IsAndOp() || IsOrOp())
+        ( (. op = Opcode.And; .) "&&"
+          RelationalExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+          { IF(IsAndOp()) "&&"
+            RelationalExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .) 
+          } 
+        | (. op = Opcode.Or; .) "||"
+          RelationalExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+          { IF(IsOrOp()) "||"
+            RelationalExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+          }
+        )
+      ]
+    )
+  ).
+
+ImpliesExpression<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp;
+    Opcode op = Opcode.Nop;
+  .)
+  LogicalExpression<out expr, allowBitwiseOps>
+  [ IF(IsImpliesOp())  /* read an ImpliesExpression as far as possible */
+    (. op = Opcode.Imply; .) "==>"
+    ImpliesExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  ]
+  .
+
+ImpliesExpliesExpression<out Expr expr, bool allowBitwiseOps>
+= (.
+    Expr secondOp;
+    Opcode op = Opcode.Nop;
+  .)
+  LogicalExpression<out expr, allowBitwiseOps>
+  [ IF(IsImpliesOp() || IsExpliesOp()) /* read an ImpliesExpliesExpression as far as possible */
+    (
+      /* Note, the asymmetry in the parsing of implies and explies expressions stems from the fact that
+       * implies is right associative whereas reverse implication is left associative
+       */
+      (. op = Opcode.Imply; .) "==>"
+      ImpliesExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+    | (. op = Opcode.Exply; .) "<=="
+      LogicalExpression<out secondOp, allowBitwiseOps>   (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      { IF(IsExpliesOp())
+        "<=="
+        LogicalExpression<out secondOp, allowBitwiseOps> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+      }
+    )
+  ].
+
+/* The "allowBitwiseOps" says whether or not to include or bypass bitwise operators
+ * at the top level of this expression. It is passed in as "false" only inside
+ * cardinality brackets, that is, "|expr|".
+ */
+Expr<out Expr expr, bool allowBitwiseOps = true>
+= (. 
+    Expr secondOp;
+    Opcode op = Opcode.Nop;
+  .)
+  ImpliesExpliesExpression<out expr, allowBitwiseOps>
+  { IF(IsEquivOp()) (. op = Opcode.Equiv; .) 
+    "<==>"
+    Expr<out secondOp> (. expr = new BinaryExpr(expr.FirstTok, expr, secondOp, op, false); expr.LastTok = t; .)
+  }.
+
+IfExpr<out Expr expr, bool allowBitwiseOps>
+= (. Expr cond, thenExpr, elseExpr; Token x; .)
+  if (. x = t; .)
+  Expr<out cond, allowBitwiseOps> then Expr<out thenExpr, allowBitwiseOps> else Expr<out elseExpr, allowBitwiseOps>
+  (. expr = new IfExpr(x, cond, thenExpr, elseExpr); expr.LastTok = t; .)
+.
+
+IdentTypeOptional<out Ident ident>
+= Ident<out ident> [ colon (. Type ty; .) Type<out ty> (. ident.Ty = ty; ident.LastTok = t; .) ].
+
+IdentType<out Ident ident>
+= Ident<out ident> colon (. Type ty; .) Type<out ty> (. ident.Ty = ty; ident.LastTok = t; .).
+
+CasePattern<.out CasePattern pat.>
+= (. List<CasePattern> arguments;
+     Token x;
+     pat = null;
+  .)
+  (
+    IF(IsIdentParen()) (. Ident ident; .) Ident<out ident> (. x = ident.FirstTok; .)
+    openparen                    (. arguments = new List<CasePattern>(); .)
+    [ CasePattern<out pat>       (. arguments.Add(pat); .) 
+    { comma CasePattern<out pat> (. arguments.Add(pat); .) } ] 
+    closeparen                   (. pat = new CasePattern(x, ident, arguments); .)
+    |
+    (. Ident ident; .) IdentTypeOptional<out ident> (. pat = new CasePattern(ident.FirstTok, ident); pat.LastTok = t; .)
+  ).
+
+CaseExpression<out MatchCaseExpr expr, bool allowBitwiseOps> 
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Token x;
+     var arguments = new List<CasePattern>();
+     CasePattern pat;
+     Expr body;
+     string name = "";
+  .)
+  case (. x = t; .)
+  (
+    (. Ident ident; .) Ident<out ident> (. name = ident.FirstTok.val; .)
+    [ openparen CasePattern<out pat> (. arguments.Add(pat); .)
+    { comma CasePattern<out pat>     (. arguments.Add(pat); .) } closeparen ]
+  )
+  darrow Expr<out body, allowBitwiseOps> (. expr = new MatchCaseExpr(x, name, arguments, body); expr.LastTok = t; .).
+
+MatchExpr<out Expr expr, bool allowBitwiseOps>
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Expr matchExpr;
+     Token x;
+     List<MatchCaseExpr> cases = new List<MatchCaseExpr>();
+     bool usesOptionalBraces = false;
+  .)
+  "match" (. x = t; .)
+  Expr<out matchExpr, allowBitwiseOps> 
+  ( 
+    ( IF(la.kind == _lbrace)  /* always favor brace-enclosed match body to a case-less match */
+      lbrace (. usesOptionalBraces = true; .)
+      { (. MatchCaseExpr e; .) CaseExpression<out e, allowBitwiseOps> (. cases.Add(e); .) }
+      rbrace
+    )
+  | { IF(la.kind == _case)  /* let each "case" bind to the closest preceding "match" */
+      (. MatchCaseExpr e; .) CaseExpression<out e, allowBitwiseOps>   (. cases.Add(e); .)
+    }
+  )
+  (. expr = new MatchExpr(x, matchExpr, cases, usesOptionalBraces); expr.LastTok = t; .)
+  .
+
+QuantifierDomain<.out List<Ident> idents, out Attribute attrs, out Expr range, bool allowBitwiseOps.>
+= (. Ident id;
+     idents = new List<Ident>();
+     range = null;
+     attrs = null;
+  .)
+  IdentType<out id>         (. idents.Add(id); .)
+  { comma IdentType<out id> (. idents.Add(id); .) }
+  { Attribute<out attrs> }
+  [ verticalbar Expr<out range, allowBitwiseOps> ].
+
+QuantifierExpr<out Expr expr, bool allowBitwiseOps>
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null); 
+     Token x = null;
+     bool univ = false;
+     List<Ident> idents;
+     Attribute attrs;
+     Expr range;
+     Expr body;
+  .)
+  ( "forall" (. x = t; univ = true; .) | "exists" (. x = t; .) )
+  QuantifierDomain<out idents, out attrs, out range, allowBitwiseOps> doublecolon
+  Expr<out body, allowBitwiseOps>
+  (. if (univ) {
+       expr = new ForallExpr(x, idents, range, body, attrs);
+     } else {
+       expr = new ExistsExpr(x, idents, range, body, attrs);
+     }
+     expr.LastTok = t;
+  .).
+
+SetComprehensionExpr<out Expr expr, Token setToken, bool finite, bool allowBitwiseOps>
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Ident id;
+     List<Ident> idents = new List<Ident>();
+     Expr range;
+     Expr body = null;
+     Attribute attrs = null;
+  .)
+  IdentType<out id>         (. idents.Add(id); .)
+  { comma IdentType<out id> (. idents.Add(id); .) }
+  { Attribute<out attrs> } verticalbar Expr<out range, allowBitwiseOps>
+  [ IF(IsQSep()) doublecolon Expr<out body, allowBitwiseOps> ]
+  (. if (body == null && idents.Count != 1) {
+       SemErr(id.FirstTok, "a set comprehension with more than one bound variable must have a term expression");
+       expr = null;
+     } else {
+       expr = new SetComprehension(setToken, finite, idents, range, body, attrs);
+       expr.LastTok = t;
+     }
+  .).
+
+MapComprehensionExpr<out Expr expr, Token mapToken, bool finite, bool allowBitwiseOps>
+= (. Contract.Ensures(Contract.ValueAtReturn(out expr) != null);
+     Ident id;
+     List<Ident> idents = new List<Ident>();
+     Expr range = null;
+     Expr keyExpr;
+     Expr valueExpr = null;
+     Attribute attrs = null;
+  .)
+  IdentType<out id>         (. idents.Add(id); .)
+  { comma IdentType<out id> (. idents.Add(id); .) }
+  { Attribute<out attrs> } [ verticalbar Expr<out range, allowBitwiseOps> ] doublecolon Expr<out keyExpr, allowBitwiseOps>
+  [ IF(IsEqualSign())  /* greedily parse ":=" */ equalsign Expr<out valueExpr, allowBitwiseOps> ]
+  (. if (valueExpr == null && idents.Count != 1) {
+       SemErr(id.FirstTok, "a map comprehension with more than one bound variable must have a term expression of the form 'Expr := Expr'");
+       expr = null;
+     } else {
+       expr = new MapComprehension(mapToken, finite, idents, range, keyExpr, valueExpr, attrs);
+       expr.LastTok = t;
+     }
+  .).
+
+// TODO(ar): add let expr.
+//LetExpr
+//= 
+
+LabelExpr<out Expr expr, bool allowBitwiseOps> (. expr = null; .)
+= (. Ident label; Expr e; Token x; .)
+  label (. x = t; .)
+  Ident<out label> colon Expr<out e, allowBitwiseOps> (. expr = new LabelExpr(x, label.FirstTok.val, e); expr.LastTok = t; .)
+.
+
+EndlessExpression<out Expr expr, bool allowBitwiseOps> (. expr = null; .)
+=   IfExpr<out expr, allowBitwiseOps>
+  | MatchExpr<out expr, allowBitwiseOps>
+  | QuantifierExpr<out expr, allowBitwiseOps>
+  | ( (. bool finite = true; Token x; .)
+    (set (. x = t; .) | iset (. x = t; finite = false; .))
+    SetComprehensionExpr<out expr, x, finite, allowBitwiseOps> )
+  | ( (. bool finite = true; Token x; .)
+    (map (. x = t; .) | imap (. x = t; finite = false; .))
+    MapComprehensionExpr<out expr, x, finite, allowBitwiseOps> )
+// TODO(ar): add LetExpr
+//  | LetExpr<out expr>
+  | LabelExpr<out expr, allowBitwiseOps>
+.
+
+AllocCall<out Expr expr>
+= (. Token x; Type ty; Expr count; bool isCalloc = false; .)
+  ( malloc (. isCalloc = false; .) 
+  | calloc (. isCalloc = true; .)
+  ) (. x = t; .)
+  openparen Type<out ty> comma Expr<out count> closeparen
+  (. expr = new AllocRhs(x, ty, count, isCalloc); expr.LastTok = t; .).
+
+CreateThreadCall<out Expr expr>
+= (. Token x; Ident ident; List<Expr> elements = new List<Expr>(); .)
+  create_thread (. x = t; .)
+  Ident<out ident> openparen [ Expressions<out elements> ] closeparen
+  (. expr = new CreateThreadRhs(x, ident, elements); expr.LastTok = t; .).
+
+CompareAndSwapCall<out Expr expr>
+= (. Token x; Expr target, oldval, newval; .)
+  compare_and_swap (. x = t; .)
+  openparen Expr<out target> comma Expr<out oldval> comma Expr<out newval> closeparen
+  (. expr = new CompareAndSwapRhs(x, target, oldval, newval); expr.LastTok = t; .).
+
+AtomicExchangeCall<out Expr expr>
+= (. Token x; Expr target, newval; .)
+  atomic_exchange (. x = t; .)
+  openparen Expr<out target> comma Expr<out newval> closeparen
+  (. expr = new AtomicExchangeRhs(x, target, newval); expr.LastTok = t; .).
+
+Expressions<.out List<Expr> elements.>
+= (. Expr expr = null; elements = new List<Expr>(); .)
+  Expr<out expr> (. elements.Add(expr); .)
+  { (. Expr nextexpr = null; .) comma Expr<out nextexpr> (. elements.Add(nextexpr); .) }.
+
+Attribute<.out Attribute attrs.>
+= (. Token x; Ident ident; List<Expr> exprs = new List<Expr>(); .)
+  "{:" (. x = t; .)
+  Ident<out ident> [ Expressions<out exprs> ]
+  "}"  (. attrs = new Attribute(x, ident, exprs); attrs.LastTok = t; .)
+  .
+
+SetType<out Type ty> = 
+  (.
+    bool isInfinite = false;
+    Type entityType;
+  .)
+  ( set
+  | iset (.isInfinite = true; .)
+  ) 
+  openAngleBracket Type<out entityType> closeAngleBracket
+  (. ty = new SetType(entityType, isInfinite); .)
+.
+
+SeqType<out Type ty> = 
+  (.
+    Type entityType;
+  .)
+  seq
+  openAngleBracket Type<out entityType> closeAngleBracket
+  (. ty = new SeqType(entityType); .)
+.
+
+PtrType<out Type ty> =
+  (. Type entityType; .)
+  ptr openAngleBracket Type<out entityType> closeAngleBracket
+  (. ty = new PointerType(entityType); .)
+.
+
+MapType<out Type ty> = 
+  (.
+    bool isInfinite = false;
+    Type keyType;
+    Type valueType;
+  .)
+  ( map
+  | imap (.isInfinite = true; .)
+  ) 
+  openAngleBracket Type<out keyType> comma Type<out valueType> closeAngleBracket
+  (. ty = new MapType(keyType, valueType, isInfinite); .)
+.
+
+PredefinedType<out Type ty>
+= (. ty = null; .)
+  ( "int"            (. ty = new PredefinedType(PredefinedTypeEnum.Int); .)
+  | "int8"           (. ty = new PredefinedType(PredefinedTypeEnum.Int8); .)
+  | "int16"          (. ty = new PredefinedType(PredefinedTypeEnum.Int16); .)
+  | "int32"          (. ty = new PredefinedType(PredefinedTypeEnum.Int32); .)
+  | "int64"          (. ty = new PredefinedType(PredefinedTypeEnum.Int64); .)
+  | "nat"            (. ty = new PredefinedType(PredefinedTypeEnum.Nat); .)
+  | "uint8"          (. ty = new PredefinedType(PredefinedTypeEnum.UInt8); .)
+  | "uint16"         (. ty = new PredefinedType(PredefinedTypeEnum.UInt16); .)
+  | "uint32"         (. ty = new PredefinedType(PredefinedTypeEnum.UInt32); .)
+  | "uint64"         (. ty = new PredefinedType(PredefinedTypeEnum.UInt64); .)
+  | "bool"           (. ty = new PredefinedType(PredefinedTypeEnum.Bool); .)
+  | "char"           (. ty = new PredefinedType(PredefinedTypeEnum.Char); .)
+  | "string"         (. ty = new PredefinedType(PredefinedTypeEnum.String); .)
+  | "tid_t"          (. ty = new PredefinedType(PredefinedTypeEnum.ThreadId); .)
+  ) 
+  [ (. Ident d; .) lbracket Digits<out d> rbracket (. ty = new TypeSuffix(ty, d); .) ]
+.
+
+Type <out Type ty>
+= (. ty = null; .)
+  ( PredefinedType<out ty>
+  | SetType <out ty>
+  | SeqType <out ty>
+  | PtrType <out ty>
+  | MapType <out ty>
+  | ( (. Ident id; List<Type> typeList; .)
+      Ident<out id> (. ty = null; .)
+      OptGenericInstantiation<out typeList>
+      (. 
+         ty = new UserDefinedType(id, typeList); 
+      .)
+    )
+  )
+  [ (. Ident d; .) lbracket Digits<out d> rbracket (. ty = new TypeSuffix(ty, d); .) ]
+.
+
+Parameter<out Parameter arg>
+= (. Token x; Ident id; Type ty; .)
+  Ident<out id> (. x = t; .)
+  colon
+  Type<out ty>
+  (. arg = new Parameter(x, id, ty); arg.LastTok = t; .)
+.
+
+Parameters<.out List<Parameter> args.>
+= (. args = new List<Parameter>(); .)
+  (. Parameter arg; .) Parameter<out arg> (. args.Add(arg); .)
+  { (. Parameter nextarg; .) comma Parameter<out nextarg> (. args.Add(nextarg); .) }.
+
+Suffix<ref Expr expr>
+=
+  (. Ident dotIdent; .)
+  ( dot Ident<out dotIdent> ) (. expr = new BinaryExpr(expr.FirstTok, expr, dotIdent, Opcode.Dot, true); expr.LastTok = t; .)
+  | ( lbracket (. Expr startExpr = null, endExpr = null; Expr valExpr; .)
+      ( 
+        ( dotdot [ Expr<out endExpr> ] )     (. expr = new SeqRangeExpr(expr.FirstTok, expr, startExpr, endExpr); .)
+        | 
+        ( Expr<out startExpr>                (. bool otherSign = false; .)
+          [ 
+            ( dotdot [ Expr<out endExpr> ] ) (. expr = new SeqRangeExpr(expr.FirstTok, expr, startExpr, endExpr); otherSign = true; .)
+          | ( equalsign Expr<out valExpr> )  (. expr = new SeqAssignExpr(expr.FirstTok, expr, startExpr, valExpr); otherSign = true; .)
+          ]
+        )
+        (. if (!otherSign) expr = new SeqSelectExpr(expr.FirstTok, expr, startExpr); .)
+      ) 
+      rbracket (. expr.LastTok = t; .)
+    )
+  | (. List<Expr> elements = new List<Expr>(); .) 
+    openparen [ Expressions<out elements> ] closeparen (. expr = new ApplySuffix(expr.FirstTok, expr, elements); expr.LastTok = t; .).
+
+Ident<out Ident x>
+=
+  ident (. x = new Ident(t, t.val); x.LastTok = t; .)
+.
+
+Lhs<out Expr lhs>
+=
+  (. lhs = null; Expr expr; .)
+  ( 
+    (. Ident id; .) Ident <out id> (. lhs = id; .) 
+    { 
+      Suffix<ref lhs>
+    }
+  | star (. Token x = t; .) Expr<out expr> (. lhs = new UnaryExpr(x, expr, Opcode.Dereference, true); lhs.LastTok = t; .)
+  | openparen Expr<out lhs> closeparen (. lhs.LastTok = t; .)
+    Suffix<ref lhs>
+    { Suffix<ref lhs> }
+  )
+.
+
+
+Rhs<out Expr expr>
+=
+  (. expr = null; .)
+//  ( new ( NewArray | TypeAndToken ( NewArray | openparen Expressions closeparen ) )
+  (  
+      IF(StarFollowedByCommaSemiOrOpenBrace())
+      "*" (. expr = new WildcardExpr(t); expr.LastTok = t; .)
+    | Expr<out expr>
+    | AllocCall<out expr>
+    | CreateThreadCall<out expr>
+    | CompareAndSwapCall<out expr>
+    | AtomicExchangeCall<out expr>
+  )
+.
+
+AssignStatement<out Statement s>
+=
+  (. 
+     Expr lhs;
+     Expr rhs = null; // FIXME: want None
+     bool isSequential = false;
+     Token x = la;
+  .)
+  Lhs <out lhs>
+    [ 
+      ( equalsign    (. isSequential = false; .) 
+      | seqEqualSign (. isSequential = true; .) )
+      Rhs <out rhs> 
+    ] semi
+  (. 
+    if (rhs == null) {
+      if (lhs is ApplySuffix) {
+        // This is going to convert to FunctionCallStatement in TypeResolve ...
+        s = new ApplySuffixStatement(lhs as ApplySuffix);
+      }
+      else {
+        throw new NotImplementedException();
+      }
+    }
+    else {
+      s = new AssignStatement(x, lhs, rhs, isSequential); s.LastTok = t;
+    }
+  .) 
+  // FIXME: in case of a function call (ApplySuffix) (e.g. foo(x);), this assignment will not
+  // have RHS, that is not correct. The function call itself is an RHS-value and not an LHS-value.
+.
+
+AtomicStatement<out Statement atomicStmt>
+= (. BlockStatement block; Token x; .)
+  ("atomic" | "explicit_yield") (. x = t; .)
+  BlockStatement<out block>
+  (. atomicStmt = new AtomicStatement(x, block); atomicStmt.LastTok = t; .)
+.
+
+AssertStatement<out Statement assertStmt>
+= (. Token x; Expr cond; .)
+  "assert" (. x = t; .)
+  Expr<out cond> semi
+  (. assertStmt = new AssertStatement(x, cond); assertStmt.LastTok = t; .)
+.
+
+AssumeStatement<out Statement assumeStmt>
+= (. Expr cond; Token x; .)
+  ( "assume" | "wait_until" ) (. x = t; .)
+  Expr<out cond> semi
+  (. assumeStmt = new AssumeStatement(x, cond); assumeStmt.LastTok = t; .)
+.
+
+InvariantSpec
+= (. Expr expr = null; .)
+  invariant Expr<out expr>.
+
+Guard<out Expr e>
+= (. Expr ee;  e = null; .)
+  ( IF(StarFollowedByCommaSemiOrOpenBrace()) "*"  (. e = new WildcardExpr(t); e.LastTok = t; .)
+  | IF(IsParenStar())  "(" "*" ")"                (. e = new WildcardExpr(t); e.LastTok = t; .)
+  | Expr<out ee, true>                            (. e = ee; .)
+  )
+.
+
+WhileBlock<out WhileBlock whileBlk>
+= (. Expr cond; BlockStatement block; Token x; .)
+  "while" (. x = t; .)
+  Guard<out cond> { MethodSpec<out _> | InvariantSpec } BlockStatement<out block>
+  (. whileBlk = new WhileBlock(x, cond, block); whileBlk.LastTok = t; .)
+.
+
+IfStatement<out IfStatement ifstmt>
+= (. Expr cond = null; BlockStatement thenPath; Statement elsePath = null; Token x; .)
+  if (. x = t; .)
+  Guard<out cond> BlockStatement<out thenPath>
+  [ else Statement<out elsePath> ]
+  (. ifstmt = new IfStatement(x, cond, thenPath, elsePath); ifstmt.LastTok = t; .)
+.
+
+BlockStatement<out BlockStatement blockStmt>
+=
+  (. Token x; .)
+  lbrace (. x = t; blockStmt = new BlockStatement(x); .)
+  { 
+    (. Statement s; .) 
+    Statement<out s> 
+    (. blockStmt.Stmts.Add(s); .) 
+  } 
+  rbrace (. blockStmt.LastTok = t; .)
+.
+
+JoinStatement<out JoinStatement joinStmt>
+=
+  join (. Token x = t; .)
+  (. Expr expr; .) Expr<out expr>
+  semi
+  (. joinStmt = new JoinStatement(x, expr); joinStmt.LastTok = t; .)
+.
+
+Idents<.out List<Ident> identList.>
+=
+  (. 
+    identList = new List<Ident>();
+    Ident id;
+  .)
+  Ident<out id>   (. identList.Add(id); .)
+  { comma Ident<out id> (. identList.Add(id); .) }
+.
+
+SomehowStatement<out Statement somehowStmt>
+= (. Contract.Ensures(Contract.ValueAtReturn(out somehowStmt) != null); 
+     List<Expr> undefinedUnless = new List<Expr>();
+     List<Ident> mod = null;
+     List<Expr> ens = new List<Expr>();
+     List<Attribute> attrs = new List<Attribute>();
+     List<Expr> elements;
+     Expr expr = null;
+     Token x;
+  .)
+  "somehow" (. x = t; .)
+  { (. Attribute attr; .) Attribute<out attr> (. attrs.Add(attr); .) }
+  {
+    ( "undefined_unless" Expressions<out elements> (. undefinedUnless.AddRange(elements); .)
+    | "modifies" Idents<out mod>
+    | "ensures" Expr<out expr>                     (. ens.Add(expr); .)
+    )
+  }
+  semi
+  (. somehowStmt = new SomehowStatement(x, undefinedUnless, mod, ens, attrs); somehowStmt.LastTok = t; .)
+.
+
+CaseStatement<out MatchCaseStmt stmt> 
+= (. Token x;
+     var arguments = new List<CasePattern>();
+     CasePattern pat;
+     Statement body;
+     List<Statement> stmts = new List<Statement>();
+     string name = "";
+  .)
+  case (. x = t; .)
+  (
+    (. Ident ident; .) Ident<out ident> (. name = ident.FirstTok.val; .)
+    [ openparen CasePattern<out pat> (. arguments.Add(pat); .)
+    { comma CasePattern<out pat>     (. arguments.Add(pat); .) } closeparen ]
+  )
+  darrow SYNC /* this SYNC and the one inside the loop below are used to avoid problems with the IsNotEndOfCase test. The SYNC will
+              * skip until the next symbol that can legally occur here, which is either the beginning of a Stmt or whatever is allowed
+              * to follow the CaseStatement.
+              */
+  { IF(IsNotEndOfCase()) /* This is a little sketchy. It would be nicer to be able to write IF(la is start-symbol of Stmt), but Coco doesn't allow that */
+    Statement<out body> (. stmts.Add(body); .)
+    SYNC
+  } 
+  (. stmt = new MatchCaseStmt(x, name, arguments, stmts); stmt.LastTok = t; .)
+.
+
+MatchStatement<out Statement matchStmt>
+= (. Expr matchExpr;
+     Token x;
+     List<MatchCaseStmt> cases = new List<MatchCaseStmt>();
+     bool usesOptionalBraces = false;
+  .)
+  "match" (. x = t; .)
+  Expr<out matchExpr, false> 
+  ( 
+    ( //IF(la.kind == _lbrace)  /* always favor brace-enclosed match body to a case-less match */
+      lbrace (. usesOptionalBraces = true; .)
+      { (. MatchCaseStmt e; .) CaseStatement<out e> (. cases.Add(e); .) }
+      rbrace
+    )
+  | { IF(la.kind == _case)  /* let each "case" bind to the closest preceding "match" */
+      (. MatchCaseStmt e; .) CaseStatement<out e>   (. cases.Add(e); .)
+    }
+  )
+  (. matchStmt = new MatchStatement(x, matchExpr, cases, usesOptionalBraces); matchStmt.LastTok = t; .)
+.
+
+CreateThreadStatement<out Statement s>
+= (. Expr expr; .)
+  CreateThreadCall<out expr> semi (. s = new ExprStatement(expr.FirstTok, expr); s.LastTok = t; .).
+  
+CompareAndSwapStatement<out Statement s>
+= (. Expr expr; .)
+  CompareAndSwapCall<out expr> semi (. s = new ExprStatement(expr.FirstTok, expr); s.LastTok = t; .).
+
+ReturnStatement<out Statement s>
+= (. Token x; Expr val = null; .)
+  "return" (. x = t; .)
+  [ Rhs<out val> ] semi (. s = new ReturnStatement(x, val); s.LastTok = t; .).
+
+YieldStatement<out Statement s>
+= (. Token x; .)
+  "yield" (. x = t; .) semi (. s = new YieldStatement(x); s.LastTok = t; .).
+
+GotoStatement<out Statement s>
+= (. Token x; Ident ident; .)
+  "goto" (. x = t; .)
+  LabelIdent<out ident> semi (. s = new GotoStatement(x, ident); s.LastTok = t; .).
+
+FenceStatement<out Statement s>
+= (. Token x; .)
+  "fence" (. x = t; .) semi (. s = new FenceStatement(x); s.LastTok = t; .).
+
+DeallocStatement<out Statement s>
+= (. Token x; Expr expr;.)
+  "free" (. x = t; .) openparen Expr<out expr> closeparen semi (. s = new DeallocStatement(x, expr); s.LastTok = t; .).
+
+Statement<out Statement s>
+= (. s = null; .)
+  ( AssignStatement<out s>
+  | AtomicStatement<out s>
+  | AssertStatement<out s>
+  | AssumeStatement<out s>
+  | SomehowStatement<out s>
+  | MatchStatement<out s>
+  | CreateThreadStatement<out s>
+  | CompareAndSwapStatement<out s>
+  | ReturnStatement<out s>
+  | YieldStatement<out s>
+  | GotoStatement<out s>
+  | FenceStatement<out s>
+  | DeallocStatement<out s>
+  | "continue"                         (. Token x = t; .)
+    ";"                                (. s = new ContinueStatement(x); s.LastTok = t; .)
+  | "break"                            (. Token x = t; .)
+    ";"                                (. s = new BreakStatement(x);    s.LastTok = t; .)
+  | (. JoinStatement joinStmt; .)     JoinStatement<out joinStmt>     (. s = joinStmt; .)
+  | (. VarDecl varDecl; .)            VarDecl<out varDecl>            (. s = varDecl; .)
+  | (. WhileBlock whileBlk; .)        WhileBlock<out whileBlk>        (. s = whileBlk; .)
+  | (. IfStatement ifStmt; .)         IfStatement<out ifStmt>         (. s = ifStmt; .)
+  | (. BlockStatement blockStmt; .)   BlockStatement<out blockStmt>   (. s = blockStmt; .)
+  | (. Ident label; .) label Ident<out label> colon Statement<out s>  (. s.Label = label; .)
+  ).
+
+FunctionBody<out Expr expr>
+= 
+  lbrace
+  Expr<out expr>
+  rbrace
+.
+
+InvariantDecl<out InvariantDecl invariantDecl>
+= (. Ident ident; Expr expr; Token x; List<Ident> unchangedVars = new List<Ident>(); 
+     InvariantType type = InvariantType.MAINTAINED_IF_STATEMENT_SATISFIES; .)
+  "invariant" (. x = t; .)
+  Ident<out ident>
+  FunctionBody<out expr>
+  "by"
+  ( "maintained_if_statement_satisfies" (. type = InvariantType.MAINTAINED_IF_STATEMENT_SATISFIES; .)
+  | "maintained_if_vars_unchanged"      (. type = InvariantType.MAINTAINED_IF_VARS_UNCHANGED; .)
+      [ (. Ident id; .) Ident<out id> (. unchangedVars.Add(id); .) ]
+      { (. Ident id; .) comma Ident<out id> (. unchangedVars.Add(id); .) }
+  )
+  (. invariantDecl = new InvariantDecl(x, ident, expr, type, unchangedVars); invariantDecl.LastTok = t; .)
+.
+
+YieldPredicateDecl<out YieldPredicateDecl yieldPredicateDecl>
+= (. Ident ident; Expr expr; Token x; .)
+  "yield_predicate" (. x = t; .)
+  Ident<out ident>
+  FunctionBody<out expr>
+  (. yieldPredicateDecl = new YieldPredicateDecl(x, ident, expr); yieldPredicateDecl.LastTok = t; .)
+.
+
+MethodSpec<out MethodSpec spec>
+= (. List<Expr> elements = new List<Expr>(); 
+    bool isAwaits = false;
+    bool isEnsures = false;
+    bool isModifies = false;
+    bool isReads = false;
+    bool isRequires = false;
+    bool isUndefinedUnless = false;
+    bool isLogs = false;
+    Token x = null;
+    spec = null;
+    List<Attribute> attrs = new List<Attribute>();
+  .)
+  ( awaits              (. isAwaits = true; x = t; .)
+  | ensures             (. isEnsures = true; x = t; .)
+  | modifies            (. isModifies = true; x = t; .)
+  | reads               (. isReads = true; x = t; .)
+  | requires            (. isRequires = true; x = t; .)
+  | "undefined_unless"  (. isUndefinedUnless = true; x = t; .)
+  | "logs"              (. isLogs = true; x = t; .)
+  )
+  { (. Attribute attr; .) Attribute<out attr> (. attrs.Add(attr); .) }
+  Expressions<out elements>
+  (.
+    if (isAwaits)               { spec = new MethodSpecAwaits(x, elements); }
+    else if (isEnsures)         { spec = new MethodSpecEnsures(x, elements); }
+    else if (isModifies)        { spec = new MethodSpecModifies(x, elements); }
+    else if (isReads)           { spec = new MethodSpecReads(x, elements); }
+    else if (isRequires)        { spec = new MethodSpecRequires(x, elements); }
+    else if (isUndefinedUnless) { spec = new MethodSpecUndefinedUnless(x, elements); }
+    else if (isLogs)            { spec = new MethodSpecLogs(x, elements); }
+  .)
+  [ semi ]
+  (. spec.Attrs = attrs; spec.LastTok = t; .)
+.
+
+MethodDecl<out MethodDecl method>
+= (. Token x; .)
+  method (. x = t; method = new MethodDecl(x); .)
+  { (. Attribute attr; .)
+    Attribute<out attr>
+    (. method.Attrs.Add(attr); .)
+  } 
+  (. Ident ident; .) Ident<out ident> (. method.Name = ident; .)
+  openparen [ (. List<Parameter> args; .) Parameters<out args> (. method.Args = args; .) ] closeparen
+  [ (. Parameter ret; .) "returns" openparen Parameter<out ret> closeparen (. method.Ret = ret; .) ]
+  { (. MethodSpec methodSpec; .) 
+    MethodSpec<out methodSpec> 
+    (. method.Specs.Add(methodSpec); .)
+  }
+  [ 
+    lbrace 
+    { (. Statement stmt; .) Statement<out stmt> (. method.Stmts.Add(stmt); .) }
+    rbrace
+  ]
+  (. method.LastTok = t; .)
+.
+
+VarDecl<out VarDecl variable>
+=
+  (. 
+    Ident name;
+    Type ty = null;
+    Expr val = null;
+    bool isGhost = false;
+    bool isNoaddr = false;
+    bool isConst = false;
+    bool isStronglyConsistent = false;
+    Token x;
+  .)
+  (. x = la; .)
+  { ghost (. isGhost = true; .) | noaddr (. isNoaddr = true; .) | const (. isConst = true; .) | sc (. isStronglyConsistent = true; .) }
+  var
+  Ident<out name> colon Type <out ty> [ equalsign Rhs<out val> ] semi
+  (.
+    variable = new VarDecl(x, name, ty, val, isGhost, isNoaddr, isConst, isStronglyConsistent);
+    variable.LastTok = t;
+  .)
+.
+
+StructDecl<out StructDecl struc>
+=
+  (.
+    Ident name;
+    VarDecl variable;
+    Token x;
+  .)
+  "struct" (. x = t; .)
+  Ident<out name> lbrace VarDecl<out variable>
+  (.
+    struc = new StructDecl(x, name);
+    struc.Decls.Add(variable);
+  .)
+  { VarDecl<out variable> (. struc.Decls.Add(variable); .) } rbrace
+  (. struc.LastTok = t; .)
+.
+
+LevelDecl<out LevelDecl level>
+=
+  (. Ident name; Token x; .)
+  "level" (. x = t; .)
+  Ident<out name> (. level = new LevelDecl(x, name); .)
+  lbrace
+    { 
+      (. VarDecl variable; .)          VarDecl<out variable>             (. level.Globals.Add(variable); .)
+    | (. MethodDecl method; .)         MethodDecl<out method>            (. level.Members.Add(method); .)
+    | (. InvariantDecl invariant; .)   InvariantDecl<out invariant>      (. level.Invariants.Add(invariant); .)
+    | (. YieldPredicateDecl ypDecl; .) YieldPredicateDecl<out ypDecl>    (. level.Members.Add(ypDecl); .)
+    }
+  rbrace (. level.LastTok = t; .)
+.
+
+GenericTypeParameters<.out List<Ident> args.>
+= (. args = new List<Ident>(); 
+     Ident id;
+  .)
+  openAngleBracket 
+  Ident<out id> (. args.Add(id); .)
+  { comma Ident<out id> (. args.Add(id); .) }
+  closeAngleBracket
+.
+
+DatatypeMemberDecl<out DatatypeMemberDecl memberDecl>
+=
+  (. Ident name; List<Parameter> args = new List<Parameter>(); .)
+  Ident<out name> [ openparen [ Parameters<out args> ] closeparen ]
+  (. memberDecl = new DatatypeMemberDecl(name, args); memberDecl.LastTok = t; .)
+.
+
+DatatypeDecl<out DatatypeDecl datatype>
+=
+  (.
+    Token x;
+    Ident name;
+    UserDefinedType ty;
+    List<Ident> parameterList = new List<Ident>();
+    DatatypeMemberDecl memberDecl;
+  .)
+  "datatype" (. x = t; .) 
+  Ident<out name>
+  [ GenericTypeParameters<out parameterList> ] equal
+  (. 
+    ty = new UserDefinedType(name, parameterList); 
+  .)
+  (. datatype = new DatatypeDecl(x, ty); .)
+  DatatypeMemberDecl<out memberDecl> (. memberDecl.parent = datatype; datatype.MemberDeclList.Add(memberDecl); .)
+  { verticalbar DatatypeMemberDecl<out memberDecl> (. datatype.MemberDeclList.Add(memberDecl); .) }
+  (. datatype.LastTok = t; .)
+.
+
+Include<out string path> =
+  "include"
+  stringToken (. path = t.val; .)
+.
+
+TSOElimStrategy<out ProofStrategy strategy> =
+  (. Ident id; Token x; .)
+  "tso_elim" (. x = t; .)
+  Ident<out id>
+  (. strategy = new TSOElimStrategy(x, id); strategy.LastTok = t; .)
+.
+
+WeakeningStrategy<out ProofStrategy strategy> =
+  "weakening"
+  (. strategy = new WeakeningStrategy(t); strategy.LastTok = t; .)
+.
+
+CombiningStrategy<out ProofStrategy strategy> =
+  (.
+    Ident startLabel;
+    Ident endLabel;
+    Ident newLabel;
+    Token x;
+  .)
+  "combining" (. x = t; .)
+  LabelIdent<out startLabel> LabelIdent<out endLabel> LabelIdent<out newLabel>
+  (. strategy = new CombiningStrategy(x, startLabel, endLabel, newLabel); strategy.LastTok = t; .)
+.
+
+CHLInvariant =
+  ( "chl_invariant" | "chl_yield_pred" ) { Attribute<out _> } ident [ stringToken ].
+
+InductiveInvariant =
+  "inductive_invariant" { Attribute<out _> } ident [ stringToken ].
+
+AssumeIntroStrategy<out ProofStrategy strategy> =
+  "assume_intro" (. strategy = new AssumeIntroStrategy(t); .)
+  { CHLInvariant | InductiveInvariant } // TODO: add these to the AST node
+  (. strategy.LastTok = t; .)
+.
+
+VarIntroStrategy<out ProofStrategy strategy>
+= (. Ident ident; .)
+  "var_intro"
+  (. VarIntroStrategy varIntroStrategy = new VarIntroStrategy(t); .)
+  Ident<out ident> (. varIntroStrategy.Variables.Add(ident); .)
+  {
+    (. Ident id; .) comma Ident<out id> (. varIntroStrategy.Variables.Add(id); .)
+  }
+  (. strategy = varIntroStrategy; strategy.LastTok = t; .)
+.
+
+VarHidingStrategy<out ProofStrategy strategy>
+= (. Ident ident; .)
+  "var_hiding"
+  (. VarHidingStrategy varHidingStrategy = new VarHidingStrategy(t); .)
+  Ident<out ident> (. varHidingStrategy.Variables.Add(ident); .)
+  {
+    (. Ident id; .) comma Ident<out id> (. varHidingStrategy.Variables.Add(id); .)
+  }
+  (. strategy = varHidingStrategy; strategy.LastTok = t; .)
+.
+
+ProofStrategy<out ProofStrategy strategy> =
+  (. strategy = null; .)
+  ( WeakeningStrategy<out strategy>
+  | TSOElimStrategy<out strategy>
+  | CombiningStrategy<out strategy>
+  | AssumeIntroStrategy<out strategy>
+  | VarIntroStrategy<out strategy>
+  | VarHidingStrategy<out strategy>
+  ).
+
+ProofDecl<out ProofDecl proof>
+= (. Ident name, L, H; ProofStrategy strategy; Token x; .)
+  "proof" (. x = t; .)
+  Ident<out name> lbrace "refinement" Ident<out L> Ident<out H> ProofStrategy<out strategy> rbrace
+  (. proof = new ProofDecl(x, name, L, H, strategy); proof.LastTok = t; .)
+.
+
+Starmada
+= (.
+    LevelDecl level;
+    StructDecl struc;
+    ProofDecl proof;
+    DatatypeDecl datatype;
+ .)
+  (. program.FirstTok = la; .)
+  { (. string path; .) Include<out path> (. program.Includes.Add(path); .) }
+  { 
+     LevelDecl <out level> (. program.Levels.Add(level); .)
+   | StructDecl <out struc> (. program.StructDecls.Add(struc); .)
+   | ProofDecl <out proof> (. program.Proofs.Add(proof); .)
+   | DatatypeDecl <out datatype> (. program.DatatypeDecls.Add(datatype); .)
+  }
+  (. program.FirstTok = t; .)
+.
+
+END Starmada.

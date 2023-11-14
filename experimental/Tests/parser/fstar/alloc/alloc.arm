@@ -1,0 +1,11 @@
+level L
+{
+  var p: ptr<int32>;
+  method main ()
+  {
+    p := malloc(int32, 2);
+    free(p);
+    p := calloc(int32, 1);
+    free(p);
+  }
+}

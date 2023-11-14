@@ -1,0 +1,8 @@
+include "A.arm"
+include "B.arm"
+
+proof AB {
+    refinement A B
+    var_intro z
+}
+

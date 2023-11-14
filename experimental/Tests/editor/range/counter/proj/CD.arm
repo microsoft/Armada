@@ -1,0 +1,27 @@
+include "C.arm"
+include "D.arm"
+
+proof CD {
+    refinement C D
+    tso_elim x @"
+        && ghosts.mutex in ghosts.acquire_map
+        && tid in threads
+        && (var acquired := ghosts.acquire_map[ghosts.mutex];
+             acquired == OptionalSome(tid) ||
+            (acquired == OptionalNone() && tid == tid_init && ghosts.main_reading == 1))
+    "
+
+    inductive_invariant zero_is_not_a_mutex "0 !in ghosts.acquire_map"
+
+    inductive_invariant One_Main @"
+        forall tid :: (tid in threads && (threads[tid].top.Armada_StackFrame_main? || 
+                  threads[tid].top.Armada_StackFrame_print_uint32? ||
+                  threads[tid].top.Armada_StackFrame_Mutex_Init?))
+                 <==> 
+                 (tid in threads && tid == tid_init)
+    "
+
+    inductive_invariant EmptyBuffer @"
+      forall tid :: tid in threads && tid == tid_init ==> (|threads[tid].storeBuffer| == 0)
+    " depends_on One_Main
+}
