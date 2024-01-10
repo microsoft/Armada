@@ -38,11 +38,11 @@ private let atomic_lprog_init_establishes_my_inv
   let initializer5: initializer_t =
     { var_id = "f"; iv = InitializerSpecific (ObjectValueAbstract int 1); weakly_consistent = false; } in
   assert (contains_ubool initializer5 MyLProg.prog.global_initializers)
-    by FStar.Tactics.norm [delta];
+    by FStar.Tactics.V2.norm [delta];
   let initializer6: initializer_t =
     { var_id = "g"; iv = InitializerSpecific (ObjectValueAbstract int 1); weakly_consistent = false; } in
   assert (contains_ubool initializer6 MyLProg.prog.global_initializers)
-    by FStar.Tactics.norm [delta];
+    by FStar.Tactics.V2.norm [delta];
   ()
 
 #pop-options
@@ -134,5 +134,5 @@ let my_inv_is_stepwise_invariant ()
              MyAtomicLProg.prog my_inv) =
   let aiw = my_inv_witness () in
   assert (armada_atomic_semantics_invariant_witness_valid MyAtomicLProg.prog my_inv aiw)
-    by (FStar.Tactics.compute (); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute (); FStar.Tactics.V2.trivial ());
   armada_atomic_semantics_invariant_witness_valid_implies_stepwise_invariant MyAtomicLProg.prog my_inv aiw

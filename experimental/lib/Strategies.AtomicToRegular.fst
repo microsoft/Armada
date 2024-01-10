@@ -198,7 +198,7 @@ let expanding_atomic_action_preserves_program_containment
   ar.atomic_to_regular_map_valid ();
   assert (valid_atomic_to_regular_map sem atomic_actions regular_actions ar.atomic_to_regular_map ==
           lists_correspond_ubool indices_and_actions_corr ar.atomic_to_regular_map atomic_actions)
-    by FStar.Tactics.trefl ();
+    by FStar.Tactics.V2.trefl ();
   lists_correspond_ubool_implies_index_matches
     indices_and_actions_corr ar.atomic_to_regular_map atomic_actions atomic_index;
   let indices = Some?.v (nth ar.atomic_to_regular_map atomic_index) in
@@ -247,7 +247,7 @@ let atomic_refines_regular_relation_implies_spec_next
     let lactions = map_ghost (map_ghost sem.step_to_action_f) lsteps in
     let property1 = fun atomic_step -> contains_ubool (map_ghost sem.step_to_action_f atomic_step) atomic_actions in
     assert (for_all_ubool (program_contains_action_of_step_generic atomic_sem ar.lprog) lsteps);
-    assert (program_contains_action_of_step_generic atomic_sem ar.lprog == property1) by FStar.Tactics.trefl();
+    assert (program_contains_action_of_step_generic atomic_sem ar.lprog == property1) by FStar.Tactics.V2.trefl();
     assert (for_all_ubool property1 lsteps);
     let property2 = fun atomic_action -> contains_ubool atomic_action atomic_actions in
     for_all_ubool_map

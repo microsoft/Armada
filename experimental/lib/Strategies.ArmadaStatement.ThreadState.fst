@@ -12,7 +12,7 @@ open Armada.Statement
 open Armada.Thread
 open Armada.Transition
 open Armada.Type
-open FStar.Tactics
+open FStar.Tactics.V2
 open Spec.List
 open Spec.Logic
 open Spec.Ubool

@@ -9,7 +9,7 @@ open Armada.Statement
 open Armada.Transition
 open Armada.Type
 open FStar.List.Tot.Base
-open FStar.Tactics
+open FStar.Tactics.V2
 open MyAtomicToRegularRefinement
 open MyProgramInvariant
 open MyRegularToAtomicRefinement

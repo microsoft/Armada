@@ -537,6 +537,6 @@ let lemma_MyAtomicAProgRefinesMyAtomicBProg ()
   let pc_relation = efficient_lh_pc_relation lpc_to_hpc in
   let pc_return_relation = efficient_lh_pc_return_relation lpc_to_hpc is_return_lpc in
   assert (efficient_var_hiding_witness_valid latomic_prog hatomic_prog vw)
-    by (FStar.Tactics.compute (); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute (); FStar.Tactics.V2.trivial ());
   MyAtomicBInvariant.inv_is_stepwise_invariant ();
   efficient_var_hiding_witness_valid_implies_refinement latomic_prog hatomic_prog vw

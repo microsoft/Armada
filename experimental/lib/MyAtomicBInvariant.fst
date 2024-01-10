@@ -130,5 +130,5 @@ let inv_is_stepwise_invariant ()
   : Lemma (is_armada_substep_invariant MyAtomicBProg.prog inv) =
   let aiw = inv_witness () in
   assert (armada_atomic_substep_invariant_witness_valid MyAtomicBProg.prog inv aiw)
-    by (FStar.Tactics.compute(); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute(); FStar.Tactics.V2.trivial ());
   armada_atomic_substep_invariant_witness_valid_implies_is_substep_invariant MyAtomicBProg.prog inv aiw

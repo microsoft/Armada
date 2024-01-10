@@ -7,7 +7,7 @@ open Armada.Program
 open Armada.State
 open Armada.Statement
 open Armada.Type
-open FStar.Tactics
+open FStar.Tactics.V2
 open Spec.Behavior
 open Spec.List
 open Spec.Ubool

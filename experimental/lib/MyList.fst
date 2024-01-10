@@ -10,7 +10,7 @@ let my_fast_index_internal (n:nat{n < 1000}) : int = if n < 500 then (if n < 250
 let my_fast_index_internal_is_index ()
   : Lemma (length my_list = 1000 /\ equivalent_to_index my_list my_fast_index_internal) =
   assert (length my_list = 1000 /\ equivalent_to_index my_list my_fast_index_internal)
-    by FStar.Tactics.norm [zeta; delta; iota; primops]
+    by FStar.Tactics.V2.norm [zeta; delta; iota; primops]
 
 let my_fast_index (n:nat{n < 1000}) : (result:int{n < length my_list /\ index my_list n = result}) =
   my_fast_index_internal_is_index ();

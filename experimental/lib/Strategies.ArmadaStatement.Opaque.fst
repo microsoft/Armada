@@ -14,7 +14,7 @@ open Armada.Thread
 open Armada.Type
 open Armada.UnaryOp
 open FStar.Sequence.Base
-open FStar.Tactics
+open FStar.Tactics.V2
 open Spec.List
 open Spec.Ubool
 open Util.List
