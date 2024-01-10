@@ -8,7 +8,7 @@ FSTAR_EXEC?=$(shell which fstar.exe)
 Z3_EXEC?=$(shell which z3)
 
 ################################################################################
-FSTAR=$(FSTAR_EXEC) --cache_checked_modules --smt $(Z3_EXEC)
+FSTAR=$(FSTAR_EXEC) $(OTHERFLAGS) --cache_checked_modules --smt $(Z3_EXEC)
 
 all: verify-all
 
