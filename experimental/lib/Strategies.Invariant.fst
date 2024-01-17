@@ -105,7 +105,7 @@ let step_computation_generic_preserves_inv
   | None ->
       assert (action_proof_option_applies sip.sem sip.inv sip.action_pred action None ==
               sip.action_pred action)
-        by FStar.Tactics.trefl();
+        by FStar.Tactics.V2.trefl();
     step_computation_generic_preserves_inv_case_action_pred sip actor starts_atomic_block ends_atomic_block step s
   | Some prf -> step_computation_generic_preserves_inv_case_special_case sip actor
                  starts_atomic_block ends_atomic_block step s prf

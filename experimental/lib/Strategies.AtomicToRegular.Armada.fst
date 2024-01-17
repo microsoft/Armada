@@ -55,12 +55,12 @@ let atomic_refines_armada_relation_implies_valid_atomic_to_regular_map
   aa.atomic_to_regular_map_valid ();
   assert (valid_atomic_to_armada_map atomic_actions aa.atomic_to_regular_map aa.actions_array ==
            lists_correspond_ubool indices_and_actions_corr aa.atomic_to_regular_map atomic_actions)
-    by FStar.Tactics.trefl();
+    by FStar.Tactics.V2.trefl();
   lists_correspond_ubool_implies_weaker_correspondence
     indices_and_actions_corr indices_and_actions_corr' aa.atomic_to_regular_map atomic_actions lem2;
   assert (valid_atomic_to_regular_map armada_semantics atomic_actions regular_actions aa.atomic_to_regular_map ==
            lists_correspond_ubool indices_and_actions_corr' aa.atomic_to_regular_map atomic_actions)
-    by FStar.Tactics.trefl()
+    by FStar.Tactics.V2.trefl()
 
 let atomic_refines_armada_relation_implies_refinement (aa: atomic_refines_armada_relation_t)
   : Lemma (ensures (spec_refines_spec

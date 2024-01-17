@@ -1,7 +1,8 @@
 module Util.Tactics
 
 open FStar.Printf
-open FStar.Tactics
+open FStar.Tactics.V2
+open FStar.Reflection.V2.TermEq
 
 /// Replacing a function in the current goal
 ///
@@ -130,6 +131,7 @@ let rec fn_to_lemma_invocations_in_term (fn: term) (argc: pos) (lem: term) (t: t
   | Tv_AscribedC e _ _ _ ->
       fn_to_lemma_invocations_in_term fn argc lem e
   | Tv_Unknown -> None
+  | Tv_Unsupp -> None
 
 and fn_to_lemma_invocations_in_branches
   (fn: term)
@@ -202,7 +204,7 @@ let rec identifier_to_string (id: list string) : Tac string =
 
 let rec term_to_view_to_string (t: term) : Tac string =
   match inspect t with
-  | Tv_Var v -> "Tv_Var " ^ (bv_to_string v)
+  | Tv_Var v -> "Tv_Var " ^ (namedv_to_string v)
   | Tv_BVar v -> "Tv_BVar " ^ (bv_to_string v)
   | Tv_FVar v -> "Tv_FVar " ^ (fv_to_string v)
   | Tv_UInst v us -> "Tv_UInst " ^ (fv_to_string v)
@@ -215,13 +217,14 @@ let rec term_to_view_to_string (t: term) : Tac string =
   | Tv_Const v -> "Tv_Const(" ^ (vconst_to_string v) ^ ")"
   | Tv_Uvar _ _ -> "Tv_Uvar"
   | Tv_Let recf attrs bv def body ->
-      "Tv_Let(" ^ (term_to_view_to_string (bv_to_term bv)) ^
+      "Tv_Let(" ^ (term_to_view_to_string (binder_to_term bv)) ^
               " = " ^ (term_to_view_to_string def) ^ " in " ^ (term_to_view_to_string body) ^ ")"
   | Tv_Match scrutinee ret brs ->
      "Tv_Match(" ^ (term_to_view_to_string scrutinee) ^ " with " ^ (branches_to_string brs) ^ ")"
   | Tv_AscribedT e t tac _ -> "Tv_AscribedT(" ^ (term_to_view_to_string e) ^ ")"
   | Tv_AscribedC e c tac _ -> "Tv_AscribedC(" ^ (term_to_view_to_string e) ^ ")"
   | Tv_Unknown -> "Tv_Unknown"
+  | Tv_Unsupp -> "Tv_Unsupp"
 
 and term_views_to_strings (ts: list term) : Tac string =
   match ts with

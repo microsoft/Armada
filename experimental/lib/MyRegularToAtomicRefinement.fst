@@ -9,7 +9,7 @@ open Armada.State
 open Armada.Statement
 open Armada.Thread
 open Armada.Type
-open FStar.Tactics
+open FStar.Tactics.V2
 open MyAtomicLProg
 open MyLProg
 open Spec.Behavior

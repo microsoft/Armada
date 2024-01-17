@@ -40,9 +40,8 @@ ENV PATH=${PATH}:$DOTNET_ROOT:$DOTNET_ROOT/tools
 ADD --chown=opam:opam https://github.com/tahina-pro/z3/releases/download/z3-4.8.5-linux-clang/z3-4.8.5-linux-clang-x86_64.tar.gz z3.tar.gz
 RUN tar xf z3.tar.gz
 
-RUN git clone https://github.com/FStarLang/FStar.git
+RUN git clone https://github.com/FStarLang/FStar.git -b v2024.01.13
 WORKDIR FStar/ 
-RUN git checkout v2023.04.08
 RUN eval $(opam env) && env OTHERFLAGS='--admit_smt_queries true' PATH=$HOME/z3:$PATH make -j $CI_THREADS 
 ENV PATH=${PATH}:/home/opam/FStar/bin:/home/opam/z3
 

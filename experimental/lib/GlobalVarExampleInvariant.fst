@@ -67,9 +67,9 @@ private let atomic_lprog_init_establishes_inductive_my_inv
   let initializer5: initializer_t =
     { var_id = "f"; iv = InitializerSpecific (ObjectValueAbstract int 1); weakly_consistent = false; } in
   assert (contains_ubool initializer5 MyLProg.prog.global_initializers)
-    by FStar.Tactics.norm [delta];
+    by FStar.Tactics.V2.norm [delta];
   assert (global_variables_unaddressed_in_initializers vs MyLProg.prog.global_initializers)
-    by (FStar.Tactics.compute (); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute (); FStar.Tactics.V2.trivial ());
   init_implies_global_variables_unaddressed_in_memory vs MyLProg.prog s;
   assert (global_variables_unaddressed_in_memory vs s.mem)
 
@@ -165,5 +165,5 @@ let my_inv_is_stepwise_invariant ()
              MyAtomicLProg.prog inductive_my_inv) =
   let aiw = inductive_my_inv_witness () in
   assert (armada_atomic_semantics_invariant_witness_valid MyAtomicLProg.prog inductive_my_inv aiw)
-    by (FStar.Tactics.compute (); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute (); FStar.Tactics.V2.trivial ());
   armada_atomic_semantics_invariant_witness_valid_implies_stepwise_invariant MyAtomicLProg.prog inductive_my_inv aiw

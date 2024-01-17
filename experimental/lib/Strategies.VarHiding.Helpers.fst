@@ -131,6 +131,7 @@ let rec lsteps_correspond_to_hsteps
            hstart_state lend_state hend_state remaining_which_actions_hidden remaining_lsteps hsteps
   | _, _, _ -> False
 
+#push-options "--split_queries always"
 let rec compute_hsteps_from_lsteps
   (vs: list var_id_t)
   (lpc_to_hpc: pc_t -> GTot pc_t)
@@ -178,6 +179,7 @@ let rec compute_hsteps_from_lsteps
                 which_actions_hidden lsteps hsteps);
       hsteps
   | _, _, _, _ -> false_elim ()
+#pop-options
 
 let lstep_corresponds_to_hstep_clarifier
   (vs: list var_id_t)

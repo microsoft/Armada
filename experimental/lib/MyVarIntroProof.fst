@@ -566,6 +566,6 @@ let lemma_MyAtomicAProgRefinesMyAtomicBProg ()
   let latomic_prog = MyAtomicAProg.prog in
   let hatomic_prog = MyAtomicBProg.prog in
   assert (efficient_var_intro_witness_valid latomic_prog hatomic_prog vw)
-    by (FStar.Tactics.compute (); FStar.Tactics.trivial ());
+    by (FStar.Tactics.V2.compute (); FStar.Tactics.V2.trivial ());
   MyAtomicBInvariant.inv_is_stepwise_invariant ();
   efficient_var_intro_witness_valid_implies_refinement latomic_prog hatomic_prog vw

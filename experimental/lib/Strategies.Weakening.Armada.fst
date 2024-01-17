@@ -7,7 +7,7 @@ open Armada.Step
 open Armada.Transition
 open Armada.Type
 open FStar.List.Tot
-open FStar.Tactics
+open FStar.Tactics.V2
 open Spec.Behavior
 open Strategies.Atomic
 open Strategies.Invariant
